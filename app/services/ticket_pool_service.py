@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.db import Database
+from app.models.base import utcnow
 from app.models.giveaway import Giveaway
 from app.models.ticket_pool import TicketPool
 from app.repositories import ticket_pool_repo as repo
@@ -43,7 +44,7 @@ def open_registration(
     if giveaway.max_tickets < 1 or giveaway.max_tickets > 100_000:
         raise ValueError("max_tickets должен быть в диапазоне 1..100000 (п.6.2 ТЗ)")
 
-    giveaway.opened_at = now or dt.datetime.now(dt.timezone.utc)
+    giveaway.opened_at = now or utcnow()
     giveaway.is_registration_open = True
     session.add(giveaway)
     session.flush()
@@ -68,7 +69,7 @@ def reserve_for_payment(
     now: dt.datetime | None = None,
 ) -> ReservationOutcome:
     """Резервирует номера под онлайн-платёж. Выполняется в `BEGIN IMMEDIATE`-транзакции."""
-    now = now or dt.datetime.now(dt.timezone.utc)
+    now = now or utcnow()
     with db.immediate_session() as session:
         giveaway = session.execute(select(Giveaway).where(Giveaway.id == giveaway_id)).scalar_one()
         _check_sellable(giveaway)
@@ -97,7 +98,7 @@ def reserve_for_manual_registration(
     now: dt.datetime | None = None,
 ) -> ReservationOutcome:
     """Резервирует номера под ручную (офлайн) регистрацию (п.7.5, 7.7 ТЗ)."""
-    now = now or dt.datetime.now(dt.timezone.utc)
+    now = now or utcnow()
     with db.immediate_session() as session:
         giveaway = session.execute(select(Giveaway).where(Giveaway.id == giveaway_id)).scalar_one()
         _check_sellable(giveaway)

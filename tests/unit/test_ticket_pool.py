@@ -4,11 +4,11 @@
 
 from __future__ import annotations
 
-import datetime as dt
 import threading
 
 import pytest
 from app.core.db import Database
+from app.models.base import utcnow
 from app.models.enums import PaymentProviderType, PaymentStatus, TicketPoolStatus
 from app.models.giveaway import Giveaway
 from app.models.participant import Participant
@@ -132,9 +132,7 @@ def test_issue_reserved_transitions_to_issued(db: Database) -> None:
     )
     assert outcome.ok
     with db.immediate_session() as session:
-        issued = repo.issue_reserved(
-            session, payment_id=payment_id, issued_at=dt.datetime.now(dt.timezone.utc)
-        )
+        issued = repo.issue_reserved(session, payment_id=payment_id, issued_at=utcnow())
     assert len(issued) == 3
     assert all(row.status == TicketPoolStatus.ISSUED for row in issued)
     with db.session() as session:
