@@ -20,11 +20,13 @@ from starlette.responses import Response
 from backend.api import (
     audit,
     auth,
+    broadcasts,
     dashboard,
     giveaways,
     manual_registrations,
     panel_users,
     participants,
+    reports,
     sales,
     tickets,
 )
@@ -95,6 +97,8 @@ def create_app() -> FastAPI:
     app.include_router(panel_users.router, prefix=api_prefix)
     app.include_router(settings_api.router, prefix=api_prefix)
     app.include_router(audit.router, prefix=api_prefix)
+    app.include_router(broadcasts.router, prefix=api_prefix)
+    app.include_router(reports.router, prefix=api_prefix)
     app.include_router(payments_webhooks.router)  # без /api — только для банков
 
     return app

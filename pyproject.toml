@@ -41,6 +41,7 @@ dev = [
     "faker>=24.0,<25.0",
     "freezegun>=1.4,<2.0",
     "types-python-dateutil",
+    "types-openpyxl",
 ]
 
 [build-system]
