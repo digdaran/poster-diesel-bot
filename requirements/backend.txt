@@ -1,0 +1,8 @@
+# Устанавливать вместе с локальным пакетом app/: pip install -e ".[backend]"
+-e ../
+fastapi>=0.110,<0.111
+uvicorn[standard]>=0.29,<0.30
+python-multipart>=0.0.9
+prometheus-client>=0.20,<0.21
+httpx>=0.27,<0.28
+openpyxl>=3.1,<4.0
