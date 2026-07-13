@@ -59,9 +59,43 @@ mypy app backend channels
 
 ## Развёртывание и эксплуатация
 
-- `scripts/deploy.sh` — обновление одной командой.
-- `scripts/backup_db.sh` — резервное копирование SQLite (`VACUUM INTO`), сжатие, ротация.
+### Продакшен (домен + реальный HTTPS)
+
+```bash
+cp .env.example .env
+# заполните: PANEL_DOMAIN, ACME_EMAIL, PANEL_IP_WHITELIST, JWT_SECRET,
+# SUPERADMIN_LOGIN/PASSWORD, TELEGRAM_BOT_TOKEN, PAYMENT_PROVIDER + ключи банка
+docker compose -f docker-compose.yml up -d --build
+```
+
+Caddy сам получит сертификат Let's Encrypt для `PANEL_DOMAIN`. Наружу публикуются
+только `/webhooks/*` (без IP-ограничения — банк должен достучаться) и панель
+(`/`, `/api/*`) за `PANEL_IP_WHITELIST`. `/metrics` не проксируется вообще.
+
+### Локальная разработка (self-signed, без домена)
+
+`docker-compose.override.yml` подключается автоматически при обычном
+`docker compose up` и включает `Caddyfile.dev` (self-signed TLS) + прямой порт
+`8000` для отладки backend.
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+### Обновление и резервное копирование
+
+- `scripts/deploy.sh` — `git pull` + пересборка образов + `docker compose up -d`
+  с ожиданием healthcheck backend. Миграции применяются автоматически при старте
+  backend-контейнера (`scripts/backend-entrypoint.sh`).
+- `scripts/backup_db.sh` — консистентный снимок SQLite (`VACUUM INTO` через
+  `app/core/backup.py`), gzip, ротация по `BACKUP_RETENTION_DAYS`. Добавьте в cron
+  хоста: `0 3 * * * cd /opt/raffle-platform && ./scripts/backup_db.sh`.
 - CI (GitHub Actions, `.github/workflows/ci.yml`) — lint, mypy, pytest на каждый push/PR.
+
+> Примечание: `docker compose build` не прогонялся в песочнице агента (нет
+> Docker) — см. DECISIONS.md, п.16. Перед первым запуском в проде выполните сборку
+> самостоятельно и убедитесь, что все сервисы `healthy`.
 
 ## Известные ограничения первой версии (см. п.21 ТЗ и `DECISIONS.md`)
 

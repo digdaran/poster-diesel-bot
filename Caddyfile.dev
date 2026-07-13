@@ -1,0 +1,24 @@
+# Reverse-proxy для локальной разработки: self-signed TLS (`tls internal`),
+# без реального домена и ACME. Используется через docker-compose.override.yml.
+{
+	local_certs
+}
+
+https:// {
+	tls internal
+
+	handle /webhooks/* {
+		reverse_proxy backend:8000
+	}
+
+	@blocked not remote_ip {$PANEL_IP_WHITELIST}
+	respond @blocked 403
+
+	handle /api/* {
+		reverse_proxy backend:8000
+	}
+
+	handle {
+		reverse_proxy frontend:80
+	}
+}

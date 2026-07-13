@@ -1,0 +1,30 @@
+# Reverse-proxy (production): автоматический HTTPS через Let's Encrypt (ACME),
+# IP-whitelist для панели, наружу — только webhook-эндпоинты банков и панель
+# (за whitelist). /metrics НЕ проксируется наружу (п.19 ТЗ).
+#
+# Для локальной разработки без реального домена используйте Caddyfile.dev
+# (self-signed, `tls internal`) — см. docker-compose.override.yml.
+{
+	email {$ACME_EMAIL}
+}
+
+{$PANEL_DOMAIN} {
+	# Webhook банков — доступны без IP-ограничения (банк должен достучаться).
+	handle /webhooks/* {
+		reverse_proxy backend:8000
+	}
+
+	# Всё остальное — панель (SPA) и её API — только с IP из белого списка.
+	@blocked not remote_ip {$PANEL_IP_WHITELIST}
+	respond @blocked 403
+
+	handle /api/* {
+		reverse_proxy backend:8000
+	}
+
+	handle {
+		reverse_proxy frontend:80
+	}
+
+	encode gzip
+}
