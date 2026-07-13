@@ -10,7 +10,15 @@ from sqlalchemy.orm import registry as sa_registry
 
 
 def utcnow() -> dt.datetime:
-    return dt.datetime.now(dt.timezone.utc)
+    """UTC-время БЕЗ tzinfo (naive).
+
+    SQLite не хранит timezone-информацию надёжно при round-trip через
+    SQLAlchemy (значения возвращаются naive), поэтому вся система единообразно
+    работает с naive-datetime, семантически всегда означающими UTC (п.6.1 ТЗ:
+    \"все временные метки хранятся в UTC\"). Сравнивать datetime из разных
+    источников следует только через эту функцию/её результаты.
+    """
+    return dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
 
 
 class Base(DeclarativeBase):
