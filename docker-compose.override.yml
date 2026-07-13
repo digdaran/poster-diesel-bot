@@ -1,0 +1,13 @@
+# Автоматически подхватывается `docker compose up` вместе с docker-compose.yml —
+# удобства для локальной разработки: self-signed HTTPS (Caddyfile.dev), прямой
+# доступ к backend на 8000 для отладки (в проде порт наружу не публикуется).
+services:
+  backend:
+    ports:
+      - "8000:8000"
+
+  reverse-proxy:
+    volumes:
+      - ./Caddyfile.dev:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
