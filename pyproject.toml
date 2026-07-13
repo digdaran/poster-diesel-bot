@@ -57,7 +57,7 @@ src = ["app", "backend", "channels", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "C4", "SIM"]
-ignore = ["B008"]
+ignore = ["B008", "UP017"]  # UP017: датасинтаксис datetime.UTC (3.11+) — держим совместимость с 3.10 для локальной разработки, см. DECISIONS.md п.15
 
 [tool.black]
 line-length = 100
