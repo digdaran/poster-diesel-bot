@@ -52,7 +52,7 @@ def _encode(
     ttl: dt.timedelta,
     secret: str,
 ) -> str:
-    now = dt.datetime.now(dt.UTC)
+    now = dt.datetime.now(dt.timezone.utc)
     payload: dict[str, Any] = {
         "sub": str(user_id),
         "role": role.value,
@@ -112,5 +112,5 @@ def decode_token(
         role=role,
         token_type=token_type,
         jti=payload["jti"],
-        expires_at=dt.datetime.fromtimestamp(payload["exp"], tz=dt.UTC),
+        expires_at=dt.datetime.fromtimestamp(payload["exp"], tz=dt.timezone.utc),
     )
