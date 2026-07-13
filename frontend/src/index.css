@@ -1,0 +1,211 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family:
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
+  background: #f4f5f7;
+  color: #1f2430;
+}
+
+.layout {
+  display: flex;
+  min-height: 100vh;
+}
+
+.sidebar {
+  width: 240px;
+  background: #1f2430;
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+}
+
+.sidebar-title {
+  font-weight: 600;
+  margin-bottom: 24px;
+  font-size: 15px;
+}
+
+.sidebar nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+}
+
+.nav-link {
+  color: #c7cbd4;
+  text-decoration: none;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.nav-link.active,
+.nav-link:hover {
+  background: #33394a;
+  color: #fff;
+}
+
+.sidebar-footer {
+  border-top: 1px solid #33394a;
+  padding-top: 12px;
+  font-size: 13px;
+}
+
+.user-info {
+  margin-bottom: 8px;
+  color: #c7cbd4;
+}
+
+.content {
+  flex: 1;
+  padding: 24px 32px;
+  overflow-x: auto;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin-top: 12px;
+  background: #fff;
+}
+
+th,
+td {
+  border: 1px solid #e2e4e9;
+  padding: 8px 10px;
+  font-size: 13px;
+  text-align: left;
+}
+
+th {
+  background: #f0f1f4;
+}
+
+.cards {
+  display: flex;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.card {
+  background: #fff;
+  border-radius: 8px;
+  padding: 20px;
+  min-width: 160px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.card-value {
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.card-label {
+  color: #6b7280;
+  font-size: 13px;
+  margin-top: 4px;
+}
+
+.login-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.login-form {
+  background: #fff;
+  padding: 32px;
+  border-radius: 8px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 320px;
+}
+
+.login-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.login-form input,
+.inline-form input,
+.inline-form select,
+.inline-form-column input,
+.inline-form-column select,
+.inline-form-column textarea,
+textarea {
+  padding: 8px;
+  border: 1px solid #d0d3d9;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+button {
+  background: #2563eb;
+  color: #fff;
+  border: none;
+  padding: 8px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+button:hover {
+  background: #1d4ed8;
+}
+
+button:disabled {
+  background: #9ca3af;
+  cursor: not-allowed;
+}
+
+.error {
+  color: #dc2626;
+  font-size: 13px;
+}
+
+.inline-form {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.inline-form-column {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0;
+  max-width: 480px;
+}
+
+.actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.page-loading,
+.page-forbidden {
+  padding: 40px;
+  text-align: center;
+  color: #6b7280;
+}
+
+section {
+  margin-bottom: 28px;
+}
