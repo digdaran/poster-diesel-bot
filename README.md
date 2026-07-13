@@ -91,11 +91,13 @@ docker compose up --build
 - `scripts/backup_db.sh` — консистентный снимок SQLite (`VACUUM INTO` через
   `app/core/backup.py`), gzip, ротация по `BACKUP_RETENTION_DAYS`. Добавьте в cron
   хоста: `0 3 * * * cd /opt/raffle-platform && ./scripts/backup_db.sh`.
-- CI (GitHub Actions, `.github/workflows/ci.yml`) — lint, mypy, pytest на каждый push/PR.
+- **CI не используется** (сознательное решение заказчика). Перед каждым пушем в
+  `main` вручную прогоняются `ruff check`, `black --check`, `mypy`, `pytest` —
+  все должны быть зелёными.
 
 > Примечание: `docker compose build` не прогонялся в песочнице агента (нет
-> Docker) — см. DECISIONS.md, п.16. Перед первым запуском в проде выполните сборку
-> самостоятельно и убедитесь, что все сервисы `healthy`.
+> Docker) — см. DECISIONS.md, п.16. Сборка и полная валидация docker-compose
+> стека выполняется на стороне заказчика после установки Docker.
 
 ## Известные ограничения первой версии (см. п.21 ТЗ и `DECISIONS.md`)
 
