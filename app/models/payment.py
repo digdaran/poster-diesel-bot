@@ -43,6 +43,14 @@ class Payment(Base):
     created_at: Mapped[dt.datetime] = created_at_column(index=True)
     confirmed_at: Mapped[dt.datetime | None] = mapped_column(nullable=True)
 
+    # Ссылка на оплату и содержимое QR (СБП) — one-shot данные от провайдера в
+    # момент создания платежа (см. CreatedPayment), сохраняются здесь, т.к.
+    # некоторые провайдеры (Т-Банк) не дают способа получить их повторно позже
+    # (кнопка «Показать QR» в боте открывается отдельным событием без доступа
+    # к транзиентному результату create_payment).
+    payment_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    qr_code_payload: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+
     # Резервная проверка/поллинг (доп. поле сверх п.6.2, нужно для фоновой сверки
     # check_status — см. DECISIONS.md).
     poll_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

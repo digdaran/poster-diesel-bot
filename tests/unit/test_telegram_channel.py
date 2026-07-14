@@ -58,11 +58,22 @@ def test_render_keyboard_builds_reply_markup(channel: TelegramChannel) -> None:
 
 def test_render_payment_prompt_has_pay_and_check_buttons(channel: TelegramChannel) -> None:
     markup = channel.render_payment_prompt(
-        payment_url="https://pay.example/1", qr_code_payload="qr-data"
+        payment_url="https://pay.example/1", order_id="order-1", has_qr=False
     )
     flat = [btn for row in markup.inline_keyboard for btn in row]
     assert any(btn.url == "https://pay.example/1" for btn in flat)
     assert any(btn.callback_data == "check_payment" for btn in flat)
+    assert not any((btn.callback_data or "").startswith("show_qr:") for btn in flat)
+    assert len(markup.inline_keyboard) == 2
+
+
+def test_render_payment_prompt_adds_qr_button_when_available(channel: TelegramChannel) -> None:
+    markup = channel.render_payment_prompt(
+        payment_url="https://pay.example/1", order_id="order-1", has_qr=True
+    )
+    flat = [btn for row in markup.inline_keyboard for btn in row]
+    assert any(btn.callback_data == "show_qr:order-1" for btn in flat)
+    assert len(markup.inline_keyboard) == 3
 
 
 def test_only_telegram_active_in_production() -> None:

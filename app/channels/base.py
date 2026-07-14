@@ -57,8 +57,9 @@ class BaseMessengerChannel(ABC):
         """UI-примитив: обычная (reply) клавиатура из подписей кнопок."""
 
     @abstractmethod
-    def render_payment_prompt(self, *, payment_url: str, qr_code_payload: str | None) -> Any:
-        """UI-примитив: приглашение к оплате (ссылка/QR, кнопки способа оплаты)."""
+    def render_payment_prompt(self, *, payment_url: str, order_id: str, has_qr: bool) -> Any:
+        """UI-примитив: приглашение к оплате (ссылка, кнопка «Показать QR» если
+        `has_qr`, кнопка проверки статуса)."""
 
     @abstractmethod
     async def handle_update(self, update: Any) -> None:

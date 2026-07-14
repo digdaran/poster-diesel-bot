@@ -43,7 +43,7 @@ class MaxChannel(BaseMessengerChannel):
     def render_keyboard(self, buttons: list[list[str]]) -> Any:
         raise NotImplementedError(_NOT_IMPLEMENTED_MSG)
 
-    def render_payment_prompt(self, *, payment_url: str, qr_code_payload: str | None) -> Any:
+    def render_payment_prompt(self, *, payment_url: str, order_id: str, has_qr: bool) -> Any:
         raise NotImplementedError(_NOT_IMPLEMENTED_MSG)
 
     async def handle_update(self, update: Any) -> None:

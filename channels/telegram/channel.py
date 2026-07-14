@@ -79,9 +79,13 @@ class TelegramChannel(BaseMessengerChannel):
         )
 
     def render_payment_prompt(
-        self, *, payment_url: str, qr_code_payload: str | None
+        self, *, payment_url: str, order_id: str, has_qr: bool
     ) -> InlineKeyboardMarkup:
         rows = [[InlineKeyboardButton(text="💳 Оплатить", url=payment_url)]]
+        if has_qr:
+            rows.append(
+                [InlineKeyboardButton(text="🔳 Показать QR", callback_data=f"show_qr:{order_id}")]
+            )
         rows.append(
             [InlineKeyboardButton(text="🔄 Проверить статус оплаты", callback_data="check_payment")]
         )

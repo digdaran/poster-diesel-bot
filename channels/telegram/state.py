@@ -28,6 +28,9 @@ def get_active_provider(db: Database) -> BasePaymentProvider:
     return get_provider(settings, override=override)
 
 
+QUANTITY_OPTIONS: tuple[int, ...] = (1, 3, 5, 10)
+
+
 class PurchaseStates(StatesGroup):
     choosing_giveaway = State()
     choosing_quantity = State()

@@ -24,6 +24,7 @@ from app.services import payment_service as payment_svc
 from sqlalchemy import select
 
 from channels.telegram.state import (
+    QUANTITY_OPTIONS,
     PurchaseStates,
     RegistrationStates,
     get_active_provider,
@@ -209,16 +210,14 @@ async def on_buy(message: Message, state: FSMContext) -> None:
 async def _prompt_quantity(message: Message, state: FSMContext, giveaway: Giveaway) -> None:
     from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-    max_qty = min(5, giveaway.free_tickets_count)
+    options = [q for q in QUANTITY_OPTIONS if q <= giveaway.free_tickets_count]
     rows = [
-        [
-            InlineKeyboardButton(text=str(q), callback_data=f"qty:{giveaway.id}:{q}")
-            for q in range(1, max_qty + 1)
-        ]
+        [InlineKeyboardButton(text=str(q), callback_data=f"qty:{giveaway.id}:{q}") for q in options]
     ]
     await message.answer(
         f"«{giveaway.name}»: цена номерка {giveaway.ticket_price / 100:.2f} ₽. "
-        f"Сколько номерков хотите приобрести? (доступно {giveaway.free_tickets_count})",
+        f"Сколько номерков хотите приобрести? (доступно {giveaway.free_tickets_count})\n"
+        "Выберите вариант или введите число.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
     await state.set_state(PurchaseStates.choosing_quantity)
@@ -239,33 +238,49 @@ async def on_giveaway_chosen(callback: CallbackQuery, state: FSMContext) -> None
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("qty:"))
-async def on_quantity_chosen(callback: CallbackQuery, state: FSMContext) -> None:
-    assert callback.data is not None
-    _, giveaway_id_raw, qty_raw = callback.data.split(":")
-    giveaway_id, quantity = int(giveaway_id_raw), int(qty_raw)
-
+async def _handle_quantity_selected(
+    reply_target: Message, uid: str, state: FSMContext, giveaway_id: int, quantity: int
+) -> None:
     db = get_channel_db()
     with db.session() as session:
         participant = participant_service.get_participant_by_channel(
-            session, channel=ChannelType.TELEGRAM, external_user_id=_uid(callback)
+            session, channel=ChannelType.TELEGRAM, external_user_id=uid
         )
 
     if participant is not None:
-        await _create_and_offer_payment(_msg(callback), giveaway_id, quantity, participant.id)
+        await _create_and_offer_payment(reply_target, giveaway_id, quantity, participant.id)
         await state.clear()
-        await callback.answer()
         return
 
     # Подарочная покупка на неподтверждённый номер (п.7.1, 10.3, 10.5 ТЗ): просим
     # ввести номер получателя вручную — своей учётки у покупателя ещё нет.
     await state.update_data(giveaway_id=giveaway_id, quantity=quantity)
     await state.set_state(PurchaseStates.awaiting_phone_for_gift)
-    await _msg(callback).answer(
+    await reply_target.answer(
         "Введите номер телефона получателя номерков (формат: +7XXXXXXXXXX). "
         "Постер и коды придут в этот чат."
     )
+
+
+@router.callback_query(F.data.startswith("qty:"))
+async def on_quantity_chosen(callback: CallbackQuery, state: FSMContext) -> None:
+    assert callback.data is not None
+    _, giveaway_id_raw, qty_raw = callback.data.split(":")
+    giveaway_id, quantity = int(giveaway_id_raw), int(qty_raw)
+    await _handle_quantity_selected(_msg(callback), _uid(callback), state, giveaway_id, quantity)
     await callback.answer()
+
+
+@router.message(PurchaseStates.choosing_quantity)
+async def on_quantity_typed(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    if not text.isdigit() or int(text) == 0:
+        await message.answer("Введите количество номерков числом (больше нуля).")
+        return
+
+    data = await state.get_data()
+    giveaway_id = data["giveaway_id"]
+    await _handle_quantity_selected(message, _uid(message), state, giveaway_id, int(text))
 
 
 @router.message(PurchaseStates.awaiting_phone_for_gift)
@@ -327,16 +342,39 @@ async def _create_and_offer_payment(
         return
 
     assert outcome.created is not None
+    assert outcome.order_id is not None
     keyboard = channel.render_payment_prompt(
-        payment_url=outcome.created.payment_url, qr_code_payload=outcome.created.qr_code_payload
+        payment_url=outcome.created.payment_url,
+        order_id=outcome.order_id,
+        has_qr=bool(outcome.created.qr_code_payload),
     )
     await message.answer(
-        f"Счёт создан на {quantity} номерок(ов). Оплатите по ссылке ниже или отсканируйте QR "
-        "в приложении банка (СБП).",
+        f"Счёт создан на {quantity} номерок(ов). Оплатите по ссылке ниже, либо нажмите "
+        "«Показать QR» для оплаты по QR-коду (СБП).",
         reply_markup=keyboard,
     )
-    if outcome.created.qr_code_payload:
-        await channel.send_qr_code(str(message.chat.id), outcome.created.qr_code_payload)
+
+
+@router.callback_query(F.data.startswith("show_qr:"))
+async def on_show_qr(callback: CallbackQuery) -> None:
+    assert callback.data is not None
+    order_id = callback.data.split(":", 1)[1]
+
+    from app.models.payment import Payment
+
+    db = get_channel_db()
+    with db.session() as session:
+        payment = session.execute(
+            select(Payment).where(Payment.order_id == order_id)
+        ).scalar_one_or_none()
+        qr_payload = payment.qr_code_payload if payment else None
+
+    if not qr_payload:
+        await callback.answer("QR недоступен для этого платежа.", show_alert=True)
+        return
+
+    await _get_channel().send_qr_code(str(_msg(callback).chat.id), qr_payload)
+    await callback.answer()
 
 
 @router.callback_query(F.data == "check_payment")

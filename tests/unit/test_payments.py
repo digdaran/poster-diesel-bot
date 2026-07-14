@@ -56,6 +56,32 @@ def test_create_payment_reserves_tickets(db: Database) -> None:
     assert pool_svc.get_free_count(db, giveaway_id=gid) == 7
 
 
+def test_create_payment_persists_payment_url_and_qr(db: Database) -> None:
+    """payment_url/qr_code_payload — one-shot данные от провайдера (см.
+    CreatedPayment) — должны сохраняться на Payment, а не оставаться только в
+    транзиентном outcome, иначе кнопка «Показать QR» в боте не сможет их
+    получить позже отдельным событием (см. DECISIONS.md)."""
+    gid = make_giveaway(db, max_tickets=10)
+    pid = make_participant(db)
+    outcome = svc.create_payment_safe(
+        db,
+        MockProvider(),
+        giveaway_id=gid,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=2,
+    )
+    assert outcome.ok
+    assert outcome.payment_id is not None
+    assert outcome.created is not None
+    with db.session() as session:
+        payment = session.get(Payment, outcome.payment_id)
+        assert payment is not None
+        assert payment.payment_url == outcome.created.payment_url
+        assert payment.qr_code_payload == outcome.created.qr_code_payload
+        assert payment.qr_code_payload is not None  # MockProvider всегда отдаёт QR
+
+
 def test_create_payment_insufficient_tickets_not_created(db: Database) -> None:
     gid = make_giveaway(db, max_tickets=2)
     pid = make_participant(db)

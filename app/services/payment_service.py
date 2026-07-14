@@ -96,6 +96,14 @@ def create_payment(
         participant_phone=participant_phone,
     )
     created = provider.create_payment(order)
+
+    with db.session() as session:
+        session.execute(
+            update(Payment)
+            .where(Payment.id == payment_id)
+            .values(payment_url=created.payment_url, qr_code_payload=created.qr_code_payload)
+        )
+
     return CreatePaymentOutcome(
         ok=True, payment_id=payment_id, order_id=order_id, created=created, free_count=0
     )
