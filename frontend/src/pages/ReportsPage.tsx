@@ -1,11 +1,16 @@
 import { useEffect, useState } from "react";
-import { ReportsApi } from "../api/resources";
+import { GiveawaysApi, ReportsApi } from "../api/resources";
 import { apiDownload } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
+import type { Giveaway, RevenueByGiveawayRow } from "../api/types";
 
 export function ReportsPage() {
   const { hasPermission } = useAuth();
+  const [giveaways, setGiveaways] = useState<Giveaway[]>([]);
+  const [giveawayId, setGiveawayId] = useState<number | undefined>(undefined);
   const [summary, setSummary] = useState<{
+    revenue_online: number;
+    revenue_offline: number;
     revenue_total: number;
     successful_payments_count: number;
     average_check: number;
@@ -14,11 +19,17 @@ export function ReportsPage() {
     string,
     { count: number; amount: number }
   > | null>(null);
+  const [byGiveaway, setByGiveaway] = useState<RevenueByGiveawayRow[] | null>(null);
 
   useEffect(() => {
-    void ReportsApi.financialSummary().then(setSummary);
-    void ReportsApi.onlineVsOffline().then(setOnlineOffline);
+    void GiveawaysApi.list().then(setGiveaways);
+    void ReportsApi.revenueByGiveaway().then(setByGiveaway);
   }, []);
+
+  useEffect(() => {
+    void ReportsApi.financialSummary(giveawayId).then(setSummary);
+    void ReportsApi.onlineVsOffline(giveawayId).then(setOnlineOffline);
+  }, [giveawayId]);
 
   const downloadReport = async (path: string, format: "csv" | "xlsx") => {
     const { blob, filename } = await apiDownload(path, { export: format });
@@ -35,12 +46,58 @@ export function ReportsPage() {
       <h1>Отчёты</h1>
 
       <section>
-        <h2>Финансовая сводка</h2>
+        <label htmlFor="giveaway-filter">Розыгрыш: </label>
+        <select
+          id="giveaway-filter"
+          value={giveawayId ?? ""}
+          onChange={(e) => setGiveawayId(e.target.value ? Number(e.target.value) : undefined)}
+        >
+          <option value="">Все розыгрыши</option>
+          {giveaways.map((g) => (
+            <option key={g.id} value={g.id}>
+              {g.name}
+            </option>
+          ))}
+        </select>
+      </section>
+
+      <section>
+        <h2>Выручка по розыгрышам</h2>
+        {byGiveaway && (
+          <table>
+            <thead>
+              <tr>
+                <th>Розыгрыш</th>
+                <th>Эквайринг</th>
+                <th>Наличные (оператор)</th>
+                <th>Итого</th>
+                <th>Номерков выдано</th>
+              </tr>
+            </thead>
+            <tbody>
+              {byGiveaway.map((row) => (
+                <tr key={row.giveaway_id}>
+                  <td>{row.giveaway_name}</td>
+                  <td>{(row.revenue_online / 100).toFixed(2)} ₽</td>
+                  <td>{(row.revenue_offline / 100).toFixed(2)} ₽</td>
+                  <td>{(row.revenue_total / 100).toFixed(2)} ₽</td>
+                  <td>{row.tickets_issued}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      <section>
+        <h2>Финансовая сводка {giveawayId ? "по розыгрышу" : "(все розыгрыши)"}</h2>
         {summary && (
           <ul>
-            <li>Выручка: {(summary.revenue_total / 100).toFixed(2)} ₽</li>
+            <li>Эквайринг: {(summary.revenue_online / 100).toFixed(2)} ₽</li>
+            <li>Наличные (оператор): {(summary.revenue_offline / 100).toFixed(2)} ₽</li>
+            <li>Итого выручка: {(summary.revenue_total / 100).toFixed(2)} ₽</li>
             <li>Успешных платежей: {summary.successful_payments_count}</li>
-            <li>Средний чек: {(summary.average_check / 100).toFixed(2)} ₽</li>
+            <li>Средний чек (онлайн): {(summary.average_check / 100).toFixed(2)} ₽</li>
           </ul>
         )}
       </section>

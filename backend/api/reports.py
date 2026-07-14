@@ -110,3 +110,13 @@ def financial_summary(
     _user: PanelUser = Depends(require_permission(Permission.REPORTS_VIEW)),
 ) -> dict:
     return svc.financial_summary(session, giveaway_id=giveaway_id)
+
+
+@router.get("/revenue-by-giveaway", response_model=None)
+def revenue_by_giveaway(
+    export: ExportFormat | None = None,
+    session: Session = Depends(get_session),
+    user: PanelUser = Depends(require_permission(Permission.REPORTS_VIEW)),
+) -> list[dict[str, Any]] | Response:
+    rows = svc.revenue_by_giveaway(session)
+    return _maybe_export(rows, export, user, "revenue_by_giveaway")

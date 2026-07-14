@@ -197,5 +197,7 @@ class AuditLogOut(BaseModel):
 class DashboardOut(BaseModel):
     participants_count: int
     tickets_issued_count: int
+    revenue_online: int
+    revenue_offline: int
     revenue_total: int
     giveaways_count: int

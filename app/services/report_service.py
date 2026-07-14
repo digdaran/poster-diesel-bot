@@ -133,15 +133,80 @@ def participants_report(session: Session) -> list[dict[str, Any]]:
 
 
 def financial_summary(session: Session, *, giveaway_id: int | None = None) -> dict[str, Any]:
-    """Общая выручка, число успешных платежей, средний чек (п.16 ТЗ)."""
-    stmt = select(Payment).where(Payment.status == PaymentStatus.SUCCEEDED)
-    if giveaway_id is not None:
-        stmt = stmt.where(Payment.giveaway_id == giveaway_id)
-    payments = session.execute(stmt).scalars().all()
-    total = sum(p.amount for p in payments)
-    count = len(payments)
-    average = total // count if count else 0
-    return {"revenue_total": total, "successful_payments_count": count, "average_check": average}
+    """Общая выручка (эквайринг + наличные через оператора), число успешных
+    платежей, средний чек (п.16 ТЗ).
+
+    `successful_payments_count`/`average_check` намеренно считаются только по
+    онлайн-платежам (`Payment`) — ручная регистрация не является дискретным
+    «чеком» (сумма = quantity × ticket_price, без отдельной транзакции), поэтому
+    у неё нет своего "чека" для усреднения. Не путать это с `revenue_total`,
+    который обязан включать оба источника денег (см. DECISIONS.md — баг, когда
+    ручная выдача номерков не попадала в выручку).
+    """
+    revenue = online_vs_offline(session, giveaway_id=giveaway_id)
+    online = revenue["online"]
+    offline = revenue["offline"]
+    average = online["amount"] // online["count"] if online["count"] else 0
+    return {
+        "revenue_online": online["amount"],
+        "revenue_offline": offline["amount"],
+        "revenue_total": online["amount"] + offline["amount"],
+        "successful_payments_count": online["count"],
+        "average_check": average,
+    }
+
+
+def revenue_by_giveaway(session: Session) -> list[dict[str, Any]]:
+    """Выручка (эквайринг/наличные/итого) по каждому розыгрышу отдельно (п.16 ТЗ).
+
+    Розыгрыши без активности тоже включаются (с нулями), а не пропускаются.
+    Считается двумя раздельными GROUP BY запросами и мёрджится в Python —
+    JOIN Payment+ManualRegistration к Giveaway в одном запросе дал бы fan-out
+    (декартово произведение платежей на ручные регистрации) и задвоил бы суммы.
+    """
+    online_stmt = (
+        select(
+            Payment.giveaway_id,
+            func.count(Payment.id),
+            func.coalesce(func.sum(Payment.amount), 0),
+        )
+        .where(Payment.status == PaymentStatus.SUCCEEDED)
+        .group_by(Payment.giveaway_id)
+    )
+    online_by_giveaway = {gid: amount for gid, _count, amount in session.execute(online_stmt).all()}
+
+    offline_stmt = (
+        select(
+            ManualRegistration.giveaway_id,
+            func.coalesce(func.sum(ManualRegistration.quantity), 0),
+        )
+        .where(ManualRegistration.status == ManualRegistrationStatus.CONFIRMED)
+        .group_by(ManualRegistration.giveaway_id)
+    )
+    # dict(...) here breaks mypy: SQLAlchemy's Row isn't seen as tuple[int, int].
+    offline_quantity_by_giveaway = {  # noqa: C416
+        gid: qty for gid, qty in session.execute(offline_stmt).all()
+    }
+
+    giveaways = session.execute(
+        select(Giveaway.id, Giveaway.name, Giveaway.ticket_price, Giveaway.tickets_issued)
+    ).all()
+
+    result = []
+    for gid, name, ticket_price, tickets_issued in giveaways:
+        revenue_online = online_by_giveaway.get(gid, 0)
+        revenue_offline = offline_quantity_by_giveaway.get(gid, 0) * ticket_price
+        result.append(
+            {
+                "giveaway_id": gid,
+                "giveaway_name": name,
+                "revenue_online": revenue_online,
+                "revenue_offline": revenue_offline,
+                "revenue_total": revenue_online + revenue_offline,
+                "tickets_issued": tickets_issued,
+            }
+        )
+    return result
 
 
 def to_csv(rows: list[dict[str, Any]]) -> bytes:

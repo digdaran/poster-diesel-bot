@@ -24,8 +24,16 @@ export function DashboardPage() {
           <div className="card-label">Номерков выдано</div>
         </div>
         <div className="card">
+          <div className="card-value">{(data.revenue_online / 100).toFixed(2)} ₽</div>
+          <div className="card-label">Эквайринг</div>
+        </div>
+        <div className="card">
+          <div className="card-value">{(data.revenue_offline / 100).toFixed(2)} ₽</div>
+          <div className="card-label">Наличные (оператор)</div>
+        </div>
+        <div className="card">
           <div className="card-value">{(data.revenue_total / 100).toFixed(2)} ₽</div>
-          <div className="card-label">Выручка</div>
+          <div className="card-label">Итого выручка</div>
         </div>
         <div className="card">
           <div className="card-value">{data.giveaways_count}</div>

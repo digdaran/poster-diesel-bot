@@ -76,6 +76,8 @@ def test_sales_by_provider_and_financial_summary(session: Session) -> None:
     assert "tbank" not in {} or by_provider["tbank"]["amount"] == 10000
 
     summary = svc.financial_summary(session)
+    assert summary["revenue_online"] == 30000
+    assert summary["revenue_offline"] == 0
     assert summary["revenue_total"] == 30000
     assert summary["successful_payments_count"] == 2
     assert summary["average_check"] == 15000
@@ -145,6 +147,63 @@ def test_online_vs_offline(session: Session) -> None:
     result = svc.online_vs_offline(session)
     assert result["online"] == {"count": 1, "amount": 10000}
     assert result["offline"] == {"count": 1, "amount": 20000}  # 2 * ticket_price(10000)
+
+
+def test_revenue_by_giveaway(session: Session) -> None:
+    g1 = make_giveaway(session, prefix="RBG1")
+    g2 = make_giveaway(session, prefix="RBG2")
+    g3_empty = make_giveaway(session, prefix="RBG3")
+    p = make_participant(session, "79990005555")
+    operator = PanelUser(login="op_rbg", password_hash="x", role=PanelUserRole.OPERATOR)
+    session.add(operator)
+    session.flush()
+
+    session.add(
+        Payment(
+            order_id="rbg-o1",
+            participant_id=p.id,
+            giveaway_id=g1.id,
+            provider=PaymentProviderType.MOCK,
+            amount=5000,
+            quantity=1,
+            status=PaymentStatus.SUCCEEDED,
+        )
+    )
+    session.add(
+        ManualRegistration(
+            participant_id=p.id,
+            giveaway_id=g1.id,
+            quantity=1,
+            status=ManualRegistrationStatus.CONFIRMED,
+            operator_id=operator.id,
+        )
+    )
+    session.add(
+        Payment(
+            order_id="rbg-o2",
+            participant_id=p.id,
+            giveaway_id=g2.id,
+            provider=PaymentProviderType.MOCK,
+            amount=7000,
+            quantity=1,
+            status=PaymentStatus.SUCCEEDED,
+        )
+    )
+    session.flush()
+
+    rows = {row["giveaway_id"]: row for row in svc.revenue_by_giveaway(session)}
+
+    assert rows[g1.id]["revenue_online"] == 5000
+    assert rows[g1.id]["revenue_offline"] == 10000  # 1 * ticket_price(10000)
+    assert rows[g1.id]["revenue_total"] == 15000
+
+    assert rows[g2.id]["revenue_online"] == 7000
+    assert rows[g2.id]["revenue_offline"] == 0
+    assert rows[g2.id]["revenue_total"] == 7000
+
+    assert rows[g3_empty.id]["revenue_online"] == 0
+    assert rows[g3_empty.id]["revenue_offline"] == 0
+    assert rows[g3_empty.id]["revenue_total"] == 0
 
 
 def test_participants_report(session: Session) -> None:

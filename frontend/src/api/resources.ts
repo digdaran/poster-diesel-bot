@@ -9,6 +9,7 @@ import type {
   Participant,
   Payment,
   PlatformSettings,
+  RevenueByGiveawayRow,
   Ticket,
 } from "./types";
 
@@ -122,10 +123,13 @@ export const BroadcastsApi = {
 
 export const ReportsApi = {
   financialSummary: (giveaway_id?: number) =>
-    apiRequest<{ revenue_total: number; successful_payments_count: number; average_check: number }>(
-      "/api/reports/financial-summary",
-      { query: { giveaway_id } },
-    ),
+    apiRequest<{
+      revenue_online: number;
+      revenue_offline: number;
+      revenue_total: number;
+      successful_payments_count: number;
+      average_check: number;
+    }>("/api/reports/financial-summary", { query: { giveaway_id } }),
   onlineVsOffline: (giveaway_id?: number) =>
     apiRequest<Record<string, { count: number; amount: number }>>(
       "/api/reports/online-vs-offline",
@@ -133,4 +137,6 @@ export const ReportsApi = {
         query: { giveaway_id },
       },
     ),
+  revenueByGiveaway: () =>
+    apiRequest<RevenueByGiveawayRow[]>("/api/reports/revenue-by-giveaway"),
 };

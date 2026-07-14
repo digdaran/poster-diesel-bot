@@ -49,6 +49,13 @@ def test_full_manual_sale_flow(api_client: TestClient) -> None:
     assert len(tickets) == 3
     assert all(t["source"] == "manual" for t in tickets)
 
+    resp = api_client.get("/api/dashboard", headers=headers)
+    assert resp.status_code == 200
+    dashboard = resp.json()
+    assert dashboard["revenue_offline"] == 3 * 15000
+    assert dashboard["revenue_online"] == 0
+    assert dashboard["revenue_total"] == 3 * 15000
+
     resp = api_client.get(f"/api/giveaways/{giveaway_id}", headers=headers)
     assert resp.json()["tickets_issued"] == 3
 

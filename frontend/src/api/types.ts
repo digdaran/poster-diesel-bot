@@ -111,6 +111,17 @@ export interface Broadcast {
 export interface Dashboard {
   participants_count: number;
   tickets_issued_count: number;
+  revenue_online: number;
+  revenue_offline: number;
   revenue_total: number;
   giveaways_count: number;
+}
+
+export interface RevenueByGiveawayRow {
+  giveaway_id: number;
+  giveaway_name: string;
+  revenue_online: number;
+  revenue_offline: number;
+  revenue_total: number;
+  tickets_issued: number;
 }
