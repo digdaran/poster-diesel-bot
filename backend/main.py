@@ -3,9 +3,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 import structlog
 from app.core.config import get_settings
@@ -17,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 from starlette.responses import Response
 
+from backend import background
 from backend.api import (
     audit,
     auth,
@@ -54,7 +56,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
     app.state.db = db
     app.state.settings = settings
+
+    task = asyncio.create_task(background.run_background_loop(db, settings))
     yield
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
 
 
 def create_app() -> FastAPI:

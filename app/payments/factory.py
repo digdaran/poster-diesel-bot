@@ -10,11 +10,13 @@
 from __future__ import annotations
 
 from app.core.config import Settings
+from app.core.db import Database
 from app.models.enums import PaymentProviderType
 from app.payments.base import BasePaymentProvider
 from app.payments.mock import MockProvider
 from app.payments.tbank import TBankProvider
 from app.payments.vtb import VTBProvider
+from app.services import settings_service
 
 _REGISTRY: dict[PaymentProviderType, type[BasePaymentProvider]] = {
     PaymentProviderType.MOCK: MockProvider,
@@ -47,3 +49,12 @@ def get_provider(
 ) -> BasePaymentProvider:
     provider_type = resolve_provider_type(settings, override=override)
     return create_provider(settings, provider_type)
+
+
+def get_active_provider(db: Database, settings: Settings) -> BasePaymentProvider:
+    """Провайдер с учётом приоритета `PlatformSettings.payment_provider_override`
+    над `.env` (п.9.3 ТЗ) — единая точка резолва для каналов и фоновых задач backend."""
+    with db.session() as session:
+        platform_settings = settings_service.get_or_create_settings(session)
+        override = platform_settings.payment_provider_override
+    return get_provider(settings, override=override)
