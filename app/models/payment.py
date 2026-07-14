@@ -40,7 +40,7 @@ class Payment(Base):
         index=True,
     )
     raw_webhook_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    created_at: Mapped[dt.datetime] = created_at_column()
+    created_at: Mapped[dt.datetime] = created_at_column(index=True)
     confirmed_at: Mapped[dt.datetime | None] = mapped_column(nullable=True)
 
     # Резервная проверка/поллинг (доп. поле сверх п.6.2, нужно для фоновой сверки

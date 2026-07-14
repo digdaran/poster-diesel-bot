@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import datetime as dt
+from typing import Any
+
 from app.core.permissions import Permission
 from app.core.phone import InvalidPhoneError
 from app.models.enums import AuditActorType
@@ -13,22 +16,48 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from backend.api.deps import get_session, require_permission
+from backend.api.pagination import count_total, page_bounds, validate_page_size
 from backend.api.schemas import ParticipantOut, ParticipantUpdateRequest
 
 router = APIRouter(prefix="/participants", tags=["participants"])
 
 
-@router.get("", response_model=list[ParticipantOut])
+@router.get("", response_model=None)
 def list_participants(
     q: str | None = None,
+    phone_verified: bool | None = None,
+    is_blocked: bool | None = None,
+    created_from: dt.date | None = None,
+    created_to: dt.date | None = None,
+    page: int = 1,
+    page_size: int = 50,
     session: Session = Depends(get_session),
     _user: PanelUser = Depends(require_permission(Permission.VIEW_PARTICIPANTS)),
-) -> list[Participant]:
-    stmt = select(Participant).order_by(Participant.id.desc())
+) -> dict[str, Any]:
+    validate_page_size(page_size)
+    stmt = select(Participant)
     if q:
         like = f"%{q}%"
         stmt = stmt.where(or_(Participant.phone.like(like), Participant.full_name.like(like)))
-    return list(session.execute(stmt).scalars())
+    if phone_verified is not None:
+        stmt = stmt.where(Participant.phone_verified == phone_verified)
+    if is_blocked is not None:
+        stmt = stmt.where(Participant.is_blocked == is_blocked)
+    if created_from is not None:
+        stmt = stmt.where(Participant.created_at >= created_from)
+    if created_to is not None:
+        stmt = stmt.where(Participant.created_at < created_to + dt.timedelta(days=1))
+
+    total = count_total(session, stmt)
+    limit, offset = page_bounds(page=page, page_size=page_size)
+    page_stmt = stmt.order_by(Participant.id.desc()).limit(limit).offset(offset)
+    items = session.execute(page_stmt).scalars().all()
+    return {
+        "items": [ParticipantOut.model_validate(p).model_dump(mode="json") for p in items],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }
 
 
 @router.get("/by-phone", response_model=ParticipantOut | None)

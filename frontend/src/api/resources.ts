@@ -5,6 +5,8 @@ import type {
   Dashboard,
   Giveaway,
   ManualRegistration,
+  Page,
+  PageSize,
   PanelUser,
   Participant,
   Payment,
@@ -12,6 +14,11 @@ import type {
   RevenueByGiveawayRow,
   Ticket,
 } from "./types";
+
+interface PageParams {
+  page?: number;
+  page_size?: PageSize;
+}
 
 export const AuthApi = {
   login: (login: string, password: string) =>
@@ -26,8 +33,17 @@ export const DashboardApi = {
   get: () => apiRequest<Dashboard>("/api/dashboard"),
 };
 
+export interface ParticipantsFilter extends PageParams {
+  q?: string;
+  phone_verified?: boolean;
+  is_blocked?: boolean;
+  created_from?: string;
+  created_to?: string;
+}
+
 export const ParticipantsApi = {
-  list: (q?: string) => apiRequest<Participant[]>("/api/participants", { query: { q } }),
+  list: (params: ParticipantsFilter = {}) =>
+    apiRequest<Page<Participant>>("/api/participants", { query: { ...params } }),
   findByPhone: (phone: string) =>
     apiRequest<Participant | null>("/api/participants/by-phone", { query: { phone } }),
   get: (id: number) => apiRequest<Participant>(`/api/participants/${id}`),
@@ -58,8 +74,17 @@ export const GiveawaysApi = {
     apiRequest<Giveaway>(`/api/giveaways/${id}/close-registration`, { method: "POST" }),
 };
 
+export interface ManualRegistrationsFilter extends PageParams {
+  giveaway_id?: number;
+  participant_query?: string;
+  status_filter?: string;
+  created_from?: string;
+  created_to?: string;
+}
+
 export const ManualRegistrationsApi = {
-  list: () => apiRequest<ManualRegistration[]>("/api/manual-registrations"),
+  list: (params: ManualRegistrationsFilter = {}) =>
+    apiRequest<Page<ManualRegistration>>("/api/manual-registrations", { query: { ...params } }),
   create: (payload: {
     giveaway_id: number;
     participant_phone: string;
@@ -74,13 +99,33 @@ export const ManualRegistrationsApi = {
     apiRequest<ManualRegistration>(`/api/manual-registrations/${id}/cancel`, { method: "POST" }),
 };
 
+export interface SalesFilter extends PageParams {
+  giveaway_id?: number;
+  status_filter?: string;
+  order_id?: string;
+  provider?: string;
+  participant_query?: string;
+  created_from?: string;
+  created_to?: string;
+}
+
 export const SalesApi = {
-  list: (params?: { giveaway_id?: number; status_filter?: string }) =>
-    apiRequest<Payment[]>("/api/payments", { query: params }),
+  list: (params: SalesFilter = {}) =>
+    apiRequest<Page<Payment>>("/api/payments", { query: { ...params } }),
 };
 
+export interface TicketsFilter extends PageParams {
+  giveaway_id?: number;
+  full_code?: string;
+  participant_query?: string;
+  source?: string;
+  created_from?: string;
+  created_to?: string;
+}
+
 export const TicketsApi = {
-  list: (giveaway_id?: number) => apiRequest<Ticket[]>("/api/tickets", { query: { giveaway_id } }),
+  list: (params: TicketsFilter = {}) =>
+    apiRequest<Page<Ticket>>("/api/tickets", { query: { ...params } }),
 };
 
 export const PanelUsersApi = {

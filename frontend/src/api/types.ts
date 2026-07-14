@@ -136,3 +136,13 @@ export interface RevenueByGiveawayRow {
   revenue_total: number;
   tickets_issued: number;
 }
+
+export interface Page<T> {
+  items: T[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export const PAGE_SIZES = [10, 50, 100, 500] as const;
+export type PageSize = (typeof PAGE_SIZES)[number];

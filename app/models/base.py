@@ -25,5 +25,5 @@ class Base(DeclarativeBase):
     registry = sa_registry()
 
 
-def created_at_column():  # type: ignore[no-untyped-def]
-    return mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+def created_at_column(*, index: bool = False):  # type: ignore[no-untyped-def]
+    return mapped_column(DateTime(timezone=True), default=utcnow, nullable=False, index=index)

@@ -35,9 +35,11 @@ class ManualRegistration(Base):
         nullable=False,
         index=True,
     )
-    operator_id: Mapped[int] = mapped_column(ForeignKey("panel_users.id"), nullable=False)
+    operator_id: Mapped[int] = mapped_column(
+        ForeignKey("panel_users.id"), nullable=False, index=True
+    )
     comment: Mapped[str | None] = mapped_column(String(2000), nullable=True)
-    created_at: Mapped[dt.datetime] = created_at_column()
+    created_at: Mapped[dt.datetime] = created_at_column(index=True)
     confirmed_at: Mapped[dt.datetime | None] = mapped_column(nullable=True)
     cancelled_at: Mapped[dt.datetime | None] = mapped_column(nullable=True)
 

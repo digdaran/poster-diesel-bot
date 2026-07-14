@@ -29,7 +29,7 @@ class Participant(Base):
     phone_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_blocked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    created_at: Mapped[dt.datetime] = created_at_column()
+    created_at: Mapped[dt.datetime] = created_at_column(index=True)
 
     channel_bindings: Mapped[list[ChannelBinding]] = relationship(
         back_populates="participant", cascade="all, delete-orphan"

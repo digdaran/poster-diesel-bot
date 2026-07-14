@@ -54,7 +54,7 @@ def test_full_manual_sale_flow(api_client: TestClient) -> None:
 
     resp = api_client.get("/api/tickets", headers=headers)
     assert resp.status_code == 200
-    tickets = [t for t in resp.json() if t["giveaway_id"] == giveaway_id]
+    tickets = [t for t in resp.json()["items"] if t["giveaway_id"] == giveaway_id]
     assert len(tickets) == 3
     assert all(t["source"] == "manual" for t in tickets)
     assert all(t["participant_full_name"] == "Иван Иванов" for t in tickets)
@@ -215,13 +215,16 @@ def test_operator_sees_only_own_manual_registrations(api_client: TestClient) -> 
 
     resp_a = api_client.get("/api/manual-registrations", headers=auth_headers(op_a_token))
     resp_b = api_client.get("/api/manual-registrations", headers=auth_headers(op_b_token))
-    assert len(resp_a.json()) == 1
-    assert len(resp_b.json()) == 1
-    assert resp_a.json()[0]["id"] != resp_b.json()[0]["id"]
+    assert resp_a.json()["total"] == 1
+    assert resp_b.json()["total"] == 1
+    assert len(resp_a.json()["items"]) == 1
+    assert len(resp_b.json()["items"]) == 1
+    assert resp_a.json()["items"][0]["id"] != resp_b.json()["items"][0]["id"]
 
     # Администратор видит обе
     resp_admin = api_client.get("/api/manual-registrations", headers=admin_headers)
-    assert len(resp_admin.json()) == 2
+    assert resp_admin.json()["total"] == 2
+    assert len(resp_admin.json()["items"]) == 2
 
 
 def test_manual_registration_name_overwrite_restricted_by_role(api_client: TestClient) -> None:

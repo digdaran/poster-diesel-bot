@@ -2,22 +2,25 @@
 
 from __future__ import annotations
 
+import datetime as dt
 from typing import Any
 
 from app.core.config import Settings
 from app.core.db import Database
 from app.core.permissions import PanelRole, Permission
-from app.models.enums import AuditActorType
+from app.models.enums import AuditActorType, ManualRegistrationStatus
 from app.models.manual_registration import ManualRegistration
 from app.models.panel_user import PanelUser
+from app.models.participant import Participant
 from app.services import audit_service, participant_service
 from app.services import manual_registration_service as svc
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from sqlalchemy import select
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import or_, select
+from sqlalchemy.orm import Session, contains_eager, joinedload
 
 from backend.api.deps import get_database, get_session, get_settings_dep, require_permission
 from backend.api.export_utils import ExportFormat, maybe_export
+from backend.api.pagination import count_total, page_bounds, validate_page_size
 from backend.api.schemas import ManualRegistrationCreateRequest, ManualRegistrationOut
 
 router = APIRouter(prefix="/manual-registrations", tags=["manual-registrations"])
@@ -25,47 +28,71 @@ router = APIRouter(prefix="/manual-registrations", tags=["manual-registrations"]
 
 @router.get("", response_model=None)
 def list_manual_registrations(
+    giveaway_id: int | None = None,
+    participant_query: str | None = None,
+    status_filter: ManualRegistrationStatus | None = None,
+    created_from: dt.date | None = None,
+    created_to: dt.date | None = None,
+    page: int = 1,
+    page_size: int = 50,
     export: ExportFormat | None = None,
     session: Session = Depends(get_session),
     user: PanelUser = Depends(require_permission(Permission.VIEW_SALES)),
-) -> list[dict[str, Any]] | Response:
+) -> dict[str, Any] | list[dict[str, Any]] | Response:
     """Operator видит только СВОИ регистрации (п.14.2 ТЗ), Super Admin/Administrator — все."""
-    stmt = (
-        select(ManualRegistration)
-        .options(
-            joinedload(ManualRegistration.participant),
-            joinedload(ManualRegistration.giveaway),
-            joinedload(ManualRegistration.operator),
-        )
-        .order_by(ManualRegistration.id.desc())
-    )
+    validate_page_size(page_size)
+    stmt = select(ManualRegistration)
     if PanelRole(user.role.value) == PanelRole.OPERATOR:
         stmt = stmt.where(ManualRegistration.operator_id == user.id)
-    registrations = session.execute(stmt).scalars()
-
-    rows = [
-        ManualRegistrationOut(
-            id=r.id,
-            participant_id=r.participant_id,
-            participant_phone=r.participant.phone,
-            participant_full_name=r.participant.full_name,
-            giveaway_id=r.giveaway_id,
-            giveaway_name=r.giveaway.name,
-            quantity=r.quantity,
-            revenue=r.quantity * r.giveaway.ticket_price,
-            status=r.status.value,
-            operator_id=r.operator_id,
-            operator_login=r.operator.login,
-            comment=r.comment,
-            created_at=r.created_at,
-            confirmed_at=r.confirmed_at,
-            cancelled_at=r.cancelled_at,
-        ).model_dump(mode="json")
-        for r in registrations
-    ]
-    return maybe_export(
-        rows, export, user, "manual_registrations", permission=Permission.SALES_EXPORT
+    if giveaway_id is not None:
+        stmt = stmt.where(ManualRegistration.giveaway_id == giveaway_id)
+    if status_filter is not None:
+        stmt = stmt.where(ManualRegistration.status == status_filter)
+    if created_from is not None:
+        stmt = stmt.where(ManualRegistration.created_at >= created_from)
+    if created_to is not None:
+        stmt = stmt.where(ManualRegistration.created_at < created_to + dt.timedelta(days=1))
+    if participant_query:
+        like = f"%{participant_query}%"
+        stmt = stmt.join(ManualRegistration.participant).where(
+            or_(Participant.phone.like(like), Participant.full_name.like(like))
+        )
+    participant_load = (
+        contains_eager(ManualRegistration.participant)
+        if participant_query
+        else joinedload(ManualRegistration.participant)
     )
+    eager_options = (
+        participant_load,
+        joinedload(ManualRegistration.giveaway),
+        joinedload(ManualRegistration.operator),
+    )
+
+    if export is not None:
+        eager_stmt = stmt.options(*eager_options).order_by(ManualRegistration.id.desc())
+        rows = [
+            _to_out(session, r).model_dump(mode="json")
+            for r in session.execute(eager_stmt).scalars()
+        ]
+        return maybe_export(
+            rows, export, user, "manual_registrations", permission=Permission.SALES_EXPORT
+        )
+
+    total = count_total(session, stmt)
+    limit, offset = page_bounds(page=page, page_size=page_size)
+    eager_stmt = (
+        stmt.options(*eager_options)
+        .order_by(ManualRegistration.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    items = session.execute(eager_stmt).scalars()
+    return {
+        "items": [_to_out(session, r).model_dump(mode="json") for r in items],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }
 
 
 def _to_out(session: Session, registration: ManualRegistration) -> ManualRegistrationOut:

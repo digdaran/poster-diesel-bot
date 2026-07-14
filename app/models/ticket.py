@@ -39,7 +39,7 @@ class Ticket(Base):
     manual_registration_id: Mapped[int | None] = mapped_column(
         ForeignKey("manual_registrations.id"), nullable=True
     )
-    created_at: Mapped[dt.datetime] = created_at_column()
+    created_at: Mapped[dt.datetime] = created_at_column(index=True)
 
     giveaway: Mapped[Giveaway] = relationship(back_populates="tickets")
     pool_row: Mapped[TicketPool] = relationship(back_populates="ticket")

@@ -3,13 +3,19 @@ import type { FormEvent } from "react";
 import { GiveawaysApi, ManualRegistrationsApi, ParticipantsApi } from "../api/resources";
 import { apiDownload } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
+import { usePagination } from "../hooks/usePagination";
+import { useDebouncedValue } from "../hooks/useDebouncedValue";
+import { PaginationControls } from "../components/PaginationControls";
 import type { Giveaway, ManualRegistration } from "../api/types";
 
 export function ManualRegistrationsPage() {
   const { hasPermission, user } = useAuth();
   const isSuperAdmin = user?.role === "super_admin";
   const [registrations, setRegistrations] = useState<ManualRegistration[]>([]);
+  const [total, setTotal] = useState(0);
   const [giveaways, setGiveaways] = useState<Giveaway[]>([]);
+  const [allGiveaways, setAllGiveaways] = useState<Giveaway[]>([]);
+  const { page, pageSize, setPage, setPageSize } = usePagination();
   const [form, setForm] = useState({
     giveaway_id: "",
     participant_phone: "",
@@ -20,12 +26,41 @@ export function ManualRegistrationsPage() {
   const [nameLocked, setNameLocked] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const load = () => void ManualRegistrationsApi.list().then(setRegistrations);
-  useEffect(load, []);
+  const [filterGiveawayId, setFilterGiveawayId] = useState("");
+  const [participantQuery, setParticipantQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [createdFrom, setCreatedFrom] = useState("");
+  const [createdTo, setCreatedTo] = useState("");
+  const debouncedParticipantQuery = useDebouncedValue(participantQuery);
+
+  const load = () =>
+    void ManualRegistrationsApi.list({
+      page,
+      page_size: pageSize,
+      giveaway_id: filterGiveawayId ? Number(filterGiveawayId) : undefined,
+      participant_query: debouncedParticipantQuery || undefined,
+      status_filter: statusFilter || undefined,
+      created_from: createdFrom || undefined,
+      created_to: createdTo || undefined,
+    }).then((result) => {
+      setRegistrations(result.items);
+      setTotal(result.total);
+    });
+  useEffect(load, [
+    page,
+    pageSize,
+    filterGiveawayId,
+    debouncedParticipantQuery,
+    statusFilter,
+    createdFrom,
+    createdTo,
+  ]);
+
   useEffect(() => {
-    void GiveawaysApi.list().then((all) =>
-      setGiveaways(all.filter((g) => g.is_registration_open && !g.is_locked)),
-    );
+    void GiveawaysApi.list().then((all) => {
+      setAllGiveaways(all);
+      setGiveaways(all.filter((g) => g.is_registration_open && !g.is_locked));
+    });
   }, []);
 
   const onPhoneChange = (phone: string) => {
@@ -51,7 +86,14 @@ export function ManualRegistrationsPage() {
   };
 
   const downloadReport = async (format: "csv" | "xlsx") => {
-    const { blob, filename } = await apiDownload("/api/manual-registrations", { export: format });
+    const { blob, filename } = await apiDownload("/api/manual-registrations", {
+      export: format,
+      giveaway_id: filterGiveawayId ? Number(filterGiveawayId) : undefined,
+      participant_query: debouncedParticipantQuery || undefined,
+      status_filter: statusFilter || undefined,
+      created_from: createdFrom || undefined,
+      created_to: createdTo || undefined,
+    });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -135,6 +177,66 @@ export function ManualRegistrationsPage() {
         <button type="submit">Оформить</button>
       </form>
       {error && <div className="error">{error}</div>}
+
+      <div className="filters">
+        <input
+          placeholder="Участник (телефон/имя)"
+          value={participantQuery}
+          onChange={(e) => {
+            setParticipantQuery(e.target.value);
+            setPage(1);
+          }}
+        />
+        <select
+          value={filterGiveawayId}
+          onChange={(e) => {
+            setFilterGiveawayId(e.target.value);
+            setPage(1);
+          }}
+        >
+          <option value="">Все розыгрыши</option>
+          {allGiveaways.map((g) => (
+            <option key={g.id} value={g.id}>
+              {g.name}
+            </option>
+          ))}
+        </select>
+        <select
+          value={statusFilter}
+          onChange={(e) => {
+            setStatusFilter(e.target.value);
+            setPage(1);
+          }}
+        >
+          <option value="">Все статусы</option>
+          <option value="PENDING">PENDING</option>
+          <option value="CONFIRMED">CONFIRMED</option>
+          <option value="CANCELLED">CANCELLED</option>
+        </select>
+        <label>
+          Создан с{" "}
+          <input
+            type="date"
+            value={createdFrom}
+            onChange={(e) => {
+              setCreatedFrom(e.target.value);
+              setPage(1);
+            }}
+          />
+        </label>
+        <label>
+          по{" "}
+          <input
+            type="date"
+            value={createdTo}
+            onChange={(e) => {
+              setCreatedTo(e.target.value);
+              setPage(1);
+            }}
+          />
+        </label>
+      </div>
+
       {hasPermission("sales_export") && (
         <div>
           <button onClick={() => downloadReport("csv")}>Экспорт CSV</button>
@@ -180,6 +282,13 @@ export function ManualRegistrationsPage() {
           ))}
         </tbody>
       </table>
+      <PaginationControls
+        page={page}
+        pageSize={pageSize}
+        total={total}
+        onPageChange={setPage}
+        onPageSizeChange={setPageSize}
+      />
     </div>
   );
 }

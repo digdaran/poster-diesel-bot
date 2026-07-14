@@ -2,17 +2,48 @@ import { useEffect, useState } from "react";
 import { ParticipantsApi } from "../api/resources";
 import type { Participant } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
+import { usePagination } from "../hooks/usePagination";
+import { useDebouncedValue } from "../hooks/useDebouncedValue";
+import { PaginationControls } from "../components/PaginationControls";
 
 export function ParticipantsPage() {
   const { hasPermission } = useAuth();
   const [participants, setParticipants] = useState<Participant[]>([]);
+  const [total, setTotal] = useState(0);
   const [query, setQuery] = useState("");
+  const [phoneVerified, setPhoneVerified] = useState("");
+  const [isBlocked, setIsBlocked] = useState("");
+  const [createdFrom, setCreatedFrom] = useState("");
+  const [createdTo, setCreatedTo] = useState("");
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingName, setEditingName] = useState("");
+  const { page, pageSize, setPage, setPageSize } = usePagination();
 
-  const load = () => void ParticipantsApi.list(query || undefined).then(setParticipants);
+  const debouncedQuery = useDebouncedValue(query);
 
-  useEffect(load, [query]);
+  const load = () =>
+    void ParticipantsApi.list({
+      q: debouncedQuery || undefined,
+      phone_verified: phoneVerified ? phoneVerified === "true" : undefined,
+      is_blocked: isBlocked ? isBlocked === "true" : undefined,
+      created_from: createdFrom || undefined,
+      created_to: createdTo || undefined,
+      page,
+      page_size: pageSize,
+    }).then((result) => {
+      setParticipants(result.items);
+      setTotal(result.total);
+    });
+
+  useEffect(load, [
+    debouncedQuery,
+    phoneVerified,
+    isBlocked,
+    createdFrom,
+    createdTo,
+    page,
+    pageSize,
+  ]);
 
   const startEdit = (p: Participant) => {
     setEditingId(p.id);
@@ -28,11 +59,60 @@ export function ParticipantsPage() {
   return (
     <div>
       <h1>Участники</h1>
-      <input
-        placeholder="Поиск по телефону/имени"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-      />
+      <div className="filters">
+        <input
+          placeholder="Поиск по телефону/имени"
+          value={query}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setPage(1);
+          }}
+        />
+        <select
+          value={phoneVerified}
+          onChange={(e) => {
+            setPhoneVerified(e.target.value);
+            setPage(1);
+          }}
+        >
+          <option value="">Подтверждён: любой</option>
+          <option value="true">Подтверждён</option>
+          <option value="false">Не подтверждён</option>
+        </select>
+        <select
+          value={isBlocked}
+          onChange={(e) => {
+            setIsBlocked(e.target.value);
+            setPage(1);
+          }}
+        >
+          <option value="">Заблокирован: любой</option>
+          <option value="true">Заблокирован</option>
+          <option value="false">Не заблокирован</option>
+        </select>
+        <label>
+          Регистрация с{" "}
+          <input
+            type="date"
+            value={createdFrom}
+            onChange={(e) => {
+              setCreatedFrom(e.target.value);
+              setPage(1);
+            }}
+          />
+        </label>
+        <label>
+          по{" "}
+          <input
+            type="date"
+            value={createdTo}
+            onChange={(e) => {
+              setCreatedTo(e.target.value);
+              setPage(1);
+            }}
+          />
+        </label>
+      </div>
       <table>
         <thead>
           <tr>
@@ -87,6 +167,13 @@ export function ParticipantsPage() {
           ))}
         </tbody>
       </table>
+      <PaginationControls
+        page={page}
+        pageSize={pageSize}
+        total={total}
+        onPageChange={setPage}
+        onPageSizeChange={setPageSize}
+      />
     </div>
   );
 }
