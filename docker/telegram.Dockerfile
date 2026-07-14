@@ -9,7 +9,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /srv
 
-COPY pyproject.toml ./
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends procps \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml README.md ./
 COPY app ./app
 COPY channels ./channels
 
