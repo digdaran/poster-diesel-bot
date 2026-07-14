@@ -34,6 +34,8 @@ class CreatePaymentOutcome:
     created: CreatedPayment | None
     free_count: int
     """Актуальный остаток — заполняется при отказе (недостаточно номеров, п.7.5 ТЗ)."""
+    amount: int | None = None
+    """Сумма платежа в копейках (quantity * ticket_price) — заполняется при ok=True."""
 
 
 def create_payment(
@@ -105,7 +107,12 @@ def create_payment(
         )
 
     return CreatePaymentOutcome(
-        ok=True, payment_id=payment_id, order_id=order_id, created=created, free_count=0
+        ok=True,
+        payment_id=payment_id,
+        order_id=order_id,
+        created=created,
+        free_count=0,
+        amount=amount,
     )
 
 

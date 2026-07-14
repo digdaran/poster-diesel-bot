@@ -343,14 +343,15 @@ async def _create_and_offer_payment(
 
     assert outcome.created is not None
     assert outcome.order_id is not None
+    assert outcome.amount is not None
     keyboard = channel.render_payment_prompt(
         payment_url=outcome.created.payment_url,
         order_id=outcome.order_id,
         has_qr=bool(outcome.created.qr_code_payload),
     )
     await message.answer(
-        f"Счёт создан на {quantity} номерок(ов). Оплатите по ссылке ниже, либо нажмите "
-        "«Показать QR» для оплаты по QR-коду (СБП).",
+        f"Счёт создан на {quantity} номерок(ов) на сумму {outcome.amount / 100:.2f} ₽. "
+        "Оплатите по ссылке ниже, либо нажмите «Показать QR» для оплаты по QR-коду (СБП).",
         reply_markup=keyboard,
     )
 

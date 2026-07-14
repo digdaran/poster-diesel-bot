@@ -53,6 +53,7 @@ def test_create_payment_reserves_tickets(db: Database) -> None:
     )
     assert outcome.ok
     assert outcome.created is not None
+    assert outcome.amount == 3 * 10000  # quantity * ticket_price (см. make_giveaway)
     assert pool_svc.get_free_count(db, giveaway_id=gid) == 7
 
 
