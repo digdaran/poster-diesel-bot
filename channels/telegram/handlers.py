@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+from html import escape
 from typing import TYPE_CHECKING
 
 import structlog
@@ -39,6 +40,11 @@ router = Router(name="telegram-main")
 
 _MAIN_KEYBOARD_BUTTONS = [["🎟 Купить номерки", "📋 Мои номерки"], ["ℹ️ Помощь"]]
 
+# Запас под HTML-разметку (<pre>...</pre>) и под лимит Telegram в 4096 символов
+# на сообщение — превышение лимита иначе приводит к тихому отказу отправки.
+_TICKET_CODES_CHUNK_LIMIT = 3500
+_TICKET_CODES_COLUMN_THRESHOLD = 10
+
 _channel: TelegramChannel | None = None  # устанавливается через set_channel() в main.py
 
 
@@ -65,6 +71,49 @@ def _msg(callback: CallbackQuery) -> Message:
 
     assert isinstance(callback.message, _Message), "Сообщение недоступно для редактирования/ответа"
     return callback.message
+
+
+def _format_ticket_codes(codes: list[str]) -> list[str]:
+    """Готовит текст со списком кодов номерков к отправке. До
+    `_TICKET_CODES_COLUMN_THRESHOLD` кодов — простой список по одному на
+    строку (как раньше). Больше — моноширинная таблица в несколько колонок
+    (иначе список из сотен строк неудобно листать). В обоих случаях
+    результат разбит на куски, ни один из которых не превышает лимит
+    Telegram на длину сообщения — иначе отправка молча падает."""
+    if not codes:
+        return []
+    if len(codes) <= _TICKET_CODES_COLUMN_THRESHOLD:
+        lines = codes
+    else:
+        width = max(len(c) for c in codes) + 2
+        columns = max(1, min(5, 40 // width))
+        lines = [
+            "".join(c.ljust(width) for c in codes[i : i + columns]).rstrip()
+            for i in range(0, len(codes), columns)
+        ]
+
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+    for line in lines:
+        if current and current_len + len(line) + 1 > _TICKET_CODES_CHUNK_LIMIT:
+            chunks.append("\n".join(current))
+            current = []
+            current_len = 0
+        current.append(line)
+        current_len += len(line) + 1
+    if current:
+        chunks.append("\n".join(current))
+    return chunks
+
+
+async def _send_ticket_codes(message: Message, codes: list[str]) -> None:
+    multi_column = len(codes) > _TICKET_CODES_COLUMN_THRESHOLD
+    for chunk in _format_ticket_codes(codes):
+        if multi_column:
+            await message.answer(f"<pre>{escape(chunk)}</pre>", parse_mode="HTML")
+        else:
+            await message.answer(chunk)
 
 
 @router.message(CommandStart())
@@ -428,12 +477,23 @@ async def _deliver_tickets(message: Message, outcome: payment_svc.FinalizeOutcom
     db = get_channel_db()
     with db.session() as session:
         giveaway = session.get(Giveaway, outcome.giveaway_id)
-    codes = "\n".join(t.full_code for t in (outcome.tickets or []))
-    text = f"Оплата прошла успешно! Ваши номерки:\n{codes}"
-    if giveaway and giveaway.digital_poster_path:
-        await channel.send_media(str(message.chat.id), giveaway.digital_poster_path, caption=text)
+    codes = [t.full_code for t in (outcome.tickets or [])]
+    intro = "Оплата прошла успешно! Ваши номерки:"
+    poster_path = giveaway.digital_poster_path if giveaway else None
+
+    # Подпись к фото у Telegram ограничена 1024 символами (отдельно от лимита
+    # 4096 на обычное сообщение) — держим коды в подписи, только пока список
+    # заведомо короткий, иначе отправляем постер без кодов и коды отдельно.
+    if poster_path and len(codes) <= _TICKET_CODES_COLUMN_THRESHOLD:
+        caption = intro + "\n" + "\n".join(codes) if codes else intro
+        await channel.send_media(str(message.chat.id), poster_path, caption=caption)
+        return
+
+    if poster_path:
+        await channel.send_media(str(message.chat.id), poster_path, caption=intro)
     else:
-        await message.answer(text)
+        await message.answer(intro)
+    await _send_ticket_codes(message, codes)
 
 
 @router.message(F.text == "📋 Мои номерки")
@@ -461,8 +521,8 @@ async def on_my_tickets(message: Message) -> None:
     if not tickets:
         await message.answer("У вас пока нет номерков.")
         return
-    codes = "\n".join(t.full_code for t in tickets)
-    await message.answer(f"Ваши номерки ({len(tickets)}):\n{codes}")
+    await message.answer(f"Ваши номерки ({len(tickets)}):")
+    await _send_ticket_codes(message, [t.full_code for t in tickets])
 
 
 @router.message(F.text == "ℹ️ Помощь")
