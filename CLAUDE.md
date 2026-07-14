@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Source of truth
 
-`ТЗ_Raffle_Platform.md` (v2.4, in the repo root) is the **only** requirements source. Before changing
+`docs/ТЗ_Raffle_Platform.md` (v2.4) is the **only** requirements source. Before changing
 architecture or business logic, check it. Section 21 of the ТЗ lists features that must **not** be
 implemented in this version (ready VK/MAX adapters, VK Mini App, payment refunds, cancellation of
 confirmed manual registrations, automatic winner selection, million-scale ticket pools) — do not add
