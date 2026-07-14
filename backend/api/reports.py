@@ -2,42 +2,24 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
-from app.core.permissions import PanelRole, Permission, role_has_permission
+from app.core.permissions import Permission
 from app.models.panel_user import PanelUser
 from app.services import report_service as svc
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, Response
 from sqlalchemy.orm import Session
 
 from backend.api.deps import get_session, require_permission
+from backend.api.export_utils import ExportFormat, maybe_export
 
 router = APIRouter(prefix="/reports", tags=["reports"])
-
-ExportFormat = Literal["csv", "xlsx"]
 
 
 def _maybe_export(
     rows: list[dict[str, Any]], export: ExportFormat | None, user: PanelUser, filename: str
 ) -> list[dict[str, Any]] | Response:
-    if export is None:
-        return rows
-    role = PanelRole(user.role.value)
-    if not role_has_permission(role, Permission.REPORTS_EXPORT):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Недостаточно прав для экспорта"
-        )
-    if export == "csv":
-        content = svc.to_csv(rows)
-        media_type = "text/csv"
-    else:
-        content = svc.to_xlsx(rows)
-        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    return Response(
-        content=content,
-        media_type=media_type,
-        headers={"Content-Disposition": f'attachment; filename="{filename}.{export}"'},
-    )
+    return maybe_export(rows, export, user, filename, permission=Permission.REPORTS_EXPORT)
 
 
 @router.get("/sales-by-period", response_model=None)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class LoginRequest(BaseModel):
@@ -86,10 +86,15 @@ class GiveawayUpdateRequest(BaseModel):
 class ManualRegistrationOut(BaseModel):
     id: int
     participant_id: int
+    participant_phone: str
+    participant_full_name: str | None
     giveaway_id: int
+    giveaway_name: str
     quantity: int
+    revenue: int
     status: str
     operator_id: int
+    operator_login: str
     comment: str | None
     created_at: dt.datetime
     confirmed_at: dt.datetime | None
@@ -101,15 +106,27 @@ class ManualRegistrationOut(BaseModel):
 class ManualRegistrationCreateRequest(BaseModel):
     giveaway_id: int
     participant_phone: str
+    participant_full_name: str = Field(min_length=1, max_length=255)
     quantity: int = Field(gt=0)
     comment: str | None = None
+
+    @field_validator("participant_full_name")
+    @classmethod
+    def _strip_name(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("Имя участника не может быть пустым")
+        return stripped
 
 
 class PaymentOut(BaseModel):
     id: int
     order_id: str
     participant_id: int
+    participant_phone: str
+    participant_full_name: str | None
     giveaway_id: int
+    giveaway_name: str
     provider: str
     amount: int
     quantity: int
@@ -123,9 +140,12 @@ class PaymentOut(BaseModel):
 class TicketOut(BaseModel):
     id: int
     giveaway_id: int
+    giveaway_name: str
     number: int
     full_code: str
     participant_id: int
+    participant_phone: str
+    participant_full_name: str | None
     source: str
     created_at: dt.datetime
 

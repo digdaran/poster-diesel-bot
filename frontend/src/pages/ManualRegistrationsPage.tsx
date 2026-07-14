@@ -1,17 +1,23 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
-import { GiveawaysApi, ManualRegistrationsApi } from "../api/resources";
+import { GiveawaysApi, ManualRegistrationsApi, ParticipantsApi } from "../api/resources";
+import { apiDownload } from "../api/client";
+import { useAuth } from "../auth/AuthContext";
 import type { Giveaway, ManualRegistration } from "../api/types";
 
 export function ManualRegistrationsPage() {
+  const { hasPermission, user } = useAuth();
+  const isSuperAdmin = user?.role === "super_admin";
   const [registrations, setRegistrations] = useState<ManualRegistration[]>([]);
   const [giveaways, setGiveaways] = useState<Giveaway[]>([]);
   const [form, setForm] = useState({
     giveaway_id: "",
     participant_phone: "",
+    participant_full_name: "",
     quantity: "1",
     comment: "",
   });
+  const [nameLocked, setNameLocked] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const load = () => void ManualRegistrationsApi.list().then(setRegistrations);
@@ -22,6 +28,38 @@ export function ManualRegistrationsPage() {
     );
   }, []);
 
+  const onPhoneChange = (phone: string) => {
+    // Телефон правится после найденного совпадения — сбрасываем автоподстановку,
+    // пока не подтвердится совпадение по новому номеру.
+    setForm((f) => ({
+      ...f,
+      participant_phone: phone,
+      participant_full_name: nameLocked ? "" : f.participant_full_name,
+    }));
+    if (nameLocked) setNameLocked(false);
+  };
+
+  const onPhoneBlur = async () => {
+    if (!form.participant_phone) return;
+    const found = await ParticipantsApi.findByPhone(form.participant_phone).catch(() => null);
+    if (found) {
+      setForm((f) => ({ ...f, participant_full_name: found.full_name ?? "" }));
+      setNameLocked(!isSuperAdmin);
+    } else {
+      setNameLocked(false);
+    }
+  };
+
+  const downloadReport = async (format: "csv" | "xlsx") => {
+    const { blob, filename } = await apiDownload("/api/manual-registrations", { export: format });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const onCreate = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -29,10 +67,18 @@ export function ManualRegistrationsPage() {
       await ManualRegistrationsApi.create({
         giveaway_id: Number(form.giveaway_id),
         participant_phone: form.participant_phone,
+        participant_full_name: form.participant_full_name,
         quantity: Number(form.quantity),
         comment: form.comment || undefined,
       });
-      setForm({ giveaway_id: "", participant_phone: "", quantity: "1", comment: "" });
+      setForm({
+        giveaway_id: "",
+        participant_phone: "",
+        participant_full_name: "",
+        quantity: "1",
+        comment: "",
+      });
+      setNameLocked(false);
       load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не удалось создать регистрацию");
@@ -58,7 +104,20 @@ export function ManualRegistrationsPage() {
         <input
           placeholder="Телефон покупателя"
           value={form.participant_phone}
-          onChange={(e) => setForm({ ...form, participant_phone: e.target.value })}
+          onChange={(e) => onPhoneChange(e.target.value)}
+          onBlur={() => void onPhoneBlur()}
+          required
+        />
+        <input
+          placeholder="Имя покупателя"
+          value={form.participant_full_name}
+          onChange={(e) => setForm({ ...form, participant_full_name: e.target.value })}
+          disabled={nameLocked}
+          title={
+            nameLocked
+              ? "Участник уже зарегистрирован — изменить имя может только Super Admin"
+              : undefined
+          }
           required
         />
         <input
@@ -76,6 +135,12 @@ export function ManualRegistrationsPage() {
         <button type="submit">Оформить</button>
       </form>
       {error && <div className="error">{error}</div>}
+      {hasPermission("sales_export") && (
+        <div>
+          <button onClick={() => downloadReport("csv")}>Экспорт CSV</button>
+          <button onClick={() => downloadReport("xlsx")}>Экспорт XLSX</button>
+        </div>
+      )}
       <table>
         <thead>
           <tr>
@@ -83,6 +148,8 @@ export function ManualRegistrationsPage() {
             <th>Розыгрыш</th>
             <th>Участник</th>
             <th>Кол-во</th>
+            <th>Сумма</th>
+            <th>Оператор</th>
             <th>Статус</th>
             <th>Действия</th>
           </tr>
@@ -91,9 +158,11 @@ export function ManualRegistrationsPage() {
           {registrations.map((r) => (
             <tr key={r.id}>
               <td>{r.id}</td>
-              <td>{r.giveaway_id}</td>
-              <td>{r.participant_id}</td>
+              <td>{r.giveaway_name}</td>
+              <td>{r.participant_full_name ?? r.participant_phone}</td>
               <td>{r.quantity}</td>
+              <td>{(r.revenue / 100).toFixed(2)} ₽</td>
+              <td>{r.operator_login}</td>
               <td>{r.status}</td>
               <td className="actions">
                 {r.status === "PENDING" && (

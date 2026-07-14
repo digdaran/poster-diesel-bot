@@ -28,6 +28,8 @@ export const DashboardApi = {
 
 export const ParticipantsApi = {
   list: (q?: string) => apiRequest<Participant[]>("/api/participants", { query: { q } }),
+  findByPhone: (phone: string) =>
+    apiRequest<Participant | null>("/api/participants/by-phone", { query: { phone } }),
   get: (id: number) => apiRequest<Participant>(`/api/participants/${id}`),
   update: (id: number, full_name: string) =>
     apiRequest<Participant>(`/api/participants/${id}`, { method: "PATCH", body: { full_name } }),
@@ -61,6 +63,7 @@ export const ManualRegistrationsApi = {
   create: (payload: {
     giveaway_id: number;
     participant_phone: string;
+    participant_full_name: string;
     quantity: number;
     comment?: string;
   }) =>
@@ -137,6 +140,5 @@ export const ReportsApi = {
         query: { giveaway_id },
       },
     ),
-  revenueByGiveaway: () =>
-    apiRequest<RevenueByGiveawayRow[]>("/api/reports/revenue-by-giveaway"),
+  revenueByGiveaway: () => apiRequest<RevenueByGiveawayRow[]>("/api/reports/revenue-by-giveaway"),
 };

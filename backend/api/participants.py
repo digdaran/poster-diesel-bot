@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from app.core.permissions import Permission
+from app.core.phone import InvalidPhoneError
 from app.models.enums import AuditActorType
 from app.models.panel_user import PanelUser
 from app.models.participant import Participant
-from app.services import audit_service
+from app.services import audit_service, participant_service
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
@@ -28,6 +29,21 @@ def list_participants(
         like = f"%{q}%"
         stmt = stmt.where(or_(Participant.phone.like(like), Participant.full_name.like(like)))
     return list(session.execute(stmt).scalars())
+
+
+@router.get("/by-phone", response_model=ParticipantOut | None)
+def find_participant_by_phone(
+    phone: str,
+    session: Session = Depends(get_session),
+    _user: PanelUser = Depends(require_permission(Permission.VIEW_PARTICIPANTS)),
+) -> Participant | None:
+    """Поиск участника по номеру для автоподстановки имени в форме ручной
+    регистрации (п.14.2/14.3 ТЗ — см. DECISIONS.md). Должен быть объявлен ДО
+    `/{participant_id}`, иначе FastAPI попытается разобрать "by-phone" как id."""
+    try:
+        return participant_service.find_by_phone(session, phone)
+    except InvalidPhoneError:
+        return None
 
 
 @router.get("/{participant_id}", response_model=ParticipantOut)

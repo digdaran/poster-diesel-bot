@@ -22,6 +22,61 @@ def test_manual_recipient_reuses_existing_participant(session: Session) -> None:
     assert p1.id == p2.id
 
 
+def test_manual_recipient_sets_name_on_new_participant(session: Session) -> None:
+    participant = svc.resolve_manual_recipient(session, "79990003334", full_name="Иван Иванов")
+    assert participant.full_name == "Иван Иванов"
+
+
+def test_manual_recipient_fills_name_if_previously_empty(session: Session) -> None:
+    p1 = svc.resolve_manual_recipient(session, "79990003335")
+    assert p1.full_name is None
+    p2 = svc.resolve_manual_recipient(session, "79990003335", full_name="Пётр Петров")
+    assert p1.id == p2.id
+    assert p2.full_name == "Пётр Петров"
+
+
+def test_manual_recipient_does_not_overwrite_existing_name(session: Session) -> None:
+    p1 = svc.resolve_manual_recipient(session, "79990003336", full_name="Первое Имя")
+    p2 = svc.resolve_manual_recipient(session, "79990003336", full_name="Другое Имя")
+    assert p1.id == p2.id
+    assert p2.full_name == "Первое Имя"
+
+
+def test_manual_recipient_overwrites_name_when_allowed(session: Session) -> None:
+    p1 = svc.resolve_manual_recipient(session, "79990003339", full_name="Первое Имя")
+    p2 = svc.resolve_manual_recipient(
+        session, "79990003339", full_name="Другое Имя", allow_overwrite=True
+    )
+    assert p1.id == p2.id
+    assert p2.full_name == "Другое Имя"
+
+
+def test_find_by_phone_returns_none_when_not_found(session: Session) -> None:
+    assert svc.find_by_phone(session, "79990009999") is None
+
+
+def test_find_by_phone_finds_regardless_of_input_format(session: Session) -> None:
+    created = svc.resolve_manual_recipient(session, "79990003340", full_name="Найди Меня")
+    found = svc.find_by_phone(session, "+7 999 000-33-40")
+    assert found is not None
+    assert found.id == created.id
+    assert found.full_name == "Найди Меня"
+
+
+def test_set_full_name_updates_participant(session: Session) -> None:
+    participant = svc.resolve_manual_recipient(session, "79990003337")
+    updated = svc.set_full_name(
+        session, participant_id=participant.id, full_name="  Имя С Пробелами  "
+    )
+    assert updated.full_name == "Имя С Пробелами"
+
+
+def test_set_full_name_ignores_blank_input(session: Session) -> None:
+    participant = svc.resolve_manual_recipient(session, "79990003338")
+    updated = svc.set_full_name(session, participant_id=participant.id, full_name="   ")
+    assert updated.full_name is None
+
+
 def test_confirm_channel_binding_creates_participant_and_verified_binding(session: Session) -> None:
     result = svc.confirm_channel_binding(
         session,

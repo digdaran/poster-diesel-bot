@@ -71,17 +71,51 @@ def _find_participant_by_phone(session: Session, phone: str) -> Participant | No
     ).scalar_one_or_none()
 
 
-def resolve_manual_recipient(session: Session, phone_raw: str) -> Participant:
+def find_by_phone(session: Session, phone_raw: str) -> Participant | None:
+    """Публичный поиск участника по номеру (для автоподстановки имени в форме
+    ручной регистрации, п.14.2/14.3 ТЗ — см. DECISIONS.md)."""
+    return _find_participant_by_phone(session, normalize_phone(phone_raw))
+
+
+def resolve_manual_recipient(
+    session: Session,
+    phone_raw: str,
+    full_name: str | None = None,
+    *,
+    allow_overwrite: bool = False,
+) -> Participant:
     """Ручной ввод номера, режим по умолчанию (`ignore_phone_verification=False`,
     п.7.1, 10.3 ТЗ): назначает получателя покупки по номеру, НЕ создаёт привязку
     канала и НЕ открывает доступ к чужой учётке. Если участника с номером нет —
-    создаётся с `phone_verified=False`, без привязок (подарочная покупка, п.10.5)."""
+    создаётся с `phone_verified=False`, без привязок (подарочная покупка, п.10.5).
+
+    `full_name`, если передано, заполняется только если у участника ещё нет имени
+    (fill-if-empty), если только `allow_overwrite=True` — тогда перезаписывает
+    существующее имя. Вызывающая сторона (backend/api/manual_registrations.py)
+    обязана передавать `allow_overwrite=True` только для Super Admin — см.
+    DECISIONS.md."""
     phone = normalize_phone(phone_raw)
     participant = _find_participant_by_phone(session, phone)
+    name = full_name.strip() if full_name else None
     if participant is None:
-        participant = Participant(phone=phone, phone_verified=False)
+        participant = Participant(phone=phone, phone_verified=False, full_name=name or None)
         session.add(participant)
         session.flush()
+    elif name and (allow_overwrite or not participant.full_name):
+        participant.full_name = name
+        session.flush()
+    return participant
+
+
+def set_full_name(session: Session, *, participant_id: int, full_name: str) -> Participant:
+    """Устанавливает имя участника (после запроса в боте после подтверждения
+    номера, или через редактирование в панели). Пустая строка не сохраняется."""
+    participant = session.get(Participant, participant_id)
+    assert participant is not None
+    name = full_name.strip()
+    if name:
+        participant.full_name = name
+    session.flush()
     return participant
 
 

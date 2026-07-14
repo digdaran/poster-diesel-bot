@@ -32,10 +32,15 @@ export interface Giveaway {
 export interface ManualRegistration {
   id: number;
   participant_id: number;
+  participant_phone: string;
+  participant_full_name: string | null;
   giveaway_id: number;
+  giveaway_name: string;
   quantity: number;
+  revenue: number;
   status: "PENDING" | "CONFIRMED" | "CANCELLED";
   operator_id: number;
+  operator_login: string;
   comment: string | null;
   created_at: string;
   confirmed_at: string | null;
@@ -46,7 +51,10 @@ export interface Payment {
   id: number;
   order_id: string;
   participant_id: number;
+  participant_phone: string;
+  participant_full_name: string | null;
   giveaway_id: number;
+  giveaway_name: string;
   provider: string;
   amount: number;
   quantity: number;
@@ -58,9 +66,12 @@ export interface Payment {
 export interface Ticket {
   id: number;
   giveaway_id: number;
+  giveaway_name: string;
   number: number;
   full_code: string;
   participant_id: number;
+  participant_phone: string;
+  participant_full_name: string | null;
   source: "online" | "manual";
   created_at: string;
 }

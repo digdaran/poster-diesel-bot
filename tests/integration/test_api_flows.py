@@ -32,12 +32,21 @@ def test_full_manual_sale_flow(api_client: TestClient) -> None:
 
     resp = api_client.post(
         "/api/manual-registrations",
-        json={"giveaway_id": giveaway_id, "participant_phone": "+7 999 111-22-33", "quantity": 3},
+        json={
+            "giveaway_id": giveaway_id,
+            "participant_phone": "+7 999 111-22-33",
+            "participant_full_name": "Иван Иванов",
+            "quantity": 3,
+        },
         headers=headers,
     )
     assert resp.status_code == 201
     registration_id = resp.json()["id"]
     assert resp.json()["status"] == "PENDING"
+    assert resp.json()["participant_full_name"] == "Иван Иванов"
+    assert resp.json()["giveaway_name"] == "Осенний розыгрыш"
+    assert resp.json()["operator_login"] == "admin"
+    assert resp.json()["revenue"] == 3 * 15000
 
     resp = api_client.post(f"/api/manual-registrations/{registration_id}/confirm", headers=headers)
     assert resp.status_code == 200
@@ -48,6 +57,8 @@ def test_full_manual_sale_flow(api_client: TestClient) -> None:
     tickets = [t for t in resp.json() if t["giveaway_id"] == giveaway_id]
     assert len(tickets) == 3
     assert all(t["source"] == "manual" for t in tickets)
+    assert all(t["participant_full_name"] == "Иван Иванов" for t in tickets)
+    assert all(t["giveaway_name"] == "Осенний розыгрыш" for t in tickets)
 
     resp = api_client.get("/api/dashboard", headers=headers)
     assert resp.status_code == 200
@@ -58,6 +69,25 @@ def test_full_manual_sale_flow(api_client: TestClient) -> None:
 
     resp = api_client.get(f"/api/giveaways/{giveaway_id}", headers=headers)
     assert resp.json()["tickets_issued"] == 3
+
+    resp = api_client.get("/api/manual-registrations?export=csv", headers=headers)
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/csv")
+
+    resp = api_client.get("/api/manual-registrations?export=xlsx", headers=headers)
+    assert resp.status_code == 200
+    assert resp.content[:2] == b"PK"
+
+    api_client.post(
+        "/api/panel-users",
+        json={"login": "op_export", "password": "op-export-strong-pass", "role": "operator"},
+        headers=headers,
+    ).raise_for_status()
+    op_token = login(api_client, "op_export", "op-export-strong-pass")
+    resp = api_client.get("/api/manual-registrations?export=csv", headers=auth_headers(op_token))
+    assert resp.status_code == 403
+    resp = api_client.get("/api/manual-registrations", headers=auth_headers(op_token))
+    assert resp.status_code == 200  # список без экспорта доступен всем ролям (VIEW_SALES)
 
 
 def test_giveaway_immutable_fields_not_editable_after_open(api_client: TestClient) -> None:
@@ -98,10 +128,42 @@ def test_manual_registration_insufficient_tickets_returns_409(api_client: TestCl
 
     resp = api_client.post(
         "/api/manual-registrations",
-        json={"giveaway_id": giveaway_id, "participant_phone": "79990000000", "quantity": 5},
+        json={
+            "giveaway_id": giveaway_id,
+            "participant_phone": "79990000000",
+            "participant_full_name": "Пётр Петров",
+            "quantity": 5,
+        },
         headers=headers,
     )
     assert resp.status_code == 409
+
+
+def test_manual_registration_for_unopened_giveaway_returns_409_not_500(
+    api_client: TestClient,
+) -> None:
+    token = login(api_client, "admin", "admin-strong-pass-123")
+    headers = auth_headers(token)
+    resp = api_client.post(
+        "/api/giveaways",
+        json={"name": "Not Open", "prefix": "NOP", "ticket_price": 1000, "max_tickets": 10},
+        headers=headers,
+    )
+    giveaway_id = resp.json()["id"]
+    # Регистрацию не открываем — розыгрыш не продаётся.
+
+    resp = api_client.post(
+        "/api/manual-registrations",
+        json={
+            "giveaway_id": giveaway_id,
+            "participant_phone": "79990000001",
+            "participant_full_name": "Не Продаётся",
+            "quantity": 1,
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 409
+    assert "не открыта" in resp.json()["detail"]
 
 
 def test_operator_sees_only_own_manual_registrations(api_client: TestClient) -> None:
@@ -132,12 +194,22 @@ def test_operator_sees_only_own_manual_registrations(api_client: TestClient) -> 
 
     api_client.post(
         "/api/manual-registrations",
-        json={"giveaway_id": giveaway_id, "participant_phone": "79991110000", "quantity": 1},
+        json={
+            "giveaway_id": giveaway_id,
+            "participant_phone": "79991110000",
+            "participant_full_name": "Оператор А Клиент",
+            "quantity": 1,
+        },
         headers=auth_headers(op_a_token),
     ).raise_for_status()
     api_client.post(
         "/api/manual-registrations",
-        json={"giveaway_id": giveaway_id, "participant_phone": "79992220000", "quantity": 1},
+        json={
+            "giveaway_id": giveaway_id,
+            "participant_phone": "79992220000",
+            "participant_full_name": "Оператор Б Клиент",
+            "quantity": 1,
+        },
         headers=auth_headers(op_b_token),
     ).raise_for_status()
 
@@ -150,6 +222,119 @@ def test_operator_sees_only_own_manual_registrations(api_client: TestClient) -> 
     # Администратор видит обе
     resp_admin = api_client.get("/api/manual-registrations", headers=admin_headers)
     assert len(resp_admin.json()) == 2
+
+
+def test_manual_registration_name_overwrite_restricted_by_role(api_client: TestClient) -> None:
+    admin_token = login(api_client, "admin", "admin-strong-pass-123")  # super_admin
+    admin_headers = auth_headers(admin_token)
+
+    api_client.post(
+        "/api/panel-users",
+        json={"login": "adm1", "password": "adm1-strong-pass", "role": "administrator"},
+        headers=admin_headers,
+    ).raise_for_status()
+    api_client.post(
+        "/api/panel-users",
+        json={"login": "op1", "password": "op1-strong-pass", "role": "operator"},
+        headers=admin_headers,
+    ).raise_for_status()
+
+    resp = api_client.post(
+        "/api/giveaways",
+        json={"name": "Overwrite Test", "prefix": "OVR", "ticket_price": 1000, "max_tickets": 100},
+        headers=admin_headers,
+    )
+    giveaway_id = resp.json()["id"]
+    api_client.post(f"/api/giveaways/{giveaway_id}/open", headers=admin_headers)
+
+    resp = api_client.post(
+        "/api/manual-registrations",
+        json={
+            "giveaway_id": giveaway_id,
+            "participant_phone": "79995551234",
+            "participant_full_name": "Исходное Имя",
+            "quantity": 1,
+        },
+        headers=admin_headers,
+    )
+    assert resp.status_code == 201
+    assert resp.json()["participant_full_name"] == "Исходное Имя"
+
+    adm_token = login(api_client, "adm1", "adm1-strong-pass")
+    resp = api_client.post(
+        "/api/manual-registrations",
+        json={
+            "giveaway_id": giveaway_id,
+            "participant_phone": "79995551234",
+            "participant_full_name": "Имя От Администратора",
+            "quantity": 1,
+        },
+        headers=auth_headers(adm_token),
+    )
+    assert resp.status_code == 201
+    assert resp.json()["participant_full_name"] == "Исходное Имя"  # Administrator не может изменить
+
+    op_token = login(api_client, "op1", "op1-strong-pass")
+    resp = api_client.post(
+        "/api/manual-registrations",
+        json={
+            "giveaway_id": giveaway_id,
+            "participant_phone": "79995551234",
+            "participant_full_name": "Имя От Оператора",
+            "quantity": 1,
+        },
+        headers=auth_headers(op_token),
+    )
+    assert resp.status_code == 201
+    assert resp.json()["participant_full_name"] == "Исходное Имя"  # Operator тоже не может
+
+    resp = api_client.post(
+        "/api/manual-registrations",
+        json={
+            "giveaway_id": giveaway_id,
+            "participant_phone": "79995551234",
+            "participant_full_name": "Имя От Super Admin",
+            "quantity": 1,
+        },
+        headers=admin_headers,
+    )
+    assert resp.status_code == 201
+    assert resp.json()["participant_full_name"] == "Имя От Super Admin"  # Super Admin может
+
+
+def test_participant_lookup_by_phone(api_client: TestClient) -> None:
+    admin_token = login(api_client, "admin", "admin-strong-pass-123")
+    headers = auth_headers(admin_token)
+
+    resp = api_client.get(
+        "/api/participants/by-phone", params={"phone": "79995559999"}, headers=headers
+    )
+    assert resp.status_code == 200
+    assert resp.json() is None
+
+    resp = api_client.post(
+        "/api/giveaways",
+        json={"name": "Lookup Test", "prefix": "LKP", "ticket_price": 1000, "max_tickets": 10},
+        headers=headers,
+    )
+    giveaway_id = resp.json()["id"]
+    api_client.post(f"/api/giveaways/{giveaway_id}/open", headers=headers)
+    api_client.post(
+        "/api/manual-registrations",
+        json={
+            "giveaway_id": giveaway_id,
+            "participant_phone": "79995559999",
+            "participant_full_name": "Найденный Участник",
+            "quantity": 1,
+        },
+        headers=headers,
+    ).raise_for_status()
+
+    resp = api_client.get(
+        "/api/participants/by-phone", params={"phone": "+7 999 555-99-99"}, headers=headers
+    )
+    assert resp.status_code == 200
+    assert resp.json()["full_name"] == "Найденный Участник"
 
 
 def test_audit_log_records_significant_actions(api_client: TestClient) -> None:

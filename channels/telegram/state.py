@@ -32,3 +32,7 @@ class PurchaseStates(StatesGroup):
     choosing_giveaway = State()
     choosing_quantity = State()
     awaiting_phone_for_gift = State()
+
+
+class RegistrationStates(StatesGroup):
+    awaiting_name = State()

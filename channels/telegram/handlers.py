@@ -23,7 +23,12 @@ from app.services import participant_service, settings_service
 from app.services import payment_service as payment_svc
 from sqlalchemy import select
 
-from channels.telegram.state import PurchaseStates, get_active_provider, get_channel_db
+from channels.telegram.state import (
+    PurchaseStates,
+    RegistrationStates,
+    get_active_provider,
+    get_channel_db,
+)
 
 if TYPE_CHECKING:
     from channels.telegram.channel import TelegramChannel
@@ -63,6 +68,9 @@ def _msg(callback: CallbackQuery) -> Message:
 
 @router.message(CommandStart())
 async def on_start(message: Message, state: FSMContext) -> None:
+    """Главная клавиатура (покупка/история/помощь) открывается только после
+    ПОЛНОЙ регистрации — подтверждённый номер И указанное имя. До этого
+    момента доступна только клавиатура текущего шага регистрации."""
     await state.clear()
     channel = _get_channel()
     db = get_channel_db()
@@ -70,19 +78,28 @@ async def on_start(message: Message, state: FSMContext) -> None:
         participant = participant_service.get_participant_by_channel(
             session, channel=ChannelType.TELEGRAM, external_user_id=_uid(message)
         )
-    greeting = "Добро пожаловать в бот розыгрышей цифровых постеров!"
+
     if participant is None:
-        greeting += (
-            "\n\nПоделитесь контактом, чтобы подтвердить номер и получить доступ к своим покупкам."
-        )
-    keyboard = channel.render_keyboard(_MAIN_KEYBOARD_BUTTONS)
-    await message.answer(greeting, reply_markup=keyboard)
-    if participant is None:
+        await message.answer("Добро пожаловать в бот розыгрышей цифровых постеров!")
         await channel.request_contact(_uid(message))
+        return
+
+    if participant.full_name is None:
+        # Номер подтверждён ещё до появления сбора имени — доспрашиваем при
+        # следующем /start, а не только сразу после on_contact.
+        await message.answer("Добро пожаловать в бот розыгрышей цифровых постеров!")
+        await message.answer("Как вас зовут?")
+        await state.set_state(RegistrationStates.awaiting_name)
+        return
+
+    keyboard = channel.render_keyboard(_MAIN_KEYBOARD_BUTTONS)
+    await message.answer(
+        "Добро пожаловать в бот розыгрышей цифровых постеров!", reply_markup=keyboard
+    )
 
 
 @router.message(F.contact)
-async def on_contact(message: Message) -> None:
+async def on_contact(message: Message, state: FSMContext) -> None:
     """Подтверждение номера через «Поделиться контактом» (п.7.1, 10.2 ТЗ)."""
     contact = message.contact
     if contact is None or (
@@ -111,8 +128,45 @@ async def on_contact(message: Message) -> None:
                 "Этот телеграм-аккаунт уже привязан к другому номеру. Обратитесь к оператору."
             )
             return
+        has_name = bool(result.participant.full_name)
 
-    await message.answer("Номер подтверждён! Теперь вам доступна история покупок и номерков.")
+    if has_name:
+        channel = _get_channel()
+        keyboard = channel.render_keyboard(_MAIN_KEYBOARD_BUTTONS)
+        await message.answer(
+            "Номер подтверждён! Теперь вам доступна история покупок и номерков.",
+            reply_markup=keyboard,
+        )
+        return
+
+    await message.answer("Номер подтверждён! Как вас зовут?")
+    await state.set_state(RegistrationStates.awaiting_name)
+
+
+@router.message(RegistrationStates.awaiting_name)
+async def on_name_entered(message: Message, state: FSMContext) -> None:
+    name = (message.text or "").strip()
+    if not name:
+        await message.answer("Пожалуйста, введите имя текстом.")
+        return
+
+    db = get_channel_db()
+    with db.session() as session:
+        participant = participant_service.get_participant_by_channel(
+            session, channel=ChannelType.TELEGRAM, external_user_id=_uid(message)
+        )
+        # Это состояние достижимо только когда номер уже подтверждён — либо
+        # только что в on_contact, либо ранее (доспрашиваем на /start).
+        assert participant is not None
+        participant_service.set_full_name(session, participant_id=participant.id, full_name=name)
+
+    await state.clear()
+    channel = _get_channel()
+    keyboard = channel.render_keyboard(_MAIN_KEYBOARD_BUTTONS)
+    await message.answer(
+        f"Приятно познакомиться, {name}! Теперь вам доступна история покупок и номерков.",
+        reply_markup=keyboard,
+    )
 
 
 @router.message(F.text == "🎟 Купить номерки")
