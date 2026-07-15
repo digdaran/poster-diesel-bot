@@ -29,7 +29,7 @@ backend = [
 telegram = [
     "aiogram>=3.4,<4.0",
     "httpx>=0.27,<0.28",
-    "aiohttp-socks>=0.8,<0.9",
+    "aiohttp-socks>=0.11,<0.12",
     "qrcode[pil]>=7.4,<8.0",
 ]
 dev = [
