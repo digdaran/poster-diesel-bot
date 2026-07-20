@@ -78,88 +78,41 @@ docker compose -f docker-compose.yml up -d --build   # prod: real domain + ACME 
 
 ## Architecture
 
-### Process topology (all share the `app/` package as the single source of business logic)
+`ARCHITECTURE.md` is the detailed reference for process topology, the `app/` package layout, and the
+mechanics behind every invariant below (ticket-pool locking, atomic finalization SQL, permissions
+matrix, identity model) — read it before structural changes. The rules below are the non-negotiable
+summary; don't violate them when changing code.
 
-| Process | Entry point | Role |
-|---|---|---|
-| `backend` | `backend/main.py` (FastAPI/Uvicorn) | Panel REST API, bank webhook routers (`backend/webhooks/`), background jobs (payment status polling, expired-reservation release), `/metrics`. |
-| `channel-telegram` | `channels/telegram/main.py` (aiogram 3, long polling) | The only messenger channel active in production. |
-| `frontend` | `frontend/` (React+TS SPA) | Static build served behind Caddy; not part of `app/`. |
-| `reverse-proxy` | official `caddy` image | HTTPS (ACME prod / self-signed dev), IP-whitelists the panel, exposes only `/webhooks/*` and the panel externally; `/metrics` is never proxied externally. |
-
-### `app/` package layout
-
-- `app/core/` — config (pydantic-settings), `permissions.py` (named `Permission` enum + `PanelRole` ->
-  permission-set matrix, mirrors ТЗ §11.3 exactly), `security.py` (JWT + argon2), `db.py` (SQLAlchemy
-  engine/session wrapper, WAL + busy_timeout, the `BEGIN IMMEDIATE` mechanism — see below), `phone.py`
-  (normalization), `backup.py` (VACUUM INTO + gzip + retention).
-- `app/models/` — SQLAlchemy 2.0 declarative models for all entities in ТЗ §6.2 (`Participant`,
-  `ChannelBinding`, `Giveaway`, `TicketPool`, `Ticket`, `Payment`, `ManualRegistration`, `PanelUser`,
-  `AuditLog`, `Broadcast`, `PlatformSettings`) plus `enums.py`.
-- `app/repositories/` — the only place doing raw atomic DB operations (ticket pool reservation, etc.).
-- `app/services/` — business scenarios: `ticket_pool_service`, `payment_service`,
-  `participant_service`, `manual_registration_service`, `broadcast_service`, `report_service`,
-  `audit_service`, `panel_user_service`, `settings_service`.
-- `app/payments/` — `BasePaymentProvider` ABC + `MockProvider` / `TBankProvider` / `VTBProvider`
-  (stub) + `factory.py` (resolves the active provider: `PlatformSettings.payment_provider_override` in
-  DB takes priority over the `.env` default — this is how Super Admin switches banks without a
-  redeploy).
-- `app/channels/` — `BaseMessengerChannel` ABC + `ChannelCapabilities` + `factory.py`
-  (`ACTIVE_CHANNELS = frozenset({ChannelType.TELEGRAM})` — VK/MAX exist only as
-  `channels/vk/`, `channels/max/` stub classes that raise `NotImplementedError`; do not add real
-  logic there, see ТЗ §21).
-
-### Key invariants — do not violate these when changing code
-
-- **Participant identity is the normalized phone number**, not any messenger ID. `Participant` has no
-  messenger-specific fields. Every messenger link lives in `ChannelBinding` (participant can have
-  multiple bindings across channels). All identification logic is centralized in
-  `app/services/participant_service.py` (find-or-create by phone, verified-vs-unverified binding
-  paths, gift-purchase-then-owner-confirms merge behavior).
-- **Ticket pool concurrency**: `TicketPool` rows for a giveaway are materialized up front with a
-  Python-`random.shuffle`d `shuffle_order` (not `ORDER BY RANDOM()`). Reservation
-  (`app/repositories/ticket_pool_repo.py::reserve_tickets`) opens a `BEGIN IMMEDIATE` transaction
-  (see `Database.immediate_session()` in `app/core/db.py`), selects free rows ordered by
-  `shuffle_order`, and is strictly all-or-nothing: if fewer than `quantity` free rows exist, the whole
-  reservation rolls back rather than partially reserving. Concurrent writers across processes serialize
-  via SQLite's writer lock + `busy_timeout` (not via any application-level locking) — this is why
-  concurrency tests use a temp-file DB, never `sqlite:///:memory:` (in-memory DBs get a separate DB per
-  connection under `SingletonThreadPool`, which would hide races).
-- **Idempotent state transitions** (payment finalization in `payment_service.finalize_payment`, and
-  manual-registration confirm/cancel in `manual_registration_service`) use one atomic conditional
-  `UPDATE ... WHERE status = 'PENDING'` inside a `BEGIN IMMEDIATE` transaction — never a
-  select-then-update pattern, and never a separate idempotency-key table. Payment finalization is a
-  silent no-op on a second call (returns an `applied: bool` flag); manual-registration
-  confirm/cancel instead **raises** on a repeat call (`ManualRegistrationStateError`) — this
-  asymmetry is intentional per the ТЗ wording, not an inconsistency to "fix".
-- **`ignore_phone_verification`** (Super Admin toggle in `PlatformSettings`) must stay reversible:
-  `participant_service.can_access_own_account()` evaluates `binding.phone_verified OR
-  ignore_phone_verification` live at access time, not a snapshot taken at bind time. Turning the flag
-  off must immediately revoke access for bindings that only had access via the flag.
-  See ТЗ §7.1/§10.3 before touching this.
-- **Permissions are always enforced server-side** via `require_permission(...)` FastAPI dependencies
-  reading `app/core/permissions.py`'s matrix — frontend nav filtering is UX only, not a security
-  boundary. Unauthorized endpoints return 403, not 404 or a silent empty result.
-- **Broadcasts go out only via Telegram** (product decision, not a technical limitation); transactional
-  notifications go through whatever channel the participant used to transact.
-- Every significant action gets an append-only `AuditLog` row via `app/services/audit_service.py` —
-  don't bypass it when adding new mutating endpoints/handlers.
-- Exactly one payment provider is active at a time, switchable from the Super Admin panel with no
-  redeploy (`app/payments/factory.py` + `PlatformSettings.payment_provider_override`) — don't hardcode
-  a provider anywhere outside the factory.
+- **Participant identity is the phone number**, never a messenger ID — all identification logic lives
+  in `app/services/participant_service.py`. See ARCHITECTURE.md §6.
+- **Ticket pool reservation is atomic and all-or-nothing** (`BEGIN IMMEDIATE`, Python-shuffled
+  `shuffle_order`, never `ORDER BY RANDOM()`) — see ARCHITECTURE.md §3. Concurrency tests need a
+  temp-file DB, never `sqlite:///:memory:` (in-memory gives each connection its own DB under
+  `SingletonThreadPool`, which hides races).
+- **Idempotent state transitions** use one atomic conditional `UPDATE ... WHERE status = 'PENDING'`,
+  never select-then-update or an idempotency-key table — see ARCHITECTURE.md §4. Payment finalization
+  no-ops silently on repeat (`applied: bool`); manual-registration confirm/cancel instead **raises**
+  (`ManualRegistrationStateError`) on repeat — that asymmetry is intentional per the ТЗ, not a bug.
+- **`ignore_phone_verification`** must stay reversible: `can_access_own_account()` evaluates
+  `phone_verified OR ignore_phone_verification` live at access time, never a bind-time snapshot —
+  turning the flag off must immediately revoke access for bindings relying only on it. See ТЗ §7.1/§10.3.
+- **Permissions are always enforced server-side** (`require_permission(...)`, matrix in
+  `app/core/permissions.py`, see ARCHITECTURE.md §5) — frontend nav filtering is UX only.
+- **Broadcasts go out only via Telegram**; transactional notifications go through whatever channel the
+  participant used to transact.
+- **Every mutating action gets an audit-log row** via `app/services/audit_service.py` — don't bypass it.
+- **Exactly one payment provider is active at a time**, switchable from Super Admin with no redeploy
+  (`PlatformSettings.payment_provider_override`, see ARCHITECTURE.md §2/§7) — never hardcode a provider
+  outside the factory.
 
 ### Testing conventions
 
-- All tests run against an isolated temp-file SQLite DB (see `tests/conftest.py`) — never against
-  Docker or the network. Use the `db`/`session`/`settings` fixtures rather than hand-rolling a
-  connection.
-- Concurrency tests (ticket pool tail-capture race, etc.) use `threading.Barrier`/`threading.Thread`
-  against the shared temp-file DB fixture to simulate multiple processes racing on the same reservation.
-- `tests/unit/` covers models/services in isolation; `tests/integration/` drives the FastAPI app
-  through `httpx`/`TestClient`-style flows (full permission matrix, webhook idempotency, broadcasts +
-  reports end-to-end).
-- The mandatory test groups from ТЗ §20.1 (payment idempotency, pool/reservation incl. the concurrent
-  tail race, full permission matrix, manual registrations, identification/binding,
+- All tests run against an isolated temp-file SQLite DB (`tests/conftest.py`) — never Docker/network.
+  Use the `db`/`session`/`settings` fixtures instead of hand-rolling a connection.
+- Concurrency tests use `threading.Barrier`/`threading.Thread` against the shared temp-file DB.
+- `tests/unit/` covers models/services in isolation; `tests/integration/` drives the FastAPI app via
+  `httpx`/`TestClient` (permission matrix, webhook idempotency, broadcasts + reports end-to-end).
+- The mandatory ТЗ §20.1 test groups (payment idempotency, pool/reservation incl. the concurrent tail
+  race, full permission matrix, manual registrations, identification/binding,
   `ignore_phone_verification`, multi-channel behavior, notifications/broadcasts) must stay covered —
-  when refactoring, check which existing test(s) exercise the invariant you're touching before assuming
-  it's untested.
+  check which existing test(s) exercise an invariant before assuming it's untested.

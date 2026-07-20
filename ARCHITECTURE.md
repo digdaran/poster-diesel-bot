@@ -48,23 +48,28 @@ WHERE id = :id AND status = 'PENDING';
 
 Вызывается из двух независимых точек: webhook-роутера банка и фонового planner'а сверки (`check_status`). Оба используют один и тот же метод — гонка исключена атомарностью условного `UPDATE`.
 
+`manual_registration_service` использует тот же паттерн для `confirm`/`cancel`, но с другой семантикой повтора: `finalize_payment` на повторный вызов молча no-op (`applied=False`), а `confirm_manual_registration`/`cancel_manual_registration` вместо этого **поднимают** `ManualRegistrationStateError` — асимметрия намеренная (соответствует формулировке ТЗ), не баг.
+
 ## 5. Права доступа (п.11 ТЗ)
 
 - `app/core/permissions.py` — перечень именованных разрешений (`Permission` enum) и матрица `ROLE_PERMISSIONS: dict[PanelRole, set[Permission]]`, точное отражение таблицы п.11.3.
 - FastAPI-зависимость `require_permission(permission)` — извлекает роль из JWT, проверяет вхождение в матрицу, иначе `403`.
 - Frontend дополнительно скрывает пункты меню (UX), но это не защита — сервер проверяет права всегда.
+- Каждое значимое мутирующее действие пишет запись в `AuditLog` через `app/services/audit_service.py` — не обходить это при добавлении новых мутирующих эндпоинтов/хендлеров.
 
 ## 6. Идентификация и мультиканальность (п.7.1, 10 ТЗ)
 
 - Единый ключ — `Participant.phone` (нормализованный `app/core/phone.py`).
 - `ChannelBinding(channel, external_user_id)` — уникальная пара, привязка только по подтверждённому номеру (`phone_verified=true`) либо при включённом `PlatformSettings.ignore_phone_verification`.
 - `app/services/participant_service.py` инкапсулирует всю логику идентификации (find-or-create, приоритет подтверждённого номера, подарочные покупки на неподтверждённый номер).
+- `ignore_phone_verification` (тумблер Super Admin) должен оставаться обратимым: `can_access_own_account()` вычисляет `phone_verified OR ignore_phone_verification` каждый раз в момент обращения, а не снимает снимок в момент привязки — выключение флага должно немедленно отозвать доступ у привязок, у которых он держался только флагом (п.7.1/10.3 ТЗ).
 
 ## 7. Каналы и провайдеры — расширяемость (п.5.4 ТЗ)
 
 - `BaseMessengerChannel` (app/channels/base.py) — абстрактный интерфейс + `ChannelCapabilities` (флаги).
 - `BasePaymentProvider` (app/payments/base.py) — абстрактный интерфейс.
 - Обе фабрики (`app/channels/factory.py`, `app/payments/factory.py`) регистрируют реализации по конфигурации; добавление нового канала/банка не требует правок сервисного слоя.
+- Рассылки (`broadcast_service`) идут только через Telegram (продуктовое решение); транзакционные уведомления идут через тот канал, которым участник совершал покупку.
 
 ## 8. Инфраструктура
 
@@ -75,5 +80,5 @@ WHERE id = :id AND status = 'PENDING';
 
 ## 9. Тестирование
 
-- `tests/` — pytest, in-memory SQLite (`sqlite:///:memory:` с отключённым pooling или файловый temp-файл при необходимости WAL-специфичных тестов конкурентности — см. `tests/conftest.py`).
+- `tests/` — pytest, всегда файловый temp-файл SQLite (`tests/conftest.py`), никогда `sqlite:///:memory:` — in-memory даёт каждому соединению свою БД под `SingletonThreadPool`, что скрывает гонки писателей в конкурентных тестах пула номеров.
 - Группы тестов соответствуют п.20.1 ТЗ один-в-один (см. `README.md` → «Тестирование»).
