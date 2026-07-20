@@ -51,6 +51,11 @@ class Payment(Base):
     payment_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     qr_code_payload: Mapped[str | None] = mapped_column(String(2000), nullable=True)
 
+    # Внутренний ID платежа У БАНКА (не путать с нашим order_id) — некоторые
+    # провайдеры (Т-Банк GetState) требуют именно его для резервной проверки
+    # статуса, order_id для этого не подходит (см. DECISIONS.md).
+    external_payment_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
     # Резервная проверка/поллинг (доп. поле сверх п.6.2, нужно для фоновой сверки
     # check_status — см. DECISIONS.md).
     poll_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

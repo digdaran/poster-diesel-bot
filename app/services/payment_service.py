@@ -109,7 +109,11 @@ def create_payment(
         session.execute(
             update(Payment)
             .where(Payment.id == payment_id)
-            .values(payment_url=created.payment_url, qr_code_payload=created.qr_code_payload)
+            .values(
+                payment_url=created.payment_url,
+                qr_code_payload=created.qr_code_payload,
+                external_payment_id=created.external_payment_id,
+            )
         )
 
     return CreatePaymentOutcome(
@@ -270,8 +274,9 @@ def poll_pending_payment(
         order_id = payment.order_id
         created_at = payment.created_at
         attempts = payment.poll_attempts
+        external_payment_id = payment.external_payment_id
 
-    bank_status = provider.check_status(order_id)
+    bank_status = provider.check_status(order_id, external_payment_id=external_payment_id)
 
     if bank_status in (PaymentStatus.SUCCEEDED, PaymentStatus.FAILED):
         outcome = finalize_payment(db, order_id=order_id, new_status=bank_status, now=now)

@@ -49,7 +49,9 @@ class MockProvider(BasePaymentProvider):
         реального ожидания оплаты)."""
         self._statuses[order_id] = status
 
-    def check_status(self, order_id: str) -> PaymentStatus:
+    def check_status(
+        self, order_id: str, *, external_payment_id: str | None = None
+    ) -> PaymentStatus:
         return self._statuses.get(order_id, PaymentStatus.PENDING)
 
     def build_webhook_payload(self, order_id: str, status: PaymentStatus) -> bytes:

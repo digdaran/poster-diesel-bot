@@ -484,7 +484,16 @@ async def on_check_payment(callback: CallbackQuery) -> None:
     # а не через текущий активный провайдер — активный провайдер мог смениться в
     # панели (Super Admin) после создания этого платежа (п.9.3 ТЗ, DECISIONS.md).
     provider = get_provider_for_type(payment.provider)
-    bank_status = provider.check_status(payment.order_id)
+    try:
+        bank_status = provider.check_status(
+            payment.order_id, external_payment_id=payment.external_payment_id
+        )
+    except Exception:
+        logger.exception("check_payment_status_failed", payment_id=payment.id)
+        await callback.answer(
+            "Не удалось проверить статус оплаты у банка. Попробуйте чуть позже.", show_alert=True
+        )
+        return
     if bank_status == PaymentStatus.PENDING:
         await callback.answer("Оплата ещё не поступила. Попробуйте чуть позже.", show_alert=True)
         return

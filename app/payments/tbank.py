@@ -79,12 +79,28 @@ class TBankProvider(BasePaymentProvider):
             external_payment_id=str(data.get("PaymentId", "")),
         )
 
-    def check_status(self, order_id: str) -> PaymentStatus:
-        request_body = {"TerminalKey": self.terminal_key, "OrderId": order_id}
+    def check_status(
+        self, order_id: str, *, external_payment_id: str | None = None
+    ) -> PaymentStatus:
+        """`GetState` требует `PaymentId` (внутренний ID платежа у Т-Банк) —
+        `OrderId` этот метод не принимает (проверено напрямую на боевом контуре:
+        без PaymentId банк отвечает `Success:false, ErrorCode:201`, что раньше
+        молча трактовалось как PENDING — см. DECISIONS.md). `PaymentId`
+        сохраняется при создании платежа как `CreatedPayment.external_payment_id`."""
+        if not external_payment_id:
+            raise ValueError(
+                f"Т-Банк GetState требует PaymentId, но платёж {order_id} создан без него "
+                "(см. DECISIONS.md — миграция external_payment_id)"
+            )
+        request_body = {"TerminalKey": self.terminal_key, "PaymentId": external_payment_id}
         request_body["Token"] = self._sign(request_body)
         response = httpx.post(f"{self.api_base}/GetState", json=request_body, timeout=15.0)
         response.raise_for_status()
         data = response.json()
+        if not data.get("Success"):
+            raise RuntimeError(
+                f"Т-Банк GetState отклонён: {data.get('Message')} / {data.get('Details')}"
+            )
         return self._map_status(data.get("Status", ""))
 
     @staticmethod

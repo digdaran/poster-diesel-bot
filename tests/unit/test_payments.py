@@ -59,6 +59,58 @@ def test_create_payment_reserves_tickets(db: Database) -> None:
     assert pool_svc.get_free_count(db, giveaway_id=gid) == 7
 
 
+def test_create_payment_persists_external_payment_id(db: Database) -> None:
+    """Регресс на боевой инцидент (см. DECISIONS.md): без сохранённого
+    `external_payment_id` резервная проверка статуса у Т-Банк невозможна вообще
+    (GetState требует именно его, не order_id)."""
+    gid = make_giveaway(db, max_tickets=10)
+    pid = make_participant(db)
+    outcome = svc.create_payment_safe(
+        db,
+        MockProvider(),
+        giveaway_id=gid,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=1,
+    )
+    assert outcome.ok
+    assert outcome.created is not None
+    with db.session() as session:
+        payment = session.execute(
+            select(Payment).where(Payment.id == outcome.payment_id)
+        ).scalar_one()
+        assert payment.external_payment_id == outcome.created.external_payment_id
+        assert payment.external_payment_id is not None
+
+
+def test_poll_pending_payment_passes_external_payment_id_to_provider(db: Database) -> None:
+    gid = make_giveaway(db, max_tickets=10)
+    pid = make_participant(db)
+    outcome = svc.create_payment_safe(
+        db,
+        MockProvider(),
+        giveaway_id=gid,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=1,
+    )
+    assert outcome.ok
+    assert outcome.created is not None
+
+    seen_calls: list[tuple[str, str | None]] = []
+
+    class SpyProvider(MockProvider):
+        def check_status(self, order_id, *, external_payment_id=None):  # type: ignore[no-untyped-def]
+            seen_calls.append((order_id, external_payment_id))
+            return super().check_status(order_id, external_payment_id=external_payment_id)
+
+    svc.poll_pending_payment(
+        db, SpyProvider(), payment_id=outcome.payment_id, max_attempts=10, ttl_seconds=600
+    )
+
+    assert seen_calls == [(outcome.order_id, outcome.created.external_payment_id)]
+
+
 def test_create_payment_persists_payment_url_and_qr(db: Database) -> None:
     """payment_url/qr_code_payload — one-shot данные от провайдера (см.
     CreatedPayment) — должны сохраняться на Payment, а не оставаться только в

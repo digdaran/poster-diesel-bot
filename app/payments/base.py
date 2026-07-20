@@ -63,5 +63,12 @@ class BasePaymentProvider(ABC):
         """
 
     @abstractmethod
-    def check_status(self, order_id: str) -> PaymentStatus:
-        """Резервная проверка статуса платежа напрямую у банка (п.7.5, 9.1 ТЗ)."""
+    def check_status(
+        self, order_id: str, *, external_payment_id: str | None = None
+    ) -> PaymentStatus:
+        """Резервная проверка статуса платежа напрямую у банка (п.7.5, 9.1 ТЗ).
+
+        `external_payment_id` — `CreatedPayment.external_payment_id`, сохранённый
+        при создании платежа (`Payment.external_payment_id`). Некоторые провайдеры
+        (Т-Банк `GetState`) требуют именно его, а не `order_id` — см. DECISIONS.md.
+        """
