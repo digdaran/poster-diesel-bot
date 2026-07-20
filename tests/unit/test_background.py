@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import datetime as dt
 
+import pytest
 from app.core.config import Settings
 from app.core.db import Database
 from app.models.base import utcnow
@@ -67,7 +68,12 @@ def test_reconcile_pending_payments_fails_and_releases_expired(
     assert pool_svc.get_free_count(db, giveaway_id=gid) == 7
 
     far_future = utcnow() + dt.timedelta(seconds=settings.online_reservation_ttl_sec + 100)
-    background._reconcile_pending_payments(db, settings, now=far_future)
+    outcomes = background._reconcile_pending_payments(db, settings, now=far_future)
+
+    assert len(outcomes) == 1
+    assert outcomes[0].applied
+    assert outcomes[0].new_status == PaymentStatus.FAILED
+    assert outcomes[0].payment_id == outcome.payment_id
 
     with db.session() as session:
         payment = session.execute(
@@ -100,6 +106,38 @@ def test_reconcile_pending_payments_leaves_fresh_payment_alone(
         ).scalar_one()
         assert payment.status == PaymentStatus.PENDING
     assert pool_svc.get_free_count(db, giveaway_id=gid) == 7  # резерв не тронут
+
+
+def test_reconcile_pending_payments_returns_succeeded_outcome(
+    db: Database, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_reconcile_pending_payments` возвращает финализированные исходы (в т.ч.
+    успешные) — их использует `run_background_loop` для проактивных уведомлений
+    (см. app/services/notification_service.py, DECISIONS.md)."""
+    gid = make_giveaway(db, max_tickets=10)
+    pid = make_participant(db)
+    provider = MockProvider()
+    outcome = payment_svc.create_payment_safe(
+        db,
+        provider,
+        giveaway_id=gid,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=2,
+    )
+    assert outcome.ok
+    provider.set_status(outcome.order_id, PaymentStatus.SUCCEEDED)
+    # get_active_provider создаёт новый инстанс провайдера при каждом вызове
+    # (см. app/payments/factory.py) — для теста подменяем его на уже
+    # настроенный provider с проставленным статусом.
+    monkeypatch.setattr(background, "get_active_provider", lambda db, settings: provider)
+
+    outcomes = background._reconcile_pending_payments(db, settings, now=utcnow())
+
+    assert len(outcomes) == 1
+    assert outcomes[0].applied
+    assert outcomes[0].new_status == PaymentStatus.SUCCEEDED
+    assert len(outcomes[0].tickets or []) == 2
 
 
 def test_reconcile_pending_payments_noop_when_none_pending(

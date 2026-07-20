@@ -17,8 +17,10 @@ from sqlalchemy.orm import Session
 from app.core.phone import normalize_phone
 from app.models.base import utcnow
 from app.models.channel_binding import ChannelBinding
-from app.models.enums import ChannelType
+from app.models.enums import ChannelType, ManualRegistrationStatus, PaymentStatus
+from app.models.manual_registration import ManualRegistration
 from app.models.participant import Participant
+from app.models.payment import Payment
 
 
 @dataclass(frozen=True)
@@ -63,6 +65,33 @@ def can_access_own_account(binding: ChannelBinding, *, ignore_phone_verification
     подтверждена ИЛИ включён `ignore_phone_verification` (п.7.1 ТЗ). Обратимость:
     если флаг позже выключат, привязки с `phone_verified=False` доступ теряют."""
     return binding.phone_verified or ignore_phone_verification
+
+
+def has_active_purchase(session: Session, *, participant_id: int) -> bool:
+    """Есть ли у участника незавершённая покупка — продуктовое решение:
+    не более одной активной покупки одновременно, глобально для всех каналов
+    продажи (бот, подарочные покупки, ручная регистрация оператором), см.
+    DECISIONS.md. Активная покупка = PENDING онлайн-платёж ИЛИ PENDING ручная
+    регистрация. Вызывается внутри `db.immediate_session()` в
+    `payment_service.create_payment` / `manual_registration_service.create_manual_registration`,
+    чтобы проверка и последующая вставка были атомарны (тот же механизм
+    сериализации писателей SQLite, что и для пула номеров — см. CLAUDE.md)."""
+    has_pending_payment = session.execute(
+        select(Payment.id)
+        .where(Payment.participant_id == participant_id, Payment.status == PaymentStatus.PENDING)
+        .limit(1)
+    ).first()
+    if has_pending_payment is not None:
+        return True
+    has_pending_manual = session.execute(
+        select(ManualRegistration.id)
+        .where(
+            ManualRegistration.participant_id == participant_id,
+            ManualRegistration.status == ManualRegistrationStatus.PENDING,
+        )
+        .limit(1)
+    ).first()
+    return has_pending_manual is not None
 
 
 def _find_participant_by_phone(session: Session, phone: str) -> Participant | None:

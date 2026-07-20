@@ -8,6 +8,7 @@ UI-примитивы и вызовы Bot API.
 from __future__ import annotations
 
 import io
+from html import escape
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,45 @@ from aiogram.types import (
 )
 from app.channels.base import BaseMessengerChannel, ChannelCapabilities
 from app.models.enums import ChannelType
+
+# Запас под HTML-разметку (<pre>...</pre>) и под лимит Telegram в 4096 символов
+# на сообщение — превышение лимита иначе приводит к тихому отказу отправки.
+_TICKET_CODES_CHUNK_LIMIT = 3500
+_TICKET_CODES_COLUMN_THRESHOLD = 10
+
+
+def _format_ticket_codes(codes: list[str]) -> list[str]:
+    """Готовит текст со списком кодов номерков к отправке. До
+    `_TICKET_CODES_COLUMN_THRESHOLD` кодов — простой список по одному на
+    строку. Больше — моноширинная таблица в несколько колонок (иначе список
+    из сотен строк неудобно листать). В обоих случаях результат разбит на
+    куски, ни один из которых не превышает лимит Telegram на длину
+    сообщения — иначе отправка молча падает."""
+    if not codes:
+        return []
+    if len(codes) <= _TICKET_CODES_COLUMN_THRESHOLD:
+        lines = codes
+    else:
+        width = max(len(c) for c in codes) + 2
+        columns = max(1, min(5, 40 // width))
+        lines = [
+            "".join(c.ljust(width) for c in codes[i : i + columns]).rstrip()
+            for i in range(0, len(codes), columns)
+        ]
+
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+    for line in lines:
+        if current and current_len + len(line) + 1 > _TICKET_CODES_CHUNK_LIMIT:
+            chunks.append("\n".join(current))
+            current = []
+            current_len = 0
+        current.append(line)
+        current_len += len(line) + 1
+    if current:
+        chunks.append("\n".join(current))
+    return chunks
 
 
 class TelegramChannel(BaseMessengerChannel):
@@ -100,6 +140,34 @@ class TelegramChannel(BaseMessengerChannel):
         img.save(buffer, format="PNG")  # type: ignore[call-arg]
         photo = BufferedInputFile(buffer.getvalue(), filename="sbp_qr.png")
         await self.bot.send_photo(chat_id=external_user_id, photo=photo, caption=caption)
+
+    async def send_ticket_codes(self, external_user_id: str, codes: list[str]) -> None:
+        """Отправляет список кодов номерков, разбитый на куски в пределах лимита
+        Telegram (см. `_format_ticket_codes`)."""
+        multi_column = len(codes) > _TICKET_CODES_COLUMN_THRESHOLD
+        for chunk in _format_ticket_codes(codes):
+            if multi_column:
+                await self.bot.send_message(
+                    chat_id=external_user_id, text=f"<pre>{escape(chunk)}</pre>", parse_mode="HTML"
+                )
+            else:
+                await self.bot.send_message(chat_id=external_user_id, text=chunk)
+
+    async def deliver_purchase(
+        self, external_user_id: str, *, poster_path: str | None, codes: list[str], intro: str
+    ) -> None:
+        """Доставка купленных номерков: постер (если есть) + список кодов, с учётом
+        лимита подписи к фото Telegram (1024 симв., отдельно от лимита 4096 на
+        обычное сообщение, п.7.5 ТЗ — "отправляется постер... и список кодов")."""
+        if poster_path and len(codes) <= _TICKET_CODES_COLUMN_THRESHOLD:
+            caption = intro + "\n" + "\n".join(codes) if codes else intro
+            await self.send_media(external_user_id, poster_path, caption=caption)
+            return
+        if poster_path:
+            await self.send_media(external_user_id, poster_path, caption=intro)
+        else:
+            await self.send_message(external_user_id, intro)
+        await self.send_ticket_codes(external_user_id, codes)
 
     async def handle_update(self, update: Any) -> None:
         """При long polling диспетчеризация обычно идёт напрямую через aiogram

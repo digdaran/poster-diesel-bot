@@ -10,13 +10,15 @@ import threading
 import pytest
 from app.core.db import Database
 from app.models.base import utcnow
-from app.models.enums import PaymentStatus
+from app.models.enums import PanelUserRole, PaymentStatus
 from app.models.giveaway import Giveaway
+from app.models.panel_user import PanelUser
 from app.models.participant import Participant
 from app.models.payment import Payment
 from app.models.ticket import Ticket
 from app.payments.base import WebhookVerificationError
 from app.payments.mock import MockProvider
+from app.services import manual_registration_service as manual_svc
 from app.services import payment_service as svc
 from app.services import ticket_pool_service as pool_svc
 from sqlalchemy import select
@@ -100,6 +102,109 @@ def test_create_payment_insufficient_tickets_not_created(db: Database) -> None:
     with db.session() as session:
         count = len(list(session.execute(select(Payment)).scalars()))
         assert count == 0  # платёж не создан вовсе
+
+
+def test_create_payment_blocked_by_existing_pending_payment(db: Database) -> None:
+    gid = make_giveaway(db, max_tickets=10)
+    pid = make_participant(db)
+    provider = MockProvider()
+    first = svc.create_payment_safe(
+        db,
+        provider,
+        giveaway_id=gid,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=1,
+    )
+    assert first.ok
+
+    second = svc.create_payment_safe(
+        db,
+        provider,
+        giveaway_id=gid,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=1,
+    )
+    assert not second.ok
+    assert second.has_active_purchase
+    with db.session() as session:
+        count = len(list(session.execute(select(Payment)).scalars()))
+        assert count == 1  # второй платёж не создан
+    assert pool_svc.get_free_count(db, giveaway_id=gid) == 9  # резерв под второй не создан
+
+
+def test_create_payment_blocked_by_existing_pending_manual_registration(db: Database) -> None:
+    gid = make_giveaway(db, max_tickets=10)
+    pid = make_participant(db)
+    with db.session() as session:
+        operator = PanelUser(login="op1", password_hash="x", role=PanelUserRole.OPERATOR)
+        session.add(operator)
+        session.flush()
+        operator_id = operator.id
+
+    manual_outcome = manual_svc.create_manual_registration_safe(
+        db,
+        giveaway_id=gid,
+        participant_id=pid,
+        quantity=1,
+        operator_id=operator_id,
+        ttl_seconds=3600,
+    )
+    assert manual_outcome.ok
+
+    provider = MockProvider()
+    outcome = svc.create_payment_safe(
+        db,
+        provider,
+        giveaway_id=gid,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=1,
+    )
+    assert not outcome.ok
+    assert outcome.has_active_purchase
+    with db.session() as session:
+        count = len(list(session.execute(select(Payment)).scalars()))
+        assert count == 0
+
+
+def test_create_payment_concurrent_same_participant_only_one_succeeds(db: Database) -> None:
+    """Гонка: участник одновременно пытается купить в двух разных розыгрышах —
+    ровно одна покупка должна стать активной (глобальное правило, см. DECISIONS.md)."""
+    gid_a = make_giveaway(db, max_tickets=10, prefix="AAA")
+    gid_b = make_giveaway(db, max_tickets=10, prefix="BBB")
+    pid = make_participant(db)
+    provider = MockProvider()
+
+    outcomes: dict[str, svc.CreatePaymentOutcome] = {}
+    barrier = threading.Barrier(2)
+
+    def worker(name: str, gid: int) -> None:
+        barrier.wait()
+        outcomes[name] = svc.create_payment_safe(
+            db,
+            provider,
+            giveaway_id=gid,
+            participant_id=pid,
+            participant_phone="79991234567",
+            quantity=1,
+        )
+
+    t1 = threading.Thread(target=worker, args=("A", gid_a))
+    t2 = threading.Thread(target=worker, args=("B", gid_b))
+    t1.start()
+    t2.start()
+    t1.join(timeout=10)
+    t2.join(timeout=10)
+
+    successes = [o for o in outcomes.values() if o.ok]
+    blocked = [o for o in outcomes.values() if not o.ok and o.has_active_purchase]
+    assert len(successes) == 1
+    assert len(blocked) == 1
+    with db.session() as session:
+        count = len(list(session.execute(select(Payment)).scalars()))
+        assert count == 1
 
 
 def test_finalize_success_issues_tickets(db: Database) -> None:

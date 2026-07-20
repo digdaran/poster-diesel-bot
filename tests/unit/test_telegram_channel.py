@@ -76,6 +76,50 @@ def test_render_payment_prompt_adds_qr_button_when_available(channel: TelegramCh
     assert len(markup.inline_keyboard) == 3
 
 
+async def test_send_ticket_codes_sends_short_list_as_single_message(
+    channel: TelegramChannel,
+) -> None:
+    await channel.send_ticket_codes("123", ["ENT-000001", "ENT-000002"])
+    channel.bot.send_message.assert_awaited_once()
+    _, kwargs = channel.bot.send_message.call_args
+    assert kwargs["chat_id"] == "123"
+    assert "ENT-000001" in kwargs["text"]
+    assert "parse_mode" not in kwargs
+
+
+async def test_send_ticket_codes_large_list_uses_html_columns(channel: TelegramChannel) -> None:
+    codes = [f"ENT-{i:06d}" for i in range(1, 20)]
+    await channel.send_ticket_codes("123", codes)
+    channel.bot.send_message.assert_awaited()
+    _, kwargs = channel.bot.send_message.call_args
+    assert kwargs["parse_mode"] == "HTML"
+    assert kwargs["text"].startswith("<pre>")
+
+
+async def test_deliver_purchase_with_poster_and_short_codes_sends_single_photo(
+    channel: TelegramChannel, tmp_path
+) -> None:  # noqa: ANN001
+    poster = tmp_path / "poster.png"
+    poster.write_bytes(b"\x89PNG\r\n\x1a\n")
+    await channel.deliver_purchase(
+        "123", poster_path=str(poster), codes=["ENT-000001"], intro="Оплата прошла успешно!"
+    )
+    channel.bot.send_photo.assert_awaited_once()
+    _, kwargs = channel.bot.send_photo.call_args
+    assert "ENT-000001" in kwargs["caption"]
+    channel.bot.send_message.assert_not_awaited()
+
+
+async def test_deliver_purchase_without_poster_sends_intro_and_codes(
+    channel: TelegramChannel,
+) -> None:
+    await channel.deliver_purchase(
+        "123", poster_path=None, codes=["ENT-000001"], intro="Оплата прошла успешно!"
+    )
+    channel.bot.send_photo.assert_not_awaited()
+    assert channel.bot.send_message.await_count == 2  # интро + коды
+
+
 def test_only_telegram_active_in_production() -> None:
     assert frozenset({ChannelType.TELEGRAM}) == ACTIVE_CHANNELS
     assert is_channel_active(ChannelType.TELEGRAM) is True

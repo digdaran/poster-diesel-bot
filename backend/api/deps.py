@@ -14,11 +14,19 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
+from channels.telegram.channel import TelegramChannel
+
 _bearer = HTTPBearer(auto_error=False)
 
 
 def get_database(request: Request) -> Database:
     return request.app.state.db
+
+
+def get_telegram_channel(request: Request) -> TelegramChannel | None:
+    """Outbound-only инстанс для проактивных уведомлений (см. backend/main.py
+    lifespan) — `None`, если `TELEGRAM_BOT_TOKEN` не задан (dev/тесты)."""
+    return request.app.state.telegram_channel
 
 
 def get_session(request: Request) -> Iterator[Session]:

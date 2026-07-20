@@ -8,7 +8,6 @@
 
 from __future__ import annotations
 
-from html import escape
 from typing import TYPE_CHECKING
 
 import structlog
@@ -23,6 +22,7 @@ from app.models.ticket import Ticket
 from app.services import participant_service, settings_service
 from app.services import payment_service as payment_svc
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from channels.telegram.state import (
     QUANTITY_OPTIONS,
@@ -39,11 +39,6 @@ logger = structlog.get_logger(__name__)
 router = Router(name="telegram-main")
 
 _MAIN_KEYBOARD_BUTTONS = [["🎟 Купить номерки", "📋 Мои номерки"], ["ℹ️ Помощь"]]
-
-# Запас под HTML-разметку (<pre>...</pre>) и под лимит Telegram в 4096 символов
-# на сообщение — превышение лимита иначе приводит к тихому отказу отправки.
-_TICKET_CODES_CHUNK_LIMIT = 3500
-_TICKET_CODES_COLUMN_THRESHOLD = 10
 
 _channel: TelegramChannel | None = None  # устанавливается через set_channel() в main.py
 
@@ -71,49 +66,6 @@ def _msg(callback: CallbackQuery) -> Message:
 
     assert isinstance(callback.message, _Message), "Сообщение недоступно для редактирования/ответа"
     return callback.message
-
-
-def _format_ticket_codes(codes: list[str]) -> list[str]:
-    """Готовит текст со списком кодов номерков к отправке. До
-    `_TICKET_CODES_COLUMN_THRESHOLD` кодов — простой список по одному на
-    строку (как раньше). Больше — моноширинная таблица в несколько колонок
-    (иначе список из сотен строк неудобно листать). В обоих случаях
-    результат разбит на куски, ни один из которых не превышает лимит
-    Telegram на длину сообщения — иначе отправка молча падает."""
-    if not codes:
-        return []
-    if len(codes) <= _TICKET_CODES_COLUMN_THRESHOLD:
-        lines = codes
-    else:
-        width = max(len(c) for c in codes) + 2
-        columns = max(1, min(5, 40 // width))
-        lines = [
-            "".join(c.ljust(width) for c in codes[i : i + columns]).rstrip()
-            for i in range(0, len(codes), columns)
-        ]
-
-    chunks: list[str] = []
-    current: list[str] = []
-    current_len = 0
-    for line in lines:
-        if current and current_len + len(line) + 1 > _TICKET_CODES_CHUNK_LIMIT:
-            chunks.append("\n".join(current))
-            current = []
-            current_len = 0
-        current.append(line)
-        current_len += len(line) + 1
-    if current:
-        chunks.append("\n".join(current))
-    return chunks
-
-
-async def _send_ticket_codes(message: Message, codes: list[str]) -> None:
-    multi_column = len(codes) > _TICKET_CODES_COLUMN_THRESHOLD
-    for chunk in _format_ticket_codes(codes):
-        if multi_column:
-            await message.answer(f"<pre>{escape(chunk)}</pre>", parse_mode="HTML")
-        else:
-            await message.answer(chunk)
 
 
 @router.message(CommandStart())
@@ -219,27 +171,20 @@ async def on_name_entered(message: Message, state: FSMContext) -> None:
     )
 
 
-@router.message(F.text == "🎟 Купить номерки")
-async def on_buy(message: Message, state: FSMContext) -> None:
-    db = get_channel_db()
-    with db.session() as session:
-        giveaways = list(
-            session.execute(
-                select(Giveaway).where(
-                    Giveaway.is_registration_open.is_(True), Giveaway.is_locked.is_(False)
-                )
-            ).scalars()
-        )
-        giveaways = [g for g in giveaways if g.free_tickets_count > 0]
+def _open_giveaways(session: Session) -> list[Giveaway]:
+    giveaways = list(
+        session.execute(
+            select(Giveaway).where(
+                Giveaway.is_registration_open.is_(True), Giveaway.is_locked.is_(False)
+            )
+        ).scalars()
+    )
+    return [g for g in giveaways if g.free_tickets_count > 0]
 
-    if not giveaways:
-        await message.answer("Сейчас нет доступных для покупки розыгрышей.")
-        return
 
-    if len(giveaways) == 1:
-        await _prompt_quantity(message, state, giveaways[0])
-        return
-
+async def _prompt_giveaway_choice(
+    message: Message, state: FSMContext, giveaways: list[Giveaway]
+) -> None:
     from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
     rows = [
@@ -250,19 +195,43 @@ async def on_buy(message: Message, state: FSMContext) -> None:
         ]
         for g in giveaways
     ]
+    rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="nav:back:menu")])
     await message.answer(
         "Выберите розыгрыш:", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
     )
     await state.set_state(PurchaseStates.choosing_giveaway)
 
 
+@router.message(F.text == "🎟 Купить номерки")
+async def on_buy(message: Message, state: FSMContext) -> None:
+    db = get_channel_db()
+    with db.session() as session:
+        giveaways = _open_giveaways(session)
+
+    if not giveaways:
+        await message.answer("Сейчас нет доступных для покупки розыгрышей.")
+        return
+
+    if len(giveaways) == 1:
+        await _prompt_quantity(message, state, giveaways[0])
+        return
+
+    await _prompt_giveaway_choice(message, state, giveaways)
+
+
 async def _prompt_quantity(message: Message, state: FSMContext, giveaway: Giveaway) -> None:
     from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+    db = get_channel_db()
+    with db.session() as session:
+        other_open_giveaways = _open_giveaways(session)
+    back_target = "nav:back:giveaways" if len(other_open_giveaways) > 1 else "nav:back:menu"
 
     options = [q for q in QUANTITY_OPTIONS if q <= giveaway.free_tickets_count]
     rows = [
         [InlineKeyboardButton(text=str(q), callback_data=f"qty:{giveaway.id}:{q}") for q in options]
     ]
+    rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data=back_target)])
     await message.answer(
         f"«{giveaway.name}»: цена номерка {giveaway.ticket_price / 100:.2f} ₽. "
         f"Сколько номерков хотите приобрести? (доступно {giveaway.free_tickets_count})\n"
@@ -287,6 +256,43 @@ async def on_giveaway_chosen(callback: CallbackQuery, state: FSMContext) -> None
     await callback.answer()
 
 
+@router.callback_query(F.data == "nav:back:menu")
+async def on_back_to_menu(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    channel = _get_channel()
+    keyboard = channel.render_keyboard(_MAIN_KEYBOARD_BUTTONS)
+    await _msg(callback).answer("Главное меню:", reply_markup=keyboard)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "nav:back:giveaways")
+async def on_back_to_giveaways(callback: CallbackQuery, state: FSMContext) -> None:
+    db = get_channel_db()
+    with db.session() as session:
+        giveaways = _open_giveaways(session)
+    if not giveaways:
+        await state.clear()
+        await callback.answer("Сейчас нет доступных для покупки розыгрышей.", show_alert=True)
+        return
+    await _prompt_giveaway_choice(_msg(callback), state, giveaways)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("nav:back:quantity:"))
+async def on_back_to_quantity(callback: CallbackQuery, state: FSMContext) -> None:
+    assert callback.data is not None
+    giveaway_id = int(callback.data.split(":")[3])
+    db = get_channel_db()
+    with db.session() as session:
+        giveaway = session.get(Giveaway, giveaway_id)
+    if giveaway is None:
+        await state.clear()
+        await callback.answer("Розыгрыш недоступен.", show_alert=True)
+        return
+    await _prompt_quantity(_msg(callback), state, giveaway)
+    await callback.answer()
+
+
 async def _handle_quantity_selected(
     reply_target: Message, uid: str, state: FSMContext, giveaway_id: int, quantity: int
 ) -> None:
@@ -303,11 +309,22 @@ async def _handle_quantity_selected(
 
     # Подарочная покупка на неподтверждённый номер (п.7.1, 10.3, 10.5 ТЗ): просим
     # ввести номер получателя вручную — своей учётки у покупателя ещё нет.
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
     await state.update_data(giveaway_id=giveaway_id, quantity=quantity)
     await state.set_state(PurchaseStates.awaiting_phone_for_gift)
     await reply_target.answer(
         "Введите номер телефона получателя номерков (формат: +7XXXXXXXXXX). "
-        "Постер и коды придут в этот чат."
+        "Постер и коды придут в этот чат.",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="◀️ Назад", callback_data=f"nav:back:quantity:{giveaway_id}"
+                    )
+                ]
+            ]
+        ),
     )
 
 
@@ -384,10 +401,16 @@ async def _create_and_offer_payment(
         quantity=quantity,
     )
     if not outcome.ok:
-        await message.answer(
-            f"К сожалению, свободных номерков меньше, чем нужно (доступно {outcome.free_count}). "
-            "Попробуйте выбрать количество заново."
-        )
+        if outcome.has_active_purchase:
+            await message.answer(
+                "У вас уже есть незавершённая покупка. Дождитесь её оплаты или отмены, "
+                "прежде чем начинать новую."
+            )
+        else:
+            await message.answer(
+                "К сожалению, свободных номерков меньше, чем нужно "
+                f"(доступно {outcome.free_count}). Попробуйте выбрать количество заново."
+            )
         return
 
     assert outcome.created is not None
@@ -478,22 +501,12 @@ async def _deliver_tickets(message: Message, outcome: payment_svc.FinalizeOutcom
     with db.session() as session:
         giveaway = session.get(Giveaway, outcome.giveaway_id)
     codes = [t.full_code for t in (outcome.tickets or [])]
-    intro = "Оплата прошла успешно! Ваши номерки:"
-    poster_path = giveaway.digital_poster_path if giveaway else None
-
-    # Подпись к фото у Telegram ограничена 1024 символами (отдельно от лимита
-    # 4096 на обычное сообщение) — держим коды в подписи, только пока список
-    # заведомо короткий, иначе отправляем постер без кодов и коды отдельно.
-    if poster_path and len(codes) <= _TICKET_CODES_COLUMN_THRESHOLD:
-        caption = intro + "\n" + "\n".join(codes) if codes else intro
-        await channel.send_media(str(message.chat.id), poster_path, caption=caption)
-        return
-
-    if poster_path:
-        await channel.send_media(str(message.chat.id), poster_path, caption=intro)
-    else:
-        await message.answer(intro)
-    await _send_ticket_codes(message, codes)
+    await channel.deliver_purchase(
+        str(message.chat.id),
+        poster_path=giveaway.digital_poster_path if giveaway else None,
+        codes=codes,
+        intro="Оплата прошла успешно! Ваши номерки:",
+    )
 
 
 @router.message(F.text == "📋 Мои номерки")
@@ -522,7 +535,7 @@ async def on_my_tickets(message: Message) -> None:
         await message.answer("У вас пока нет номерков.")
         return
     await message.answer(f"Ваши номерки ({len(tickets)}):")
-    await _send_ticket_codes(message, [t.full_code for t in tickets])
+    await _get_channel().send_ticket_codes(str(message.chat.id), [t.full_code for t in tickets])
 
 
 @router.message(F.text == "ℹ️ Помощь")

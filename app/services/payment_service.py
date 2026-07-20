@@ -20,6 +20,7 @@ from app.models.payment import Payment
 from app.models.ticket import Ticket
 from app.payments.base import BasePaymentProvider, CreatedPayment, PaymentOrder
 from app.repositories import ticket_pool_repo as repo
+from app.services import participant_service
 
 
 class GiveawayNotSellableError(Exception):
@@ -36,6 +37,9 @@ class CreatePaymentOutcome:
     """Актуальный остаток — заполняется при отказе (недостаточно номеров, п.7.5 ТЗ)."""
     amount: int | None = None
     """Сумма платежа в копейках (quantity * ticket_price) — заполняется при ok=True."""
+    has_active_purchase: bool = False
+    """True — отказ из-за уже существующей активной покупки участника (продуктовое
+    правило, см. DECISIONS.md), а не нехватки номеров."""
 
 
 def create_payment(
@@ -62,6 +66,8 @@ def create_payment(
             raise GiveawayNotSellableError("Регистрация на розыгрыш не открыта")
         if giveaway.is_locked:
             raise GiveawayNotSellableError("Розыгрыш заблокирован (is_locked)")
+        if participant_service.has_active_purchase(session, participant_id=participant_id):
+            raise _ActivePurchaseExists()
 
         amount = quantity * giveaway.ticket_price
         payment = Payment(
@@ -122,6 +128,11 @@ class _InsufficientTickets(Exception):
         self.free_count = free_count
 
 
+class _ActivePurchaseExists(Exception):
+    def __init__(self) -> None:
+        super().__init__("У участника уже есть активная покупка")
+
+
 def create_payment_safe(
     db: Database,
     provider: BasePaymentProvider,
@@ -145,6 +156,15 @@ def create_payment_safe(
     except _InsufficientTickets as exc:
         return CreatePaymentOutcome(
             ok=False, payment_id=None, order_id=None, created=None, free_count=exc.free_count
+        )
+    except _ActivePurchaseExists:
+        return CreatePaymentOutcome(
+            ok=False,
+            payment_id=None,
+            order_id=None,
+            created=None,
+            free_count=0,
+            has_active_purchase=True,
         )
 
 

@@ -262,6 +262,11 @@ def test_manual_registration_name_overwrite_restricted_by_role(api_client: TestC
     )
     assert resp.status_code == 201
     assert resp.json()["participant_full_name"] == "Исходное Имя"
+    # Каждая регистрация подтверждается сразу же — иначе следующая для того же
+    # участника упрётся в правило "не более одной активной покупки" (см. DECISIONS.md).
+    api_client.post(
+        f"/api/manual-registrations/{resp.json()['id']}/confirm", headers=admin_headers
+    ).raise_for_status()
 
     adm_token = login(api_client, "adm1", "adm1-strong-pass")
     resp = api_client.post(
@@ -276,6 +281,9 @@ def test_manual_registration_name_overwrite_restricted_by_role(api_client: TestC
     )
     assert resp.status_code == 201
     assert resp.json()["participant_full_name"] == "Исходное Имя"  # Administrator не может изменить
+    api_client.post(
+        f"/api/manual-registrations/{resp.json()['id']}/confirm", headers=admin_headers
+    ).raise_for_status()
 
     op_token = login(api_client, "op1", "op1-strong-pass")
     resp = api_client.post(
@@ -290,6 +298,9 @@ def test_manual_registration_name_overwrite_restricted_by_role(api_client: TestC
     )
     assert resp.status_code == 201
     assert resp.json()["participant_full_name"] == "Исходное Имя"  # Operator тоже не может
+    api_client.post(
+        f"/api/manual-registrations/{resp.json()['id']}/confirm", headers=admin_headers
+    ).raise_for_status()
 
     resp = api_client.post(
         "/api/manual-registrations",

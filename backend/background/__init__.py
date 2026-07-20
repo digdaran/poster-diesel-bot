@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+from typing import TYPE_CHECKING
 
 import structlog
 from app.core.config import Settings
@@ -20,15 +21,20 @@ from app.models.payment import Payment
 from app.payments.factory import get_active_provider
 from app.repositories import ticket_pool_repo as pool_repo
 from app.services import manual_registration_service as manual_svc
+from app.services import notification_service
 from app.services import payment_service as payment_svc
+from app.services.payment_service import FinalizeOutcome
 from sqlalchemy import select
+
+if TYPE_CHECKING:
+    from channels.telegram.channel import TelegramChannel
 
 logger = structlog.get_logger(__name__)
 
 
 def _reconcile_pending_payments(
     db: Database, settings: Settings, *, now: dt.datetime | None = None
-) -> None:
+) -> list[FinalizeOutcome]:
     with db.session() as session:
         pending_ids = [
             pid
@@ -37,12 +43,13 @@ def _reconcile_pending_payments(
             ).all()
         ]
     if not pending_ids:
-        return
+        return []
 
     provider = get_active_provider(db, settings)
+    outcomes: list[FinalizeOutcome] = []
     for payment_id in pending_ids:
         try:
-            payment_svc.poll_pending_payment(
+            result = payment_svc.poll_pending_payment(
                 db,
                 provider,
                 payment_id=payment_id,
@@ -50,8 +57,11 @@ def _reconcile_pending_payments(
                 ttl_seconds=settings.online_reservation_ttl_sec,
                 now=now,
             )
+            if result is not None and result.outcome is not None and result.outcome.applied:
+                outcomes.append(result.outcome)
         except Exception:
             logger.exception("payment_poll_failed", payment_id=payment_id)
+    return outcomes
 
 
 def _release_expired_manual_registrations(
@@ -77,15 +87,23 @@ def _release_expired_manual_registrations(
             )
 
 
-async def run_background_loop(db: Database, settings: Settings) -> None:
+async def run_background_loop(
+    db: Database, settings: Settings, telegram_channel: TelegramChannel | None = None
+) -> None:
     """Работает, пока не отменена (см. backend/main.py::lifespan). Синхронная
     работа (SQLite-сессии, сетевые вызовы check_status у банков) выполняется в
     отдельном потоке через `asyncio.to_thread`, чтобы не блокировать event loop
-    и не задерживать обработку конкурентных HTTP-запросов."""
+    и не задерживать обработку конкурентных HTTP-запросов. Уведомления о
+    финализированных платежах (`notification_service`) отправляются уже после
+    возврата на event loop, т.к. отправка сообщений в Telegram — асинхронный
+    сетевой вызов."""
     while True:
         try:
-            await asyncio.to_thread(_reconcile_pending_payments, db, settings)
+            outcomes = await asyncio.to_thread(_reconcile_pending_payments, db, settings)
             await asyncio.to_thread(_release_expired_manual_registrations, db, settings)
+            if telegram_channel is not None:
+                for outcome in outcomes:
+                    await notification_service.notify_payment_outcome(db, telegram_channel, outcome)
         except Exception:
             logger.exception("background_reconciliation_tick_failed")
         await asyncio.sleep(settings.online_status_poll_interval_sec)

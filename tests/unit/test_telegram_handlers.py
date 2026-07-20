@@ -1,10 +1,12 @@
-"""Тесты чистых функций из channels/telegram/handlers.py. Сами обработчики
-aiogram (Message/CallbackQuery) в этом репозитории напрямую не тестируются —
-нет прецедента мокания Bot API, только эти вспомогательные функции."""
+"""Тесты чистых функций форматирования кодов номерков из channels/telegram/channel.py
+(вынесены туда из handlers.py, чтобы их можно было переиспользовать из backend —
+см. app/services/notification_service.py). Сами обработчики aiogram
+(Message/CallbackQuery) в этом репозитории напрямую не тестируются — нет
+прецедента мокания Bot API, только эти вспомогательные функции."""
 
 from __future__ import annotations
 
-from channels.telegram.handlers import (
+from channels.telegram.channel import (
     _TICKET_CODES_CHUNK_LIMIT,
     _TICKET_CODES_COLUMN_THRESHOLD,
     _format_ticket_codes,

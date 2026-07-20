@@ -15,18 +15,24 @@ from app.models.enums import AuditActorType
 from app.payments.base import BasePaymentProvider, WebhookVerificationError
 from app.payments.tbank import TBankProvider
 from app.payments.vtb import VTBProvider
-from app.services import audit_service
+from app.services import audit_service, notification_service
 from app.services import payment_service as svc
 from fastapi import APIRouter, Depends, Request, Response, status
 
-from backend.api.deps import get_database, get_settings_dep
+from backend.api.deps import get_database, get_settings_dep, get_telegram_channel
+from channels.telegram.channel import TelegramChannel
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 logger = structlog.get_logger(__name__)
 
 
-def _handle(
-    provider: BasePaymentProvider, request: Request, body: bytes, db: Database, provider_name: str
+async def _handle(
+    provider: BasePaymentProvider,
+    request: Request,
+    body: bytes,
+    db: Database,
+    provider_name: str,
+    telegram_channel: TelegramChannel | None,
 ) -> Response:
     ip = request.client.host if request.client else None
     try:
@@ -62,6 +68,8 @@ def _handle(
             },
             ip_address=ip,
         )
+    if outcome.applied and telegram_channel is not None:
+        await notification_service.notify_payment_outcome(db, telegram_channel, outcome)
     return Response(status_code=status.HTTP_200_OK, content="ok")
 
 
@@ -70,10 +78,11 @@ async def tbank_webhook(
     request: Request,
     db: Database = Depends(get_database),
     settings: Settings = Depends(get_settings_dep),
+    telegram_channel: TelegramChannel | None = Depends(get_telegram_channel),
 ) -> Response:
     body = await request.body()
     provider = TBankProvider.from_settings(settings)
-    return _handle(provider, request, body, db, "tbank")
+    return await _handle(provider, request, body, db, "tbank", telegram_channel)
 
 
 @router.post("/vtb")
@@ -81,7 +90,8 @@ async def vtb_webhook(
     request: Request,
     db: Database = Depends(get_database),
     settings: Settings = Depends(get_settings_dep),
+    telegram_channel: TelegramChannel | None = Depends(get_telegram_channel),
 ) -> Response:
     body = await request.body()
     provider = VTBProvider.from_settings(settings)
-    return _handle(provider, request, body, db, "vtb")
+    return await _handle(provider, request, body, db, "vtb", telegram_channel)

@@ -11,7 +11,9 @@ from app.models.giveaway import Giveaway
 from app.models.manual_registration import ManualRegistration
 from app.models.panel_user import PanelUser
 from app.models.participant import Participant
+from app.payments.mock import MockProvider
 from app.services import manual_registration_service as svc
+from app.services import payment_service as payment_svc
 from app.services import ticket_pool_service as pool_svc
 from sqlalchemy import select
 
@@ -79,6 +81,49 @@ def test_insufficient_tickets_registration_not_created(db: Database) -> None:
     )
     assert not outcome.ok
     assert outcome.free_count == 2
+    with db.session() as session:
+        count = len(list(session.execute(select(ManualRegistration)).scalars()))
+        assert count == 0
+
+
+def test_create_blocked_by_existing_pending_manual_registration(db: Database) -> None:
+    gid = make_giveaway(db, max_tickets=10)
+    pid = make_participant(db)
+    oid = make_operator(db)
+    first = svc.create_manual_registration_safe(
+        db, giveaway_id=gid, participant_id=pid, quantity=1, operator_id=oid, ttl_seconds=3600
+    )
+    assert first.ok
+
+    second = svc.create_manual_registration_safe(
+        db, giveaway_id=gid, participant_id=pid, quantity=1, operator_id=oid, ttl_seconds=3600
+    )
+    assert not second.ok
+    assert second.has_active_purchase
+    with db.session() as session:
+        count = len(list(session.execute(select(ManualRegistration)).scalars()))
+        assert count == 1
+
+
+def test_create_blocked_by_existing_pending_payment(db: Database) -> None:
+    gid = make_giveaway(db, max_tickets=10)
+    pid = make_participant(db)
+    oid = make_operator(db)
+    payment_outcome = payment_svc.create_payment_safe(
+        db,
+        MockProvider(),
+        giveaway_id=gid,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=1,
+    )
+    assert payment_outcome.ok
+
+    outcome = svc.create_manual_registration_safe(
+        db, giveaway_id=gid, participant_id=pid, quantity=1, operator_id=oid, ttl_seconds=3600
+    )
+    assert not outcome.ok
+    assert outcome.has_active_purchase
     with db.session() as session:
         count = len(list(session.execute(select(ManualRegistration)).scalars()))
         assert count == 0

@@ -36,6 +36,7 @@ from backend.api import (
     settings as settings_api,
 )
 from backend.webhooks import payments as payments_webhooks
+from channels.telegram.channel import TelegramChannel
 
 logger = structlog.get_logger(__name__)
 
@@ -57,11 +58,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.db = db
     app.state.settings = settings
 
-    task = asyncio.create_task(background.run_background_loop(db, settings))
+    # Outbound-only инстанс — этот процесс не запускает start_polling, нужен
+    # только для проактивных уведомлений об исходе платежа (webhook, фоновая
+    # сверка) через app/services/notification_service.py, см. DECISIONS.md.
+    telegram_channel = (
+        TelegramChannel(
+            token=settings.telegram_bot_token, proxy_url=settings.telegram_proxy_url or None
+        )
+        if settings.telegram_bot_token
+        else None
+    )
+    app.state.telegram_channel = telegram_channel
+
+    task = asyncio.create_task(background.run_background_loop(db, settings, telegram_channel))
     yield
     task.cancel()
     with suppress(asyncio.CancelledError):
         await task
+    if telegram_channel is not None:
+        await telegram_channel.bot.session.close()
 
 
 def create_app() -> FastAPI:

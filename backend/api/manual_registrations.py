@@ -150,6 +150,12 @@ def create_manual_registration(
     except svc.GiveawayNotSellableError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     if not outcome.ok:
+        if outcome.has_active_purchase:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="У участника уже есть активная покупка (ожидает оплаты/подтверждения) — "
+                "новая регистрация невозможна, пока та не завершится",
+            )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Недостаточно свободных номеров: доступно {outcome.free_count}",
