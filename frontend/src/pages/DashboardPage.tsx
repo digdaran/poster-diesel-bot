@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { DashboardApi } from "../api/resources";
 import type { Dashboard } from "../api/types";
+import { LoadingState } from "../components/EmptyState";
+import { formatMoney } from "../utils/format";
 
 export function DashboardPage() {
   const [data, setData] = useState<Dashboard | null>(null);
@@ -9,7 +11,7 @@ export function DashboardPage() {
     void DashboardApi.get().then(setData);
   }, []);
 
-  if (!data) return <div>Загрузка…</div>;
+  if (!data) return <LoadingState />;
 
   return (
     <div>
@@ -24,15 +26,15 @@ export function DashboardPage() {
           <div className="card-label">Номерков выдано</div>
         </div>
         <div className="card">
-          <div className="card-value">{(data.revenue_online / 100).toFixed(2)} ₽</div>
+          <div className="card-value">{formatMoney(data.revenue_online)}</div>
           <div className="card-label">Эквайринг</div>
         </div>
         <div className="card">
-          <div className="card-value">{(data.revenue_offline / 100).toFixed(2)} ₽</div>
+          <div className="card-value">{formatMoney(data.revenue_offline)}</div>
           <div className="card-label">Наличные (оператор)</div>
         </div>
         <div className="card">
-          <div className="card-value">{(data.revenue_total / 100).toFixed(2)} ₽</div>
+          <div className="card-value">{formatMoney(data.revenue_total)}</div>
           <div className="card-label">Итого выручка</div>
         </div>
         <div className="card">

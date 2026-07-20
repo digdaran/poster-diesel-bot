@@ -5,7 +5,16 @@ import { useAuth } from "../auth/AuthContext";
 import { usePagination } from "../hooks/usePagination";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { PaginationControls } from "../components/PaginationControls";
+import { Badge } from "../components/Badge";
+import { EmptyStateRow } from "../components/EmptyState";
+import { formatMoney, formatDateTime } from "../utils/format";
 import type { Giveaway, Payment } from "../api/types";
+
+const STATUS_TONE: Record<string, "success" | "danger" | "muted"> = {
+  SUCCEEDED: "success",
+  FAILED: "danger",
+  PENDING: "muted",
+};
 
 export function SalesPage() {
   const { hasPermission } = useAuth();
@@ -164,36 +173,41 @@ export function SalesPage() {
           <button onClick={() => downloadReport("xlsx")}>Экспорт XLSX</button>
         </div>
       )}
-      <table>
-        <thead>
-          <tr>
-            <th>ID заказа</th>
-            <th>Розыгрыш</th>
-            <th>Участник</th>
-            <th>Провайдер</th>
-            <th>Сумма</th>
-            <th>Кол-во</th>
-            <th>Статус</th>
-            <th>Создан</th>
-            <th>Подтверждён</th>
-          </tr>
-        </thead>
-        <tbody>
-          {payments.map((p) => (
-            <tr key={p.id}>
-              <td>{p.order_id}</td>
-              <td>{p.giveaway_name}</td>
-              <td>{p.participant_full_name ?? p.participant_phone}</td>
-              <td>{p.provider}</td>
-              <td>{(p.amount / 100).toFixed(2)} ₽</td>
-              <td>{p.quantity}</td>
-              <td>{p.status}</td>
-              <td>{new Date(p.created_at).toLocaleString("ru-RU")}</td>
-              <td>{p.confirmed_at ? new Date(p.confirmed_at).toLocaleString("ru-RU") : "—"}</td>
+      <div className="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>ID заказа</th>
+              <th>Розыгрыш</th>
+              <th>Участник</th>
+              <th>Провайдер</th>
+              <th>Сумма</th>
+              <th>Кол-во</th>
+              <th>Статус</th>
+              <th>Создан</th>
+              <th>Подтверждён</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {payments.length === 0 && <EmptyStateRow colSpan={9} />}
+            {payments.map((p) => (
+              <tr key={p.id}>
+                <td>{p.order_id}</td>
+                <td>{p.giveaway_name}</td>
+                <td>{p.participant_full_name ?? p.participant_phone}</td>
+                <td>{p.provider}</td>
+                <td>{formatMoney(p.amount)}</td>
+                <td>{p.quantity}</td>
+                <td>
+                  <Badge tone={STATUS_TONE[p.status] ?? "muted"}>{p.status}</Badge>
+                </td>
+                <td>{formatDateTime(p.created_at)}</td>
+                <td>{p.confirmed_at ? formatDateTime(p.confirmed_at) : "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       <PaginationControls
         page={page}
         pageSize={pageSize}

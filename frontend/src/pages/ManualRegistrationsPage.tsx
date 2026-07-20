@@ -5,12 +5,26 @@ import { apiDownload } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { usePagination } from "../hooks/usePagination";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
+import { useAsyncAction } from "../hooks/useAsyncAction";
 import { PaginationControls } from "../components/PaginationControls";
+import { useToast } from "../components/Toast";
+import { useConfirm } from "../components/ConfirmDialog";
+import { Badge } from "../components/Badge";
+import { EmptyStateRow } from "../components/EmptyState";
+import { formatMoney } from "../utils/format";
 import type { Giveaway, ManualRegistration } from "../api/types";
+
+const STATUS_TONE: Record<string, "success" | "danger" | "muted"> = {
+  CONFIRMED: "success",
+  CANCELLED: "danger",
+  PENDING: "muted",
+};
 
 export function ManualRegistrationsPage() {
   const { hasPermission, user } = useAuth();
   const isSuperAdmin = user?.role === "super_admin";
+  const { showToast } = useToast();
+  const confirm = useConfirm();
   const [registrations, setRegistrations] = useState<ManualRegistration[]>([]);
   const [total, setTotal] = useState(0);
   const [giveaways, setGiveaways] = useState<Giveaway[]>([]);
@@ -25,6 +39,7 @@ export function ManualRegistrationsPage() {
   });
   const [nameLocked, setNameLocked] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pendingId, setPendingId] = useState<number | null>(null);
 
   const [filterGiveawayId, setFilterGiveawayId] = useState("");
   const [participantQuery, setParticipantQuery] = useState("");
@@ -102,7 +117,7 @@ export function ManualRegistrationsPage() {
     URL.revokeObjectURL(url);
   };
 
-  const onCreate = async (e: FormEvent) => {
+  const { run: onCreate, pending: creating } = useAsyncAction(async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
     try {
@@ -121,10 +136,36 @@ export function ManualRegistrationsPage() {
         comment: "",
       });
       setNameLocked(false);
+      showToast("Регистрация оформлена");
       load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не удалось создать регистрацию");
     }
+  });
+
+  const runRowAction = async (
+    id: number,
+    action: () => Promise<unknown>,
+    successMessage: string,
+  ) => {
+    setPendingId(id);
+    try {
+      await action();
+      showToast(successMessage);
+      load();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Не удалось выполнить действие", "error");
+    } finally {
+      setPendingId(null);
+    }
+  };
+
+  const onCancel = async (r: ManualRegistration) => {
+    const confirmed = await confirm(
+      `Отменить регистрацию №${r.id} (${r.participant_full_name ?? r.participant_phone})?`,
+    );
+    if (!confirmed) return;
+    void runRowAction(r.id, () => ManualRegistrationsApi.cancel(r.id), "Регистрация отменена");
   };
 
   return (
@@ -174,7 +215,9 @@ export function ManualRegistrationsPage() {
           value={form.comment}
           onChange={(e) => setForm({ ...form, comment: e.target.value })}
         />
-        <button type="submit">Оформить</button>
+        <button type="submit" disabled={creating}>
+          {creating ? "Оформляем…" : "Оформить"}
+        </button>
       </form>
       {error && <div className="error">{error}</div>}
 
@@ -243,45 +286,63 @@ export function ManualRegistrationsPage() {
           <button onClick={() => downloadReport("xlsx")}>Экспорт XLSX</button>
         </div>
       )}
-      <table>
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th>Розыгрыш</th>
-            <th>Участник</th>
-            <th>Кол-во</th>
-            <th>Сумма</th>
-            <th>Оператор</th>
-            <th>Статус</th>
-            <th>Действия</th>
-          </tr>
-        </thead>
-        <tbody>
-          {registrations.map((r) => (
-            <tr key={r.id}>
-              <td>{r.id}</td>
-              <td>{r.giveaway_name}</td>
-              <td>{r.participant_full_name ?? r.participant_phone}</td>
-              <td>{r.quantity}</td>
-              <td>{(r.revenue / 100).toFixed(2)} ₽</td>
-              <td>{r.operator_login}</td>
-              <td>{r.status}</td>
-              <td className="actions">
-                {r.status === "PENDING" && (
-                  <>
-                    <button onClick={() => ManualRegistrationsApi.confirm(r.id).then(load)}>
-                      Подтвердить
-                    </button>
-                    <button onClick={() => ManualRegistrationsApi.cancel(r.id).then(load)}>
-                      Отменить
-                    </button>
-                  </>
-                )}
-              </td>
+      <div className="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Розыгрыш</th>
+              <th>Участник</th>
+              <th>Кол-во</th>
+              <th>Сумма</th>
+              <th>Оператор</th>
+              <th>Статус</th>
+              <th>Действия</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {registrations.length === 0 && <EmptyStateRow colSpan={8} />}
+            {registrations.map((r) => (
+              <tr key={r.id}>
+                <td>{r.id}</td>
+                <td>{r.giveaway_name}</td>
+                <td>{r.participant_full_name ?? r.participant_phone}</td>
+                <td>{r.quantity}</td>
+                <td>{formatMoney(r.revenue)}</td>
+                <td>{r.operator_login}</td>
+                <td>
+                  <Badge tone={STATUS_TONE[r.status] ?? "muted"}>{r.status}</Badge>
+                </td>
+                <td className="actions">
+                  {r.status === "PENDING" && (
+                    <>
+                      <button
+                        disabled={pendingId === r.id}
+                        onClick={() =>
+                          void runRowAction(
+                            r.id,
+                            () => ManualRegistrationsApi.confirm(r.id),
+                            "Регистрация подтверждена",
+                          )
+                        }
+                      >
+                        Подтвердить
+                      </button>
+                      <button
+                        className="button-danger"
+                        disabled={pendingId === r.id}
+                        onClick={() => void onCancel(r)}
+                      >
+                        Отменить
+                      </button>
+                    </>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       <PaginationControls
         page={page}
         pageSize={pageSize}

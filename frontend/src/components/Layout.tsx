@@ -1,5 +1,7 @@
+import { useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import { useTheme } from "../theme/ThemeContext";
 
 interface NavItem {
   to: string;
@@ -27,23 +29,54 @@ const NAV_ITEMS: NavItem[] = [
 
 export function Layout() {
   const { user, hasPermission, logout } = useAuth();
+  const { resolvedTheme, toggleTheme } = useTheme();
+  const [navOpen, setNavOpen] = useState(false);
+
+  const nav = (
+    <nav>
+      {NAV_ITEMS.filter((item) => hasPermission(item.permission)).map((item) => (
+        <NavLink
+          key={item.to}
+          to={item.to}
+          end={item.to === "/"}
+          className="nav-link"
+          onClick={() => setNavOpen(false)}
+        >
+          {item.label}
+        </NavLink>
+      ))}
+    </nav>
+  );
 
   return (
     <div className="layout">
-      <aside className="sidebar">
-        <div className="sidebar-title">Платформа розыгрышей</div>
-        <nav>
-          {NAV_ITEMS.filter((item) => hasPermission(item.permission)).map((item) => (
-            <NavLink key={item.to} to={item.to} end={item.to === "/"} className="nav-link">
-              {item.label}
-            </NavLink>
-          ))}
-        </nav>
+      <div className="mobile-topbar">
+        <button className="mobile-nav-toggle" onClick={() => setNavOpen(true)}>
+          ☰
+        </button>
+        <span className="sidebar-title">Платформа розыгрышей</span>
+      </div>
+      {navOpen && <div className="sidebar-backdrop" onClick={() => setNavOpen(false)} />}
+      <aside className={`sidebar${navOpen ? " sidebar-open" : ""}`}>
+        <div className="sidebar-header">
+          <div className="sidebar-title">Платформа розыгрышей</div>
+          <button className="mobile-nav-toggle" onClick={() => setNavOpen(false)}>
+            ✕
+          </button>
+        </div>
+        {nav}
         <div className="sidebar-footer">
           <div className="user-info">
             {user?.login} · {user?.role}
           </div>
-          <button onClick={logout}>Выйти</button>
+          <div className="footer-actions">
+            <button className="theme-toggle" onClick={toggleTheme} title="Переключить тему">
+              {resolvedTheme === "dark" ? "☀️ Светлая" : "🌙 Тёмная"}
+            </button>
+            <button className="theme-toggle" onClick={logout}>
+              Выйти
+            </button>
+          </div>
         </div>
       </aside>
       <main className="content">

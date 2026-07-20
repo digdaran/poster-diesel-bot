@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { GiveawaysApi, ReportsApi } from "../api/resources";
 import { apiDownload } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
+import { LoadingState, EmptyStateRow } from "../components/EmptyState";
+import { formatMoney } from "../utils/format";
 import type { Giveaway, RevenueByGiveawayRow } from "../api/types";
 
 export function ReportsPage() {
@@ -63,66 +65,77 @@ export function ReportsPage() {
 
       <section>
         <h2>Выручка по розыгрышам</h2>
-        {byGiveaway && (
-          <table>
-            <thead>
-              <tr>
-                <th>Розыгрыш</th>
-                <th>Эквайринг</th>
-                <th>Наличные (оператор)</th>
-                <th>Итого</th>
-                <th>Номерков выдано</th>
-              </tr>
-            </thead>
-            <tbody>
-              {byGiveaway.map((row) => (
-                <tr key={row.giveaway_id}>
-                  <td>{row.giveaway_name}</td>
-                  <td>{(row.revenue_online / 100).toFixed(2)} ₽</td>
-                  <td>{(row.revenue_offline / 100).toFixed(2)} ₽</td>
-                  <td>{(row.revenue_total / 100).toFixed(2)} ₽</td>
-                  <td>{row.tickets_issued}</td>
+        {byGiveaway ? (
+          <div className="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Розыгрыш</th>
+                  <th>Эквайринг</th>
+                  <th>Наличные (оператор)</th>
+                  <th>Итого</th>
+                  <th>Номерков выдано</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {byGiveaway.length === 0 && <EmptyStateRow colSpan={5} />}
+                {byGiveaway.map((row) => (
+                  <tr key={row.giveaway_id}>
+                    <td>{row.giveaway_name}</td>
+                    <td>{formatMoney(row.revenue_online)}</td>
+                    <td>{formatMoney(row.revenue_offline)}</td>
+                    <td>{formatMoney(row.revenue_total)}</td>
+                    <td>{row.tickets_issued}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <LoadingState />
         )}
       </section>
 
       <section>
         <h2>Финансовая сводка {giveawayId ? "по розыгрышу" : "(все розыгрыши)"}</h2>
-        {summary && (
+        {summary ? (
           <ul>
-            <li>Эквайринг: {(summary.revenue_online / 100).toFixed(2)} ₽</li>
-            <li>Наличные (оператор): {(summary.revenue_offline / 100).toFixed(2)} ₽</li>
-            <li>Итого выручка: {(summary.revenue_total / 100).toFixed(2)} ₽</li>
+            <li>Эквайринг: {formatMoney(summary.revenue_online)}</li>
+            <li>Наличные (оператор): {formatMoney(summary.revenue_offline)}</li>
+            <li>Итого выручка: {formatMoney(summary.revenue_total)}</li>
             <li>Успешных платежей: {summary.successful_payments_count}</li>
-            <li>Средний чек (онлайн): {(summary.average_check / 100).toFixed(2)} ₽</li>
+            <li>Средний чек (онлайн): {formatMoney(summary.average_check)}</li>
           </ul>
+        ) : (
+          <LoadingState />
         )}
       </section>
 
       <section>
         <h2>Онлайн vs офлайн</h2>
-        {onlineOffline && (
-          <table>
-            <thead>
-              <tr>
-                <th>Канал</th>
-                <th>Кол-во</th>
-                <th>Сумма</th>
-              </tr>
-            </thead>
-            <tbody>
-              {Object.entries(onlineOffline).map(([key, value]) => (
-                <tr key={key}>
-                  <td>{key === "online" ? "Онлайн" : "Офлайн"}</td>
-                  <td>{value.count}</td>
-                  <td>{(value.amount / 100).toFixed(2)} ₽</td>
+        {onlineOffline ? (
+          <div className="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Канал</th>
+                  <th>Кол-во</th>
+                  <th>Сумма</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {Object.entries(onlineOffline).map(([key, value]) => (
+                  <tr key={key}>
+                    <td>{key === "online" ? "Онлайн" : "Офлайн"}</td>
+                    <td>{value.count}</td>
+                    <td>{formatMoney(value.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <LoadingState />
         )}
       </section>
 

@@ -5,6 +5,8 @@ import { useAuth } from "../auth/AuthContext";
 import { usePagination } from "../hooks/usePagination";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { PaginationControls } from "../components/PaginationControls";
+import { EmptyStateRow } from "../components/EmptyState";
+import { formatDateTime } from "../utils/format";
 import type { Giveaway, Ticket } from "../api/types";
 
 export function TicketsPage() {
@@ -147,28 +149,31 @@ export function TicketsPage() {
           <button onClick={() => downloadReport("xlsx")}>Экспорт XLSX</button>
         </div>
       )}
-      <table>
-        <thead>
-          <tr>
-            <th>Код</th>
-            <th>Розыгрыш</th>
-            <th>Участник</th>
-            <th>Источник</th>
-            <th>Выдан</th>
-          </tr>
-        </thead>
-        <tbody>
-          {tickets.map((t) => (
-            <tr key={t.id}>
-              <td>{t.full_code}</td>
-              <td>{t.giveaway_name}</td>
-              <td>{t.participant_full_name ?? t.participant_phone}</td>
-              <td>{t.source === "online" ? "Онлайн" : "Ручная"}</td>
-              <td>{new Date(t.created_at).toLocaleString("ru-RU")}</td>
+      <div className="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Код</th>
+              <th>Розыгрыш</th>
+              <th>Участник</th>
+              <th>Источник</th>
+              <th>Выдан</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {tickets.length === 0 && <EmptyStateRow colSpan={5} />}
+            {tickets.map((t) => (
+              <tr key={t.id}>
+                <td>{t.full_code}</td>
+                <td>{t.giveaway_name}</td>
+                <td>{t.participant_full_name ?? t.participant_phone}</td>
+                <td>{t.source === "online" ? "Онлайн" : "Ручная"}</td>
+                <td>{formatDateTime(t.created_at)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       <PaginationControls
         page={page}
         pageSize={pageSize}
