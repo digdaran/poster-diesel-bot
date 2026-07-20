@@ -30,6 +30,7 @@ from channels.telegram.state import (
     RegistrationStates,
     get_active_provider,
     get_channel_db,
+    get_provider_for_type,
 )
 
 if TYPE_CHECKING:
@@ -454,7 +455,6 @@ async def on_show_qr(callback: CallbackQuery) -> None:
 async def on_check_payment(callback: CallbackQuery) -> None:
     """Резервная проверка оплаты (п.7.5, 8.1, 10.2 ТЗ)."""
     db = get_channel_db()
-    provider = get_active_provider(db)
 
     with db.session() as session:
         participant = participant_service.get_participant_by_channel(
@@ -480,6 +480,10 @@ async def on_check_payment(callback: CallbackQuery) -> None:
         await callback.answer("Ожидающих оплаты счетов не найдено.", show_alert=True)
         return
 
+    # Сверяем статус ЧЕРЕЗ ТОТ БАНК, которым платёж был создан (`payment.provider`),
+    # а не через текущий активный провайдер — активный провайдер мог смениться в
+    # панели (Super Admin) после создания этого платежа (п.9.3 ТЗ, DECISIONS.md).
+    provider = get_provider_for_type(payment.provider)
     bank_status = provider.check_status(payment.order_id)
     if bank_status == PaymentStatus.PENDING:
         await callback.answer("Оплата ещё не поступила. Попробуйте чуть позже.", show_alert=True)

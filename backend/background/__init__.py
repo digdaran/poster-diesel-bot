@@ -16,9 +16,9 @@ import structlog
 from app.core.config import Settings
 from app.core.db import Database
 from app.models.base import utcnow
-from app.models.enums import PaymentStatus
+from app.models.enums import PaymentProviderType, PaymentStatus
 from app.models.payment import Payment
-from app.payments.factory import get_active_provider
+from app.payments.factory import create_provider
 from app.repositories import ticket_pool_repo as pool_repo
 from app.services import manual_registration_service as manual_svc
 from app.services import notification_service
@@ -36,19 +36,24 @@ def _reconcile_pending_payments(
     db: Database, settings: Settings, *, now: dt.datetime | None = None
 ) -> list[FinalizeOutcome]:
     with db.session() as session:
-        pending_ids = [
-            pid
-            for (pid,) in session.execute(
-                select(Payment.id).where(Payment.status == PaymentStatus.PENDING)
-            ).all()
-        ]
-    if not pending_ids:
+        pending: list[tuple[int, PaymentProviderType]] = list(
+            session.execute(
+                select(Payment.id, Payment.provider).where(Payment.status == PaymentStatus.PENDING)
+            )
+            .tuples()
+            .all()
+        )
+    if not pending:
         return []
 
-    provider = get_active_provider(db, settings)
     outcomes: list[FinalizeOutcome] = []
-    for payment_id in pending_ids:
+    for payment_id, provider_type in pending:
         try:
+            # Сверяем статус ЧЕРЕЗ ТОТ БАНК, которым конкретный платёж был создан
+            # (`Payment.provider`), а не через единый "текущий активный" провайдер —
+            # активный провайдер мог смениться в панели между созданием этого
+            # платежа и текущим тиком сверки (п.9.3 ТЗ, DECISIONS.md).
+            provider = create_provider(settings, provider_type)
             result = payment_svc.poll_pending_payment(
                 db,
                 provider,

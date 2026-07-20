@@ -127,10 +127,10 @@ def test_reconcile_pending_payments_returns_succeeded_outcome(
     )
     assert outcome.ok
     provider.set_status(outcome.order_id, PaymentStatus.SUCCEEDED)
-    # get_active_provider создаёт новый инстанс провайдера при каждом вызове
-    # (см. app/payments/factory.py) — для теста подменяем его на уже
-    # настроенный provider с проставленным статусом.
-    monkeypatch.setattr(background, "get_active_provider", lambda db, settings: provider)
+    # create_provider создаёт новый инстанс провайдера при каждом вызове (см.
+    # app/payments/factory.py) — для теста подменяем его на уже настроенный
+    # provider с проставленным статусом, независимо от запрошенного типа.
+    monkeypatch.setattr(background, "create_provider", lambda settings, provider_type: provider)
 
     outcomes = background._reconcile_pending_payments(db, settings, now=utcnow())
 
@@ -138,6 +138,45 @@ def test_reconcile_pending_payments_returns_succeeded_outcome(
     assert outcomes[0].applied
     assert outcomes[0].new_status == PaymentStatus.SUCCEEDED
     assert len(outcomes[0].tickets or []) == 2
+
+
+def test_reconcile_pending_payments_uses_each_payments_own_provider(
+    db: Database, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Регресс: раньше сверка резолвила ОДИН "активный" провайдер для ВСЕХ
+    PENDING-платежей разом — если активный провайдер сменился (в панели) после
+    создания платежа, статус проверялся через не тот банк, и платёж навсегда
+    оставался в PENDING (ровно так пользователь описал зависший T-Bank платёж).
+    Теперь для каждого платежа должен резолвиться его собственный `Payment.provider`."""
+    gid = make_giveaway(db, max_tickets=10)
+    pid = make_participant(db)
+    outcome = payment_svc.create_payment_safe(
+        db,
+        MockProvider(),
+        giveaway_id=gid,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=1,
+    )
+    assert outcome.ok
+
+    with db.session() as session:
+        payment = session.execute(
+            select(Payment).where(Payment.id == outcome.payment_id)
+        ).scalar_one()
+        recorded_provider_type = payment.provider
+
+    seen_provider_types = []
+
+    def fake_create_provider(settings, provider_type):  # type: ignore[no-untyped-def]
+        seen_provider_types.append(provider_type)
+        return MockProvider()
+
+    monkeypatch.setattr(background, "create_provider", fake_create_provider)
+
+    background._reconcile_pending_payments(db, settings, now=utcnow())
+
+    assert seen_provider_types == [recorded_provider_type]
 
 
 def test_reconcile_pending_payments_noop_when_none_pending(
