@@ -7,8 +7,8 @@ services:
     environment:
       DATABASE_PATH: /data/raffle.db
     volumes:
-      - db_data:/data
-      - backups_data:/backups
+      - ./data/db:/data
+      - ./data/backups:/backups
     networks: [internal]
     healthcheck:
       test: ["CMD", "curl", "-fs", "http://localhost:8000/health"]
@@ -26,7 +26,7 @@ services:
     environment:
       DATABASE_PATH: /data/raffle.db
     volumes:
-      - db_data:/data
+      - ./data/db:/data
     depends_on:
       backend:
         condition: service_healthy
@@ -54,8 +54,8 @@ services:
       - "443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
+      - ./data/caddy/data:/data
+      - ./data/caddy/config:/config
     depends_on:
       backend:
         condition: service_healthy
@@ -67,9 +67,3 @@ services:
 networks:
   internal:
     driver: bridge
-
-volumes:
-  db_data:
-  backups_data:
-  caddy_data:
-  caddy_config:

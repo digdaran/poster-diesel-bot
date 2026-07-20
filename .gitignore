@@ -19,7 +19,10 @@ htmlcov/
 *.pem
 *.key
 
-# Database
+# Runtime data — bind-mounted into containers from ./data (SQLite DB, backups,
+# Caddy TLS certs/ACME account). Never commit; directory structure kept via .gitkeep.
+/data/*
+!/data/.gitkeep
 *.db
 *.sqlite
 *.sqlite3

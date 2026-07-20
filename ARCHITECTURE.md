@@ -74,6 +74,7 @@ WHERE id = :id AND status = 'PENDING';
 ## 8. Инфраструктура
 
 - SQLite в режиме WAL, единый файл `DATABASE_PATH`, все процессы открывают соединение с `PRAGMA journal_mode=WAL; PRAGMA busy_timeout=<мс>`.
+- Все чувствительные рантайм-данные (БД, бэкапы, TLS-сертификаты/ACME-аккаунт Caddy) — bind mount в `./data/` внутри репозитория (не именованные Docker volumes), ради переносимости: копия каталога проекта содержит всё состояние для запуска на другом хосте (см. DECISIONS.md #28). `./data/` в `.gitignore`.
 - Caddy: HTTPS (ACME или self-signed для dev), IP-whitelist для панели (`frontend`/`backend` API), проксирование только webhook-эндпоинтов банков наружу, `/metrics` не проксируется.
 - `scripts/backup_db.sh` — `sqlite3 $DB "VACUUM INTO '$BACKUP'"`, gzip, ротация по `BACKUP_RETENTION_DAYS`.
 - `scripts/deploy.sh` — `git pull`, `docker compose build`, `docker compose up -d`, ожидание healthcheck.

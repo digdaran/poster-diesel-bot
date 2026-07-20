@@ -83,6 +83,27 @@ cp .env.example .env
 docker compose up --build
 ```
 
+### Хранение данных и перенос на другой хост
+
+Все чувствительные рантайм-данные — БД SQLite (`raffle.db` + WAL), снимки `backup_db.sh`
+и TLS-сертификаты/ACME-аккаунт Caddy — смонтированы bind mount'ом в `./data/` внутри
+каталога проекта (не в именованных Docker volumes), чтобы состояние переносилось вместе
+с копией репозитория:
+
+```
+data/
+├── db/        # raffle.db, raffle.db-wal, raffle.db-shm  (DATABASE_PATH внутри контейнера: /data/raffle.db)
+├── backups/   # снимки scripts/backup_db.sh
+└── caddy/
+    ├── data/    # сертификаты Let's Encrypt / ACME-аккаунт
+    └── config/  # состояние Caddy (autosave.json)
+```
+
+`./data/` в `.gitignore` — данные не коммитятся в git, но переносятся вместе с копией
+каталога проекта (`rsync`/`tar`/scp и т.п.). Чтобы поднять систему в том же состоянии на
+другом хосте: остановить стек (`docker compose down`), скопировать весь каталог проекта
+(включая `data/` и `.env`) на новый хост, запустить `docker compose up -d --build`.
+
 ### Обновление и резервное копирование
 
 - `scripts/deploy.sh` — `git pull` + пересборка образов + `docker compose up -d`
