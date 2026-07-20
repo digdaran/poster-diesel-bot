@@ -32,6 +32,7 @@ class PaymentStatus(str, enum.Enum):
     PENDING = "PENDING"
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
 
 
 class ManualRegistrationStatus(str, enum.Enum):

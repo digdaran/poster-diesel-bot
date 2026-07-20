@@ -68,8 +68,11 @@ async def _handle(
             },
             ip_address=ip,
         )
-    if outcome.applied and telegram_channel is not None:
-        await notification_service.notify_payment_outcome(db, telegram_channel, outcome)
+    if telegram_channel is not None:
+        if outcome.applied:
+            await notification_service.notify_payment_outcome(db, telegram_channel, outcome)
+        elif outcome.late_success_no_tickets:
+            await notification_service.notify_late_success_no_tickets(db, telegram_channel, outcome)
     return Response(status_code=status.HTTP_200_OK, content="ok")
 
 

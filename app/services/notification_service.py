@@ -30,6 +30,26 @@ if TYPE_CHECKING:
     from channels.telegram.channel import TelegramChannel
 
 _FAILURE_TEXT = "Платёж не прошёл. Резерв снят — можете попробовать оформить покупку заново."
+_LATE_SUCCESS_NO_TICKETS_TEXT = (
+    "Ваш платёж всё же прошёл успешно, но, к сожалению, к этому моменту свободные "
+    "номерки закончились. Пожалуйста, обратитесь в поддержку — деньги не потеряны, "
+    "мы решим вопрос вручную."
+)
+
+
+def _resolve_telegram_external_id(db: Database, participant_id: int) -> str | None:
+    with db.session() as session:
+        binding = (
+            session.execute(
+                select(ChannelBinding).where(
+                    ChannelBinding.participant_id == participant_id,
+                    ChannelBinding.channel == ChannelType.TELEGRAM,
+                )
+            )
+            .scalars()
+            .first()
+        )
+        return binding.external_user_id if binding else None
 
 
 async def notify_payment_outcome(
@@ -43,25 +63,17 @@ async def notify_payment_outcome(
     if not outcome.applied or outcome.participant_id is None:
         return
 
-    with db.session() as session:
-        binding = (
-            session.execute(
-                select(ChannelBinding).where(
-                    ChannelBinding.participant_id == outcome.participant_id,
-                    ChannelBinding.channel == ChannelType.TELEGRAM,
-                )
-            )
-            .scalars()
-            .first()
-        )
-        if binding is None:
-            return
-        external_user_id = binding.external_user_id
-        giveaway = (
-            session.get(Giveaway, outcome.giveaway_id) if outcome.giveaway_id is not None else None
-        )
+    external_user_id = _resolve_telegram_external_id(db, outcome.participant_id)
+    if external_user_id is None:
+        return
 
     if outcome.new_status == PaymentStatus.SUCCEEDED:
+        with db.session() as session:
+            giveaway = (
+                session.get(Giveaway, outcome.giveaway_id)
+                if outcome.giveaway_id is not None
+                else None
+            )
         codes = [t.full_code for t in (outcome.tickets or [])]
         await telegram_channel.deliver_purchase(
             external_user_id,
@@ -71,3 +83,20 @@ async def notify_payment_outcome(
         )
     else:
         await telegram_channel.send_message(external_user_id, _FAILURE_TEXT)
+
+
+async def notify_late_success_no_tickets(
+    db: Database, telegram_channel: TelegramChannel, outcome: FinalizeOutcome
+) -> None:
+    """Платёж подтверждён банком уже ПОСЛЕ того, как он был помечен
+    CANCELLED/FAILED (отмена участником или истечение TTL) и резерв роздан —
+    повторно захватить номерки не удалось (см.
+    `payment_service._recover_late_success`, DECISIONS.md). Автоматический
+    возврат не делается (ТЗ §21) — сообщаем участнику, чтобы он не остался в
+    неведении, что деньги списаны."""
+    if outcome.participant_id is None:
+        return
+    external_user_id = _resolve_telegram_external_id(db, outcome.participant_id)
+    if external_user_id is None:
+        return
+    await telegram_channel.send_message(external_user_id, _LATE_SUCCESS_NO_TICKETS_TEXT)

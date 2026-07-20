@@ -154,3 +154,25 @@ async def test_notify_noop_when_not_applied(db: Database) -> None:
     await notification_service.notify_payment_outcome(db, channel, not_applied)
     assert not channel.deliver_purchase_calls
     assert not channel.send_message_calls
+
+
+async def test_notify_late_success_no_tickets_sends_message_via_binding(db: Database) -> None:
+    pid = make_participant_with_binding(db)
+    outcome = svc.FinalizeOutcome(applied=False, participant_id=pid, late_success_no_tickets=True)
+    channel = FakeTelegramChannel()
+
+    await notification_service.notify_late_success_no_tickets(db, channel, outcome)
+
+    assert len(channel.send_message_calls) == 1
+    assert channel.send_message_calls[0][0] == "123456"
+    assert not channel.deliver_purchase_calls
+
+
+async def test_notify_late_success_no_tickets_without_binding_is_noop(db: Database) -> None:
+    pid = make_participant_without_binding(db)
+    outcome = svc.FinalizeOutcome(applied=False, participant_id=pid, late_success_no_tickets=True)
+    channel = FakeTelegramChannel()
+
+    await notification_service.notify_late_success_no_tickets(db, channel, outcome)
+
+    assert not channel.send_message_calls

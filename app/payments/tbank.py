@@ -118,6 +118,32 @@ class TBankProvider(BasePaymentProvider):
             )
         return self._map_status(data.get("Status", ""))
 
+    def cancel(self, order_id: str, *, external_payment_id: str | None = None) -> PaymentStatus:
+        """Закрывает неоплаченную платёжную сессию через `Cancel`.
+
+        Сначала обязательно проверяет актуальный статус через `check_status` —
+        `Cancel` на уже ПОДТВЕРЖДЁННОМ платеже у Т-Банк технически исполняется
+        как возврат денег (проверено напрямую на боевом контуре), а возврат уже
+        оплаченных платежей вне объёма этой версии (ТЗ §21). Если платёж уже
+        оплачен — `Cancel` не вызывается вовсе, возвращается `SUCCEEDED`, и
+        вызывающая сторона (`payment_service.finalize_payment`) обязана
+        обработать это как позднюю успешную оплату, а не как отмену.
+        """
+        current_status = self.check_status(order_id, external_payment_id=external_payment_id)
+        if current_status == PaymentStatus.SUCCEEDED:
+            return PaymentStatus.SUCCEEDED
+
+        request_body = {"TerminalKey": self.terminal_key, "PaymentId": external_payment_id}
+        request_body["Token"] = self._sign(request_body)
+        response = httpx.post(f"{self.api_base}/Cancel", json=request_body, timeout=15.0)
+        response.raise_for_status()
+        data = response.json()
+        if not data.get("Success"):
+            raise RuntimeError(
+                f"Т-Банк Cancel отклонён: {data.get('Message')} / {data.get('Details')}"
+            )
+        return PaymentStatus.CANCELLED
+
     @staticmethod
     def _map_status(bank_status: str) -> PaymentStatus:
         if bank_status in _SUCCESS_STATUSES:

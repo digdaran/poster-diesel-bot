@@ -54,6 +54,13 @@ class MockProvider(BasePaymentProvider):
     ) -> PaymentStatus:
         return self._statuses.get(order_id, PaymentStatus.PENDING)
 
+    def cancel(self, order_id: str, *, external_payment_id: str | None = None) -> PaymentStatus:
+        current = self._statuses.get(order_id, PaymentStatus.PENDING)
+        if current == PaymentStatus.SUCCEEDED:
+            return PaymentStatus.SUCCEEDED
+        self._statuses[order_id] = PaymentStatus.CANCELLED
+        return PaymentStatus.CANCELLED
+
     def build_webhook_payload(self, order_id: str, status: PaymentStatus) -> bytes:
         """Формирует подписанное тело webhook — для тестов роутера webhook."""
         payload = {"order_id": order_id, "status": status.value}

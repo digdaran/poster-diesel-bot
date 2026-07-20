@@ -9,6 +9,7 @@ import threading
 
 import pytest
 from app.core.db import Database
+from app.models.audit_log import AuditLog
 from app.models.base import utcnow
 from app.models.enums import PanelUserRole, PaymentStatus
 from app.models.giveaway import Giveaway
@@ -506,3 +507,273 @@ def test_poll_pending_payment_max_attempts_exhausted(db: Database) -> None:
     assert result is not None
     assert result.outcome is not None
     assert result.outcome.new_status == PaymentStatus.FAILED
+
+
+def test_cancel_payment_releases_reservation_and_sets_cancelled(db: Database) -> None:
+    gid = make_giveaway(db, max_tickets=10)
+    pid = make_participant(db)
+    provider = MockProvider()
+    outcome = svc.create_payment_safe(
+        db,
+        provider,
+        giveaway_id=gid,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=3,
+    )
+    assert outcome.ok
+    assert pool_svc.get_free_count(db, giveaway_id=gid) == 7
+
+    cancel_outcome = svc.cancel_payment(db, provider, payment_id=outcome.payment_id)
+
+    assert cancel_outcome.applied
+    assert cancel_outcome.current_status == PaymentStatus.CANCELLED
+    assert cancel_outcome.late_success_outcome is None
+    assert pool_svc.get_free_count(db, giveaway_id=gid) == 10
+    with db.session() as session:
+        payment = session.execute(
+            select(Payment).where(Payment.id == outcome.payment_id)
+        ).scalar_one()
+        assert payment.status == PaymentStatus.CANCELLED
+        assert payment.cancelled_at is not None
+
+
+def test_cancel_payment_noop_on_already_terminal_payment(db: Database) -> None:
+    gid = make_giveaway(db, max_tickets=10)
+    pid = make_participant(db)
+    provider = MockProvider()
+    outcome = svc.create_payment_safe(
+        db,
+        provider,
+        giveaway_id=gid,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=1,
+    )
+    assert outcome.ok
+    finalize = svc.finalize_payment(
+        db, order_id=outcome.order_id, new_status=PaymentStatus.SUCCEEDED
+    )
+    assert finalize.applied
+
+    cancel_outcome = svc.cancel_payment(db, provider, payment_id=outcome.payment_id)
+
+    assert not cancel_outcome.applied
+    assert cancel_outcome.current_status == PaymentStatus.SUCCEEDED
+    assert cancel_outcome.late_success_outcome is None
+
+
+def test_cancel_payment_race_bank_already_confirmed_recovers_via_finalize(db: Database) -> None:
+    """Гонка: участник нажимает "отменить" ровно в момент, когда банк уже
+    подтвердил оплату — cancel_payment не должен звать банковский Cancel
+    (у Т-Банк это исполнилось бы как возврат), а обязан провести платёж через
+    ту же страховку восстановления, что и webhook/фоновая сверка."""
+    gid = make_giveaway(db, max_tickets=10)
+    pid = make_participant(db)
+    provider = MockProvider()
+    outcome = svc.create_payment_safe(
+        db,
+        provider,
+        giveaway_id=gid,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=2,
+    )
+    assert outcome.ok
+    # Банк "внезапно" сообщает, что платёж уже оплачен, ДО того как мы успели
+    # вызвать cancel — MockProvider.cancel() сам обнаружит это через check_status.
+    provider.set_status(outcome.order_id, PaymentStatus.SUCCEEDED)
+
+    cancel_outcome = svc.cancel_payment(db, provider, payment_id=outcome.payment_id)
+
+    assert not cancel_outcome.applied
+    assert cancel_outcome.current_status == PaymentStatus.SUCCEEDED
+    assert cancel_outcome.late_success_outcome is not None
+    assert cancel_outcome.late_success_outcome.applied
+    assert cancel_outcome.late_success_outcome.new_status == PaymentStatus.SUCCEEDED
+    assert len(cancel_outcome.late_success_outcome.tickets or []) == 2
+
+    with db.session() as session:
+        payment = session.execute(
+            select(Payment).where(Payment.id == outcome.payment_id)
+        ).scalar_one()
+        assert payment.status == PaymentStatus.SUCCEEDED
+
+
+def test_cancel_payment_concurrent_with_finalize_only_one_applies(db: Database) -> None:
+    """Гонка: cancel_payment и finalize_payment(SUCCEEDED) для одного платежа
+    одновременно — атомарный условный UPDATE гарантирует, что выигрывает
+    ровно одна сторона."""
+    gid = make_giveaway(db, max_tickets=10)
+    pid = make_participant(db)
+    provider = MockProvider()
+    outcome = svc.create_payment_safe(
+        db,
+        provider,
+        giveaway_id=gid,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=2,
+    )
+    assert outcome.ok
+
+    results: list[object] = []
+    barrier = threading.Barrier(2)
+
+    def cancel_worker() -> None:
+        barrier.wait()
+        results.append(svc.cancel_payment(db, provider, payment_id=outcome.payment_id))
+
+    def finalize_worker() -> None:
+        barrier.wait()
+        results.append(
+            svc.finalize_payment(db, order_id=outcome.order_id, new_status=PaymentStatus.SUCCEEDED)
+        )
+
+    threads = [threading.Thread(target=cancel_worker), threading.Thread(target=finalize_worker)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    with db.session() as session:
+        payment = session.execute(
+            select(Payment).where(Payment.id == outcome.payment_id)
+        ).scalar_one()
+        # Ровно один переход должен был реально произойти — либо SUCCEEDED
+        # (finalize выиграл гонку), либо CANCELLED (cancel выиграл, а поздний
+        # finalize-вызов из этого же теста тогда — no-op со стороны finalize,
+        # либо recovery, если finalize успел зайти первым в БД, но опросить
+        # банк уже после cancel — оба исхода корректны и не оставляют платёж
+        # в PENDING и не выдают номерки дважды).
+        assert payment.status in (PaymentStatus.SUCCEEDED, PaymentStatus.CANCELLED)
+        tickets = list(
+            session.execute(select(Ticket).where(Ticket.payment_id == outcome.payment_id)).scalars()
+        )
+        assert len(tickets) in (0, 2)  # либо не выданы, либо выданы РОВНО один раз
+
+
+def test_finalize_late_success_recovers_tickets_after_cancel(db: Database) -> None:
+    """Платёж уже CANCELLED (участник отменил), но банк потом всё же
+    подтверждает оплату (напр. webhook пришёл с задержкой) — если номерки
+    физически ещё свободны, они должны быть выданы автоматически."""
+    gid = make_giveaway(db, max_tickets=10)
+    pid = make_participant(db)
+    provider = MockProvider()
+    outcome = svc.create_payment_safe(
+        db,
+        provider,
+        giveaway_id=gid,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=3,
+    )
+    assert outcome.ok
+    cancel_outcome = svc.cancel_payment(db, provider, payment_id=outcome.payment_id)
+    assert cancel_outcome.applied
+    assert pool_svc.get_free_count(db, giveaway_id=gid) == 10
+
+    late = svc.finalize_payment(db, order_id=outcome.order_id, new_status=PaymentStatus.SUCCEEDED)
+
+    assert late.applied
+    assert late.new_status == PaymentStatus.SUCCEEDED
+    assert len(late.tickets or []) == 3
+    assert not late.late_success_no_tickets
+    with db.session() as session:
+        payment = session.execute(
+            select(Payment).where(Payment.id == outcome.payment_id)
+        ).scalar_one()
+        assert payment.status == PaymentStatus.SUCCEEDED
+        audit_entries = list(
+            session.execute(
+                select(AuditLog).where(AuditLog.action == "payment_late_success_recovered")
+            ).scalars()
+        )
+        assert len(audit_entries) == 1
+
+
+def test_finalize_late_success_recovers_ignoring_locked_giveaway(db: Database) -> None:
+    """Розыгрыш закрыт/заблокирован администратором ПОСЛЕ отмены, но номерки
+    физически ещё свободны — восстановление всё равно должно выдать их,
+    т.к. деньги уже списаны (подтверждено владельцем — см. DECISIONS.md)."""
+    gid = make_giveaway(db, max_tickets=10)
+    pid = make_participant(db)
+    provider = MockProvider()
+    outcome = svc.create_payment_safe(
+        db,
+        provider,
+        giveaway_id=gid,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=2,
+    )
+    assert outcome.ok
+    cancel_outcome = svc.cancel_payment(db, provider, payment_id=outcome.payment_id)
+    assert cancel_outcome.applied
+
+    with db.session() as session:
+        giveaway = session.get(Giveaway, gid)
+        assert giveaway is not None
+        giveaway.is_locked = True
+        giveaway.is_registration_open = False
+        session.flush()
+
+    late = svc.finalize_payment(db, order_id=outcome.order_id, new_status=PaymentStatus.SUCCEEDED)
+
+    assert late.applied
+    assert len(late.tickets or []) == 2
+
+
+def test_finalize_late_success_no_tickets_available_writes_audit_and_stays_cancelled(
+    db: Database,
+) -> None:
+    """Розыгрыш почти распродан: после отмены остаток разобрали другие
+    покупатели — восстановить номерки не удаётся. Без авто-возврата (ТЗ §21),
+    но с чёткой записью в аудит для ручного разбора."""
+    gid = make_giveaway(db, max_tickets=2)
+    pid = make_participant(db)
+    other_pid = make_participant(db, "79990009999")
+    provider = MockProvider()
+    outcome = svc.create_payment_safe(
+        db,
+        provider,
+        giveaway_id=gid,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=2,
+    )
+    assert outcome.ok
+    cancel_outcome = svc.cancel_payment(db, provider, payment_id=outcome.payment_id)
+    assert cancel_outcome.applied
+    assert pool_svc.get_free_count(db, giveaway_id=gid) == 2
+
+    other_outcome = svc.create_payment_safe(
+        db,
+        MockProvider(),
+        giveaway_id=gid,
+        participant_id=other_pid,
+        participant_phone="79990009999",
+        quantity=2,
+    )
+    assert other_outcome.ok
+    assert pool_svc.get_free_count(db, giveaway_id=gid) == 0
+
+    late = svc.finalize_payment(db, order_id=outcome.order_id, new_status=PaymentStatus.SUCCEEDED)
+
+    assert not late.applied
+    assert late.late_success_no_tickets
+    assert not late.tickets
+    with db.session() as session:
+        payment = session.execute(
+            select(Payment).where(Payment.id == outcome.payment_id)
+        ).scalar_one()
+        assert payment.status == PaymentStatus.CANCELLED  # не переписан
+        audit_entries = list(
+            session.execute(
+                select(AuditLog).where(
+                    AuditLog.action == "payment_late_success_no_tickets_available"
+                )
+            ).scalars()
+        )
+        assert len(audit_entries) == 1
+        assert audit_entries[0].entity_id == outcome.payment_id

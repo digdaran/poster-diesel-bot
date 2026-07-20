@@ -52,5 +52,8 @@ class VTBProvider(BasePaymentProvider):
     ) -> PaymentStatus:
         raise NotImplementedError(_NOT_IMPLEMENTED_MSG)
 
+    def cancel(self, order_id: str, *, external_payment_id: str | None = None) -> PaymentStatus:
+        raise NotImplementedError(_NOT_IMPLEMENTED_MSG)
+
     def verify_and_parse_webhook(self, *, headers: dict[str, str], body: bytes) -> WebhookEvent:
         raise NotImplementedError(_NOT_IMPLEMENTED_MSG)

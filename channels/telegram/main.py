@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 
 import structlog
+from aiogram.types import BotCommand
 from app.core.config import get_settings
 
 from channels.telegram.channel import TelegramChannel
@@ -13,6 +14,11 @@ from channels.telegram.dispatcher import get_dispatcher
 from channels.telegram.handlers import set_channel
 
 logger = structlog.get_logger(__name__)
+
+_BOT_COMMANDS = [
+    BotCommand(command="start", description="Начать / главное меню"),
+    BotCommand(command="help", description="Справка"),
+]
 
 
 async def run() -> None:
@@ -24,6 +30,7 @@ async def run() -> None:
         token=settings.telegram_bot_token, proxy_url=settings.telegram_proxy_url or None
     )
     set_channel(channel)
+    await channel.bot.set_my_commands(_BOT_COMMANDS)
 
     dp = get_dispatcher()
     logger.info("telegram_channel_starting")

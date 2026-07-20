@@ -170,6 +170,50 @@ def test_create_payment_omits_notification_url_when_not_configured(
     assert "NotificationURL" not in kwargs["json"]
 
 
+def test_cancel_checks_status_first_then_cancels_when_still_pending(
+    provider: TBankProvider,
+) -> None:
+    with patch("app.payments.tbank.httpx.post") as mock_post:
+        mock_post.side_effect = [
+            _response({"Success": True, "Status": "NEW"}),  # check_status (GetState)
+            _response({"Success": True, "Status": "CANCELED"}),  # Cancel
+        ]
+        status = provider.cancel("order-1", external_payment_id="bank-payment-42")
+
+    assert status == PaymentStatus.CANCELLED
+    assert mock_post.call_count == 2
+    getstate_url, cancel_url = (call.args[0] for call in mock_post.call_args_list)
+    assert getstate_url.endswith("/GetState")
+    assert cancel_url.endswith("/Cancel")
+    _, cancel_kwargs = mock_post.call_args_list[1]
+    assert cancel_kwargs["json"]["PaymentId"] == "bank-payment-42"
+
+
+def test_cancel_does_not_call_bank_cancel_when_already_confirmed(
+    provider: TBankProvider,
+) -> None:
+    """Регресс на боевой инцидент: Cancel на уже ПОДТВЕРЖДЁННОМ платеже у
+    Т-Банк технически исполняется как возврат денег — must never be called
+    blindly. Если check_status уже говорит SUCCEEDED, банковский Cancel не
+    вызывается вовсе."""
+    with patch("app.payments.tbank.httpx.post") as mock_post:
+        mock_post.return_value = _response({"Success": True, "Status": "CONFIRMED"})
+        status = provider.cancel("order-1", external_payment_id="bank-payment-42")
+
+    assert status == PaymentStatus.SUCCEEDED
+    assert mock_post.call_count == 1  # только GetState, Cancel не вызван
+
+
+def test_cancel_raises_on_bank_error(provider: TBankProvider) -> None:
+    with patch("app.payments.tbank.httpx.post") as mock_post:
+        mock_post.side_effect = [
+            _response({"Success": True, "Status": "NEW"}),
+            _response({"Success": False, "ErrorCode": "1", "Message": "Что-то пошло не так"}),
+        ]
+        with pytest.raises(RuntimeError, match="Cancel отклонён"):
+            provider.cancel("order-1", external_payment_id="bank-payment-42")
+
+
 def test_from_settings_builds_notification_url_from_panel_domain() -> None:
     from app.core.config import Settings
 

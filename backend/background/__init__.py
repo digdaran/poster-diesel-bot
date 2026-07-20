@@ -62,8 +62,10 @@ def _reconcile_pending_payments(
                 ttl_seconds=settings.online_reservation_ttl_sec,
                 now=now,
             )
-            if result is not None and result.outcome is not None and result.outcome.applied:
-                outcomes.append(result.outcome)
+            if result is not None and result.outcome is not None:
+                outcome = result.outcome
+                if outcome.applied or outcome.late_success_no_tickets:
+                    outcomes.append(outcome)
         except Exception:
             logger.exception("payment_poll_failed", payment_id=payment_id)
     return outcomes
@@ -108,7 +110,14 @@ async def run_background_loop(
             await asyncio.to_thread(_release_expired_manual_registrations, db, settings)
             if telegram_channel is not None:
                 for outcome in outcomes:
-                    await notification_service.notify_payment_outcome(db, telegram_channel, outcome)
+                    if outcome.late_success_no_tickets:
+                        await notification_service.notify_late_success_no_tickets(
+                            db, telegram_channel, outcome
+                        )
+                    else:
+                        await notification_service.notify_payment_outcome(
+                            db, telegram_channel, outcome
+                        )
         except Exception:
             logger.exception("background_reconciliation_tick_failed")
         await asyncio.sleep(settings.online_status_poll_interval_sec)

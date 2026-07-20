@@ -42,6 +42,7 @@ class Payment(Base):
     raw_webhook_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[dt.datetime] = created_at_column(index=True)
     confirmed_at: Mapped[dt.datetime | None] = mapped_column(nullable=True)
+    cancelled_at: Mapped[dt.datetime | None] = mapped_column(nullable=True)
 
     # Ссылка на оплату и содержимое QR (СБП) — one-shot данные от провайдера в
     # момент создания платежа (см. CreatedPayment), сохраняются здесь, т.к.

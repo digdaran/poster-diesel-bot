@@ -24,6 +24,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
     Update,
 )
+from aiogram.utils.chat_action import ChatActionSender
 from app.channels.base import BaseMessengerChannel, ChannelCapabilities
 from app.models.enums import ChannelType
 
@@ -112,6 +113,11 @@ class TelegramChannel(BaseMessengerChannel):
             reply_markup=keyboard,
         )
 
+    def typing_action(self, chat_id: str) -> ChatActionSender:
+        """Показывает "печатает…" на время сетевого запроса к банку/провайдеру
+        (aiogram сам повторяет действие каждые ~5с, пока не завершится `async with`)."""
+        return ChatActionSender.typing(bot=self.bot, chat_id=chat_id)
+
     def render_keyboard(self, buttons: list[list[str]]) -> ReplyKeyboardMarkup:
         return ReplyKeyboardMarkup(
             keyboard=[[KeyboardButton(text=label) for label in row] for row in buttons],
@@ -128,6 +134,13 @@ class TelegramChannel(BaseMessengerChannel):
             )
         rows.append(
             [InlineKeyboardButton(text="🔄 Проверить статус оплаты", callback_data="check_payment")]
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="❌ Отменить платёж", callback_data=f"cancel_payment:{order_id}"
+                )
+            ]
         )
         return InlineKeyboardMarkup(inline_keyboard=rows)
 

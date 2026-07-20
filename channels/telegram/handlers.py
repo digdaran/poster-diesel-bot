@@ -16,10 +16,10 @@ from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from app.core.phone import InvalidPhoneError
-from app.models.enums import ChannelType, PaymentStatus
+from app.models.enums import AuditActorType, ChannelType, PaymentStatus
 from app.models.giveaway import Giveaway
 from app.models.ticket import Ticket
-from app.services import participant_service, settings_service
+from app.services import audit_service, participant_service, settings_service
 from app.services import payment_service as payment_svc
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -304,8 +304,7 @@ async def _handle_quantity_selected(
         )
 
     if participant is not None:
-        await _create_and_offer_payment(reply_target, giveaway_id, quantity, participant.id)
-        await state.clear()
+        await _prompt_confirm_order(reply_target, state, giveaway_id, quantity, participant.id)
         return
 
     # Подарочная покупка на неподтверждённый номер (п.7.1, 10.3, 10.5 ТЗ): просим
@@ -376,8 +375,67 @@ async def on_phone_entered(message: Message, state: FSMContext) -> None:
             await message.answer("Не удалось распознать номер телефона. Попробуйте ещё раз.")
             return
 
-    await _create_and_offer_payment(message, giveaway_id, quantity, participant_id)
+    await _prompt_confirm_order(message, state, giveaway_id, quantity, participant_id)
+
+
+async def _prompt_confirm_order(
+    reply_target: Message,
+    state: FSMContext,
+    giveaway_id: int,
+    quantity: int,
+    participant_id: int,
+) -> None:
+    """Шаг подтверждения перед резервированием номерков и созданием платежа —
+    случайный тап по количеству иначе сразу занимал бы номерки из общего пула."""
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+    db = get_channel_db()
+    with db.session() as session:
+        giveaway = session.get(Giveaway, giveaway_id)
+    if giveaway is None:
+        await state.clear()
+        await reply_target.answer("Розыгрыш недоступен. Начните заново — «🎟 Купить номерки».")
+        return
+
+    total = giveaway.ticket_price * quantity / 100
+    await state.update_data(
+        giveaway_id=giveaway_id, quantity=quantity, participant_id=participant_id
+    )
+    await state.set_state(PurchaseStates.confirming_order)
+    await reply_target.answer(
+        f"«{giveaway.name}»: {quantity} номерок(ов) × {giveaway.ticket_price / 100:.2f} ₽ "
+        f"= {total:.2f} ₽. Подтвердить покупку?",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="✅ Подтвердить", callback_data="confirm_order:yes")],
+                [InlineKeyboardButton(text="◀️ Назад", callback_data="confirm_order:back")],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data == "confirm_order:yes")
+async def on_confirm_order_yes(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    await _create_and_offer_payment(
+        _msg(callback), data["giveaway_id"], data["quantity"], data["participant_id"]
+    )
     await state.clear()
+    await callback.answer()
+
+
+@router.callback_query(F.data == "confirm_order:back")
+async def on_confirm_order_back(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    db = get_channel_db()
+    with db.session() as session:
+        giveaway = session.get(Giveaway, data["giveaway_id"])
+    if giveaway is None:
+        await state.clear()
+        await callback.answer("Розыгрыш недоступен.", show_alert=True)
+        return
+    await _prompt_quantity(_msg(callback), state, giveaway)
+    await callback.answer()
 
 
 async def _create_and_offer_payment(
@@ -393,14 +451,15 @@ async def _create_and_offer_payment(
         participant = session.get(Participant, participant_id)
         phone = participant.phone if participant else ""
 
-    outcome = payment_svc.create_payment_safe(
-        db,
-        provider,
-        giveaway_id=giveaway_id,
-        participant_id=participant_id,
-        participant_phone=phone,
-        quantity=quantity,
-    )
+    async with channel.typing_action(chat_id=str(message.chat.id)):
+        outcome = payment_svc.create_payment_safe(
+            db,
+            provider,
+            giveaway_id=giveaway_id,
+            participant_id=participant_id,
+            participant_phone=phone,
+            quantity=quantity,
+        )
     if not outcome.ok:
         if outcome.has_active_purchase:
             await message.answer(
@@ -485,9 +544,10 @@ async def on_check_payment(callback: CallbackQuery) -> None:
     # панели (Super Admin) после создания этого платежа (п.9.3 ТЗ, DECISIONS.md).
     provider = get_provider_for_type(payment.provider)
     try:
-        bank_status = provider.check_status(
-            payment.order_id, external_payment_id=payment.external_payment_id
-        )
+        async with _get_channel().typing_action(chat_id=str(_msg(callback).chat.id)):
+            bank_status = provider.check_status(
+                payment.order_id, external_payment_id=payment.external_payment_id
+            )
     except Exception:
         logger.exception("check_payment_status_failed", payment_id=payment.id)
         await callback.answer(
@@ -506,6 +566,75 @@ async def on_check_payment(callback: CallbackQuery) -> None:
         await callback.answer("Платёж не прошёл.", show_alert=True)
     else:
         await callback.answer("Статус пока без изменений.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("cancel_payment:"))
+async def on_cancel_payment(callback: CallbackQuery) -> None:
+    """Отмена НЕОПЛАЧЕННОГО платежа (п.7.5 ТЗ, DECISIONS.md) — снимает резерв
+    номерков и закрывает сессию у банка. Не возврат уже оплаченного платежа
+    (ТЗ §21) — работает только пока платёж ещё в статусе PENDING."""
+    assert callback.data is not None
+    order_id = callback.data.split(":", 1)[1]
+
+    from app.models.payment import Payment
+
+    db = get_channel_db()
+    with db.session() as session:
+        payment = session.execute(
+            select(Payment).where(Payment.order_id == order_id)
+        ).scalar_one_or_none()
+        if payment is None:
+            await callback.answer("Платёж не найден.", show_alert=True)
+            return
+        payment_id = payment.id
+        provider_type = payment.provider
+        actor_label = payment.participant.phone
+
+    provider = get_provider_for_type(provider_type)
+    try:
+        outcome = payment_svc.cancel_payment(db, provider, payment_id=payment_id)
+    except Exception:
+        logger.exception("cancel_payment_failed", payment_id=payment_id)
+        await callback.answer("Не удалось отменить платёж. Попробуйте чуть позже.", show_alert=True)
+        return
+
+    if outcome.applied:
+        with db.session() as session:
+            audit_service.log(
+                session,
+                action="payment_cancel",
+                actor_type=AuditActorType.PARTICIPANT,
+                actor_label=actor_label,
+                entity_type="payment",
+                entity_id=payment_id,
+            )
+        await callback.answer("Платёж отменён, резерв снят.")
+        await _msg(callback).answer(
+            "Платёж отменён, резерв номерков снят. Можете оформить новую покупку."
+        )
+        return
+
+    late = outcome.late_success_outcome
+    if late is not None:
+        if late.applied and late.new_status == PaymentStatus.SUCCEEDED:
+            # Гонка: банк подтвердил оплату прямо в момент отмены — деньги
+            # реально списаны, выдаём номерки как при обычном успехе.
+            await _deliver_tickets(_msg(callback), late)
+            await callback.answer("Оплата прошла успешно!")
+        elif late.late_success_no_tickets:
+            await callback.answer(
+                "Оплата прошла успешно, но свободные номерки закончились. "
+                "Обратитесь в поддержку — деньги не потеряны.",
+                show_alert=True,
+            )
+        else:
+            await callback.answer("Статус платежа уже изменился.", show_alert=True)
+        return
+
+    await callback.answer(
+        f"Платёж уже в статусе {outcome.current_status.value if outcome.current_status else '—'}.",
+        show_alert=True,
+    )
 
 
 async def _deliver_tickets(message: Message, outcome: payment_svc.FinalizeOutcome) -> None:
@@ -568,3 +697,32 @@ async def on_help(message: Message) -> None:
         for key, value in contacts.items():
             lines.append(f"{key}: {value}")
     await message.answer("\n".join(lines))
+
+
+@router.message()
+async def on_unhandled_message(message: Message) -> None:
+    """Подстраховка вместо тишины: срабатывает только когда сообщение не подошло
+    ни под один фильтр/состояние выше (регистрация в порядке @router.message() —
+    последний хендлер получает то, что не разобрали остальные)."""
+    channel = _get_channel()
+    db = get_channel_db()
+    with db.session() as session:
+        participant = participant_service.get_participant_by_channel(
+            session, channel=ChannelType.TELEGRAM, external_user_id=_uid(message)
+        )
+
+    if participant is not None and participant.full_name is not None:
+        keyboard = channel.render_keyboard(_MAIN_KEYBOARD_BUTTONS)
+        await message.answer(
+            "Не понял команду. Воспользуйтесь кнопками ниже или напишите /help.",
+            reply_markup=keyboard,
+        )
+    else:
+        await message.answer("Не понял команду. Напишите /start, чтобы продолжить.")
+
+
+@router.callback_query()
+async def on_unhandled_callback(callback: CallbackQuery) -> None:
+    """Устаревшая инлайн-кнопка (сообщение из прошлого шага диалога) — не подошла
+    ни под один фильтр выше."""
+    await callback.answer("Это действие больше недоступно. Напишите /start.", show_alert=True)
