@@ -105,3 +105,81 @@ def test_create_payment_extracts_external_payment_id(provider: TBankProvider) ->
             )
         )
     assert created.external_payment_id == "bank-payment-99"
+
+
+def test_create_payment_sends_notification_url_when_configured() -> None:
+    """Регресс на боевой инцидент: вебхуки ни разу не доходили до backend, а
+    личный кабинет банка не гарантированно содержит правильный URL уведомления
+    для терминала — теперь передаём его явно в каждом Init-запросе (см.
+    DECISIONS.md), не полагаясь на настройки кабинета."""
+    from app.payments.base import PaymentOrder
+
+    provider = TBankProvider(
+        terminal_key="term-1",
+        secret_key="secret-1",
+        api_base="https://acq.tbank.example/v2",
+        notification_url="https://example.ru/webhooks/tbank",
+    )
+    with patch("app.payments.tbank.httpx.post") as mock_post:
+        mock_post.return_value = _response(
+            {
+                "Success": True,
+                "PaymentURL": "https://acq.tbank.example/pay/xyz",
+                "PaymentId": "bank-payment-99",
+            }
+        )
+        provider.create_payment(
+            PaymentOrder(
+                order_id="order-1",
+                amount=1000,
+                quantity=1,
+                description="test",
+                participant_phone="79991234567",
+            )
+        )
+
+    _, kwargs = mock_post.call_args
+    body = kwargs["json"]
+    assert body["NotificationURL"] == "https://example.ru/webhooks/tbank"
+
+
+def test_create_payment_omits_notification_url_when_not_configured(
+    provider: TBankProvider,
+) -> None:
+    from app.payments.base import PaymentOrder
+
+    with patch("app.payments.tbank.httpx.post") as mock_post:
+        mock_post.return_value = _response(
+            {
+                "Success": True,
+                "PaymentURL": "https://acq.tbank.example/pay/xyz",
+                "PaymentId": "bank-payment-99",
+            }
+        )
+        provider.create_payment(
+            PaymentOrder(
+                order_id="order-1",
+                amount=1000,
+                quantity=1,
+                description="test",
+                participant_phone="79991234567",
+            )
+        )
+
+    _, kwargs = mock_post.call_args
+    assert "NotificationURL" not in kwargs["json"]
+
+
+def test_from_settings_builds_notification_url_from_panel_domain() -> None:
+    from app.core.config import Settings
+
+    settings = Settings(
+        JWT_SECRET="test-secret-not-for-production-use-only-in-tests",
+        SUPERADMIN_PASSWORD="test-password",
+        PANEL_DOMAIN="bot.example.ru",
+        TBANK_TERMINAL_KEY="term-1",
+        TBANK_SECRET_KEY="secret-1",
+        TBANK_API_BASE="https://acq.tbank.example/v2",
+    )
+    provider = TBankProvider.from_settings(settings)
+    assert provider.notification_url == "https://bot.example.ru/webhooks/tbank"

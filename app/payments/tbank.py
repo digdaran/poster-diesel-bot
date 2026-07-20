@@ -34,10 +34,18 @@ _FAILED_STATUSES = {"REJECTED", "CANCELED", "DEADLINE_EXPIRED", "REVERSED", "REF
 class TBankProvider(BasePaymentProvider):
     provider_type = PaymentProviderType.TBANK
 
-    def __init__(self, *, terminal_key: str, secret_key: str, api_base: str) -> None:
+    def __init__(
+        self,
+        *,
+        terminal_key: str,
+        secret_key: str,
+        api_base: str,
+        notification_url: str | None = None,
+    ) -> None:
         self.terminal_key = terminal_key
         self.secret_key = secret_key
         self.api_base = api_base.rstrip("/")
+        self.notification_url = notification_url
 
     @classmethod
     def from_settings(cls, settings: Settings) -> TBankProvider:
@@ -45,6 +53,7 @@ class TBankProvider(BasePaymentProvider):
             terminal_key=settings.tbank_terminal_key,
             secret_key=settings.tbank_secret_key,
             api_base=settings.tbank_api_base,
+            notification_url=f"https://{settings.panel_domain}/webhooks/tbank",
         )
 
     def _sign(self, params: dict[str, Any]) -> str:
@@ -57,12 +66,18 @@ class TBankProvider(BasePaymentProvider):
         return hashlib.sha256(concatenated.encode("utf-8")).hexdigest()
 
     def create_payment(self, order: PaymentOrder) -> CreatedPayment:
-        request_body = {
+        request_body: dict[str, Any] = {
             "TerminalKey": self.terminal_key,
             "Amount": order.amount,
             "OrderId": order.order_id,
             "Description": order.description,
         }
+        if self.notification_url:
+            # Явно передаём URL уведомления в каждом запросе — не полагаемся на
+            # то, что оно настроено (и настроено верно) в личном кабинете банка
+            # по умолчанию для терминала (см. DECISIONS.md — вебхуки никогда не
+            # доходили, а личный кабинет не гарантированно содержит этот URL).
+            request_body["NotificationURL"] = self.notification_url
         request_body["Token"] = self._sign(request_body)
 
         response = httpx.post(f"{self.api_base}/Init", json=request_body, timeout=15.0)
