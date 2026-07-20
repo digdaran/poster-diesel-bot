@@ -1,6 +1,10 @@
 # Backend (FastAPI) — REST API панели, webhook банков, фоновые задачи, /metrics.
 # Отдельный образ со своими зависимостями (requirements/backend.txt), общий пакет
-# app/ подключается без изменений (п.5.1, 5.3 ТЗ).
+# app/ подключается без изменений (п.5.1, 5.3 ТЗ). Также подключает channels/telegram/
+# (пакет + [telegram]-зависимости) — backend поднимает собственный outbound-only
+# TelegramChannel для проактивных уведомлений об исходе платежа (см. DECISIONS.md,
+# app/services/notification_service.py); polling здесь не запускается, тем не менее
+# aiogram.Bot нужен для send_message/send_media.
 FROM python:3.11-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -16,10 +20,11 @@ RUN apt-get update \
 COPY pyproject.toml README.md ./
 COPY app ./app
 COPY backend ./backend
+COPY channels ./channels
 COPY migrations ./migrations
 COPY alembic.ini ./
 
-RUN pip install --no-cache-dir ".[backend]"
+RUN pip install --no-cache-dir ".[backend,telegram]"
 
 COPY scripts/backend-entrypoint.sh /usr/local/bin/backend-entrypoint.sh
 RUN chmod +x /usr/local/bin/backend-entrypoint.sh
