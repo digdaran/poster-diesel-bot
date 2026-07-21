@@ -9,22 +9,23 @@
 }
 
 {$PANEL_DOMAIN} {
-	# Webhook банков — доступны без IP-ограничения (банк должен достучаться).
-	handle /webhooks/* {
-		reverse_proxy backend:8000
-	}
 
-	# Всё остальное — панель (SPA) и её API — только с IP из белого списка.
-	@blocked not remote_ip {$PANEL_IP_WHITELIST}
-	respond @blocked 403
+    handle /webhooks/* {
+        reverse_proxy backend:8000
+    }
 
-	handle /api/* {
-		reverse_proxy backend:8000
-	}
+    @allowed remote_ip {$PANEL_IP_WHITELIST}
 
-	handle {
-		reverse_proxy frontend:80
-	}
+    handle @allowed {
 
-	encode gzip
+        handle /api/* {
+            reverse_proxy backend:8000
+        }
+
+        handle {
+            reverse_proxy frontend:80
+        }
+    }
+
+    respond 403
 }
