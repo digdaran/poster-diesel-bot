@@ -19,8 +19,9 @@ from app.services import audit_service, notification_service
 from app.services import payment_service as svc
 from fastapi import APIRouter, Depends, Request, Response, status
 
-from backend.api.deps import get_database, get_settings_dep, get_telegram_channel
+from backend.api.deps import get_database, get_settings_dep, get_telegram_channel, get_vk_channel
 from channels.telegram.channel import TelegramChannel
+from channels.vk.channel import VkChannel
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 logger = structlog.get_logger(__name__)
@@ -33,6 +34,7 @@ async def _handle(
     db: Database,
     provider_name: str,
     telegram_channel: TelegramChannel | None,
+    vk_channel: VkChannel | None,
 ) -> Response:
     ip = request.client.host if request.client else None
     try:
@@ -68,11 +70,14 @@ async def _handle(
             },
             ip_address=ip,
         )
-    if telegram_channel is not None:
-        if outcome.applied:
-            await notification_service.notify_payment_outcome(db, telegram_channel, outcome)
-        elif outcome.late_success_no_tickets:
-            await notification_service.notify_late_success_no_tickets(db, telegram_channel, outcome)
+    if outcome.applied:
+        await notification_service.notify_payment_outcome(
+            db, outcome, telegram_channel=telegram_channel, vk_channel=vk_channel
+        )
+    elif outcome.late_success_no_tickets:
+        await notification_service.notify_late_success_no_tickets(
+            db, outcome, telegram_channel=telegram_channel, vk_channel=vk_channel
+        )
     return Response(status_code=status.HTTP_200_OK, content="ok")
 
 
@@ -82,10 +87,11 @@ async def tbank_webhook(
     db: Database = Depends(get_database),
     settings: Settings = Depends(get_settings_dep),
     telegram_channel: TelegramChannel | None = Depends(get_telegram_channel),
+    vk_channel: VkChannel | None = Depends(get_vk_channel),
 ) -> Response:
     body = await request.body()
     provider = TBankProvider.from_settings(settings)
-    return await _handle(provider, request, body, db, "tbank", telegram_channel)
+    return await _handle(provider, request, body, db, "tbank", telegram_channel, vk_channel)
 
 
 @router.post("/vtb")
@@ -94,7 +100,8 @@ async def vtb_webhook(
     db: Database = Depends(get_database),
     settings: Settings = Depends(get_settings_dep),
     telegram_channel: TelegramChannel | None = Depends(get_telegram_channel),
+    vk_channel: VkChannel | None = Depends(get_vk_channel),
 ) -> Response:
     body = await request.body()
     provider = VTBProvider.from_settings(settings)
-    return await _handle(provider, request, body, db, "vtb", telegram_channel)
+    return await _handle(provider, request, body, db, "vtb", telegram_channel, vk_channel)

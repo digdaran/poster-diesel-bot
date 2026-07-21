@@ -1,50 +1,219 @@
-"""VkChannel — заготовка интерфейса (п.5.4.1, 10.6, 21 ТЗ). Не реализована и не
-активна в проде (см. app/channels/factory.ACTIVE_CHANNELS). Целевой вариант по
-умолчанию — бот сообщества: `supports_verified_phone=False`,
-`can_initiate_dialog=False` (см. п.21 ТЗ); паритет с Telegram по верификации —
-только через VK Mini App (роадмап, не входит в объём первой версии).
+"""VkChannel — первая реализация `BaseMessengerChannel` для ВКонтакте (бот
+сообщества, п.5.4.1, 10.6 ТЗ; план реализации — DECISIONS.md #32).
+
+vkbottle, VK Bots Long Poll API (без Callback API/вебхука — тот же процесс-
+топология, что и у Telegram-канала, см. ARCHITECTURE.md §7.1). Как и
+`TelegramChannel`, этот класс только транслирует UI-примитивы и вызовы VK Bot
+API — вся бизнес-логика остаётся в app/services/*.
 """
 
 from __future__ import annotations
 
+import io
+from pathlib import Path
 from typing import Any
 
+import qrcode
 from app.channels.base import BaseMessengerChannel, ChannelCapabilities
 from app.models.enums import ChannelType
-
-_NOT_IMPLEMENTED_MSG = (
-    "VkChannel — заготовка интерфейса (п.21 ТЗ). Реализация адаптера бота "
-    "сообщества ВКонтакте (Bots Longpoll API / Callback API) выполняется отдельной "
-    "доработкой, без изменения ядра — см. ARCHITECTURE.md, DECISIONS.md."
+from vkbottle import (
+    API,
+    Callback,
+    Keyboard,
+    KeyboardButtonColor,
+    OpenLink,
+    PhotoMessageUploader,
+    Text,
 )
+from vkbottle.bot import Bot
+from vkbottle.polling import BotPolling
+
+# Тот же консервативный запас под лимит длины сообщения, что и у TelegramChannel
+# (channels/telegram/channel.py) — единый порог для обоих каналов.
+_TICKET_CODES_CHUNK_LIMIT = 3500
+_TICKET_CODES_COLUMN_THRESHOLD = 10
+
+
+def _format_ticket_codes(codes: list[str]) -> list[str]:
+    """См. `channels.telegram.channel._format_ticket_codes` — тот же алгоритм
+    разбиения списка кодов номерков на куски в пределах лимита сообщения."""
+    if not codes:
+        return []
+    if len(codes) <= _TICKET_CODES_COLUMN_THRESHOLD:
+        lines = codes
+    else:
+        width = max(len(c) for c in codes) + 2
+        columns = max(1, min(5, 40 // width))
+        lines = [
+            "".join(c.ljust(width) for c in codes[i : i + columns]).rstrip()
+            for i in range(0, len(codes), columns)
+        ]
+
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+    for line in lines:
+        if current and current_len + len(line) + 1 > _TICKET_CODES_CHUNK_LIMIT:
+            chunks.append("\n".join(current))
+            current = []
+            current_len = 0
+        current.append(line)
+        current_len += len(line) + 1
+    if current:
+        chunks.append("\n".join(current))
+    return chunks
+
+
+class _TypingAction:
+    """Показывает "печатает…" на время сетевого запроса к банку/провайдеру.
+
+    В отличие от `TelegramChannel.typing_action` (aiogram `ChatActionSender`
+    повторяет вызов каждые ~5с на всё время `async with`), здесь один вызов на
+    вход в контекст — статус "печатает" у VK и так держится ~10с, что покрывает
+    типичную длительность запроса к банку без необходимости фонового повтора.
+    """
+
+    def __init__(self, bot: Bot, peer_id: int) -> None:
+        self._bot = bot
+        self._peer_id = peer_id
+
+    async def __aenter__(self) -> _TypingAction:
+        await self._bot.api.messages.set_activity(peer_id=self._peer_id, type="typing")
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        return None
 
 
 class VkChannel(BaseMessengerChannel):
     channel_type = ChannelType.VK
     capabilities = ChannelCapabilities(
         supports_verified_phone=False,
-        can_initiate_dialog=False,
+        can_initiate_dialog=True,  # после разрешения "Сообщения сообщества", см. DECISIONS.md #32
         supports_inline_buttons=True,
         supports_qr=True,
         media_send_mode="upload",
     )
 
+    def __init__(self, *, token: str, group_id: int | None = None) -> None:
+        # group_id не обязателен — при отсутствии BotPolling сам резолвит его
+        # через groups.getById по токену сообщества (VK_GROUP_ID в .env — опционален).
+        api = API(token)
+        polling = BotPolling(api, group_id=group_id)
+        self.bot = Bot(api=api, polling=polling)
+
     async def send_message(self, external_user_id: str, text: str, **kwargs: Any) -> None:
-        raise NotImplementedError(_NOT_IMPLEMENTED_MSG)
+        await self.bot.api.messages.send(
+            peer_id=int(external_user_id), message=text, random_id=0, **kwargs
+        )
 
     async def send_media(
         self, external_user_id: str, file_path: str, *, caption: str | None = None
     ) -> None:
-        raise NotImplementedError(_NOT_IMPLEMENTED_MSG)
+        """Отправляет цифровой постер из файла (`Giveaway.digital_poster_path`, п.6.2 ТЗ).
+
+        Upload-флоу VK (`media_send_mode="upload"`): `PhotoMessageUploader`
+        сам обходит `photos.getMessagesUploadServer` → загрузку файла →
+        `photos.saveMessagesPhoto` и возвращает attachment-строку
+        `photo{owner_id}_{id}`, пригодную для кэширования вызывающей стороной
+        в `Giveaway.poster_media_cache` наравне с Telegram `file_id`.
+        """
+        path = Path(file_path)
+        if not path.exists():
+            raise FileNotFoundError(f"Файл постера не найден: {file_path}")
+        uploader = PhotoMessageUploader(self.bot.api)
+        attachment = await uploader.upload(str(path), peer_id=int(external_user_id))
+        await self.bot.api.messages.send(
+            peer_id=int(external_user_id),
+            message=caption or "",
+            attachment=attachment,
+            random_id=0,
+        )
 
     async def request_contact(self, external_user_id: str) -> None:
-        raise NotImplementedError(_NOT_IMPLEMENTED_MSG)
+        """У VK нет аналога Telegram `request_contact` с гарантированно
+        принадлежащим номером (`supports_verified_phone=False`, см.
+        ARCHITECTURE.md §7.1) — явно сообщаем о невозможности вместо запроса,
+        как того требует контракт `BaseMessengerChannel.request_contact`."""
+        await self.send_message(
+            external_user_id,
+            "ВКонтакте не позволяет автоматически подтвердить номер телефона. "
+            "Если оператор включил ручной ввод номера, просто напишите его в чат.",
+        )
 
-    def render_keyboard(self, buttons: list[list[str]]) -> Any:
-        raise NotImplementedError(_NOT_IMPLEMENTED_MSG)
+    def render_keyboard(self, buttons: list[list[str]]) -> str:
+        keyboard = Keyboard(one_time=False, inline=False)
+        for row_index, row in enumerate(buttons):
+            if row_index:
+                keyboard.row()
+            for label in row:
+                keyboard.add(Text(label))
+        return keyboard.get_json()
 
-    def render_payment_prompt(self, *, payment_url: str, order_id: str, has_qr: bool) -> Any:
-        raise NotImplementedError(_NOT_IMPLEMENTED_MSG)
+    def render_payment_prompt(self, *, payment_url: str, order_id: str, has_qr: bool) -> str:
+        keyboard = Keyboard(inline=True)
+        keyboard.add(OpenLink(payment_url, "💳 Оплатить"))
+        if has_qr:
+            keyboard.row()
+            keyboard.add(
+                Callback("🔳 Показать QR", payload={"a": "show_qr", "order_id": order_id}),
+                color=KeyboardButtonColor.SECONDARY,
+            )
+        keyboard.row()
+        keyboard.add(
+            Callback("🔄 Проверить статус оплаты", payload={"a": "check_payment"}),
+            color=KeyboardButtonColor.PRIMARY,
+        )
+        keyboard.row()
+        keyboard.add(
+            Callback("❌ Отменить платёж", payload={"a": "cancel_payment", "order_id": order_id}),
+            color=KeyboardButtonColor.NEGATIVE,
+        )
+        return keyboard.get_json()
+
+    def typing_action(self, peer_id: str) -> _TypingAction:
+        return _TypingAction(self.bot, int(peer_id))
+
+    async def send_qr_code(
+        self, external_user_id: str, qr_code_payload: str, *, caption: str | None = None
+    ) -> None:
+        """QR-код СБП как изображение для оплаты с другого устройства (п.9.1 ТЗ)."""
+        img = qrcode.make(qr_code_payload)
+        buffer = io.BytesIO()
+        img.save(buffer, format="PNG")  # type: ignore[call-arg]
+        buffer.name = "sbp_qr.png"
+        uploader = PhotoMessageUploader(self.bot.api)
+        attachment = await uploader.upload(buffer, peer_id=int(external_user_id))
+        await self.bot.api.messages.send(
+            peer_id=int(external_user_id),
+            message=caption or "",
+            attachment=attachment,
+            random_id=0,
+        )
+
+    async def send_ticket_codes(self, external_user_id: str, codes: list[str]) -> None:
+        """Отправляет список кодов номерков, разбитый на куски в пределах лимита
+        сообщения (см. `_format_ticket_codes`)."""
+        for chunk in _format_ticket_codes(codes):
+            await self.send_message(external_user_id, chunk)
+
+    async def deliver_purchase(
+        self, external_user_id: str, *, poster_path: str | None, codes: list[str], intro: str
+    ) -> None:
+        """Доставка купленных номерков: постер (если есть) + список кодов —
+        см. `channels.telegram.channel.TelegramChannel.deliver_purchase`."""
+        if poster_path and len(codes) <= _TICKET_CODES_COLUMN_THRESHOLD:
+            caption = intro + "\n" + "\n".join(codes) if codes else intro
+            await self.send_media(external_user_id, poster_path, caption=caption)
+            return
+        if poster_path:
+            await self.send_media(external_user_id, poster_path, caption=intro)
+        else:
+            await self.send_message(external_user_id, intro)
+        await self.send_ticket_codes(external_user_id, codes)
 
     async def handle_update(self, update: Any) -> None:
-        raise NotImplementedError(_NOT_IMPLEMENTED_MSG)
+        """При Long Poll диспетчеризация обычно идёт напрямую через
+        `Bot.run_polling` (см. `channels/vk/main.py`); этот метод — для
+        программной прогонки одного сырого события Long Poll (тесты)."""
+        await self.bot.process_event(update)

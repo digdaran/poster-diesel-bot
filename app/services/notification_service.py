@@ -4,19 +4,21 @@
 прямому запросу заказчика (продуктовое решение сверх (локально усечённого)
 ТЗ, см. DECISIONS.md).
 
-Раздельно с реактивной доставкой в чат покупателя
-(channels/telegram/handlers.py::_deliver_tickets) — та отвечает в чат, из
-которого пришёл запрос (важно для подарочных покупок на неподтверждённый
-номер без привязки получателя, см. DECISIONS.md), тогда как это уведомление
-адресуется участнику-получателю (`Payment.participant_id`) через его
-собственную привязку канала и потому не может достучаться до получателя без
-привязки — это осознанное ограничение, а не регресс: реактивный путь остаётся
-рабочим fallback'ом для этого случая.
+Раздельно с реактивной доставкой в чат покупателя (channels/*/handlers.py) —
+та отвечает в чат, из которого пришёл запрос (важно для подарочных покупок на
+неподтверждённый номер без привязки получателя, см. DECISIONS.md), тогда как
+это уведомление адресуется участнику-получателю (`Payment.participant_id`)
+через его собственную привязку канала и потому не может достучаться до
+получателя без привязки — это осознанное ограничение, а не регресс:
+реактивный путь остаётся рабочим fallback'ом для этого случая.
+
+Многоканально (Telegram, VK — см. DECISIONS.md #33): выбирается ОДИН канал на
+участника, не рассылается на все привязки сразу — см. `_resolve_notify_target`.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import Any, Protocol
 
 from sqlalchemy import select
 
@@ -26,8 +28,19 @@ from app.models.enums import ChannelType, PaymentStatus
 from app.models.giveaway import Giveaway
 from app.services.payment_service import FinalizeOutcome
 
-if TYPE_CHECKING:
-    from channels.telegram.channel import TelegramChannel
+
+class NotifiableChannel(Protocol):
+    """Структурный протокол вместо конкретного класса канала: `TelegramChannel`
+    и `VkChannel` не имеют общего базового класса для `deliver_purchase`/
+    `send_message` (не входят в `BaseMessengerChannel`, см. app/channels/base.py),
+    но обе реализации совпадают по сигнатуре — этого достаточно."""
+
+    async def send_message(self, external_user_id: str, text: str, **kwargs: Any) -> None: ...
+
+    async def deliver_purchase(
+        self, external_user_id: str, *, poster_path: str | None, codes: list[str], intro: str
+    ) -> None: ...
+
 
 _FAILURE_TEXT = "Платёж не прошёл. Резерв снят — можете попробовать оформить покупку заново."
 _LATE_SUCCESS_NO_TICKETS_TEXT = (
@@ -37,34 +50,68 @@ _LATE_SUCCESS_NO_TICKETS_TEXT = (
 )
 
 
-def _resolve_telegram_external_id(db: Database, participant_id: int) -> str | None:
+def _resolve_notify_target(db: Database, participant_id: int) -> tuple[ChannelType, str] | None:
+    """Выбирает канал и внешний ID для проактивного уведомления получателя.
+
+    Telegram — в приоритете: право писать первым там не отзывается пользователем
+    (см. DECISIONS.md #32). VK — только если участник явно разрешил сообщения от
+    сообщества (`ChannelBinding.messages_allowed is True`, отзываемо через
+    `message_allow`/`message_deny`) — иначе `messages.send` от имени сообщества
+    вернёт ошибку запрета отправки. Один канал на участника, не оба сразу — см.
+    DECISIONS.md #33."""
     with db.session() as session:
-        binding = (
+        bindings = list(
             session.execute(
-                select(ChannelBinding).where(
-                    ChannelBinding.participant_id == participant_id,
-                    ChannelBinding.channel == ChannelType.TELEGRAM,
-                )
-            )
-            .scalars()
-            .first()
+                select(ChannelBinding).where(ChannelBinding.participant_id == participant_id)
+            ).scalars()
         )
-        return binding.external_user_id if binding else None
+    by_channel = {b.channel: b for b in bindings}
+
+    telegram_binding = by_channel.get(ChannelType.TELEGRAM)
+    if telegram_binding is not None:
+        return ChannelType.TELEGRAM, telegram_binding.external_user_id
+
+    vk_binding = by_channel.get(ChannelType.VK)
+    if vk_binding is not None and vk_binding.messages_allowed:
+        return ChannelType.VK, vk_binding.external_user_id
+
+    return None
+
+
+def _channel_for(
+    channel_type: ChannelType,
+    *,
+    telegram_channel: NotifiableChannel | None,
+    vk_channel: NotifiableChannel | None,
+) -> NotifiableChannel | None:
+    if channel_type == ChannelType.TELEGRAM:
+        return telegram_channel
+    if channel_type == ChannelType.VK:
+        return vk_channel
+    return None
 
 
 async def notify_payment_outcome(
-    db: Database, telegram_channel: TelegramChannel, outcome: FinalizeOutcome
+    db: Database,
+    outcome: FinalizeOutcome,
+    *,
+    telegram_channel: NotifiableChannel | None,
+    vk_channel: NotifiableChannel | None,
 ) -> None:
     """Отправляет участнику сообщение об исходе платежа: при успехе — постер и
     купленные номерки, при отказе — короткое уведомление. Тихо ничего не
-    делает, если у участника нет привязки Telegram (напр. подарочная покупка
-    на неподтверждённый номер без доступа к аккаунту, п.7.1, 10.3 ТЗ) —
-    уведомлять там некого."""
+    делает, если у участника нет подходящей привязки канала (напр. подарочная
+    покупка на неподтверждённый номер без доступа к аккаунту, п.7.1, 10.3 ТЗ,
+    либо процесс поднят без токена нужного канала) — уведомлять там некого."""
     if not outcome.applied or outcome.participant_id is None:
         return
 
-    external_user_id = _resolve_telegram_external_id(db, outcome.participant_id)
-    if external_user_id is None:
+    target = _resolve_notify_target(db, outcome.participant_id)
+    if target is None:
+        return
+    channel_type, external_user_id = target
+    channel = _channel_for(channel_type, telegram_channel=telegram_channel, vk_channel=vk_channel)
+    if channel is None:
         return
 
     if outcome.new_status == PaymentStatus.SUCCEEDED:
@@ -75,18 +122,22 @@ async def notify_payment_outcome(
                 else None
             )
         codes = [t.full_code for t in (outcome.tickets or [])]
-        await telegram_channel.deliver_purchase(
+        await channel.deliver_purchase(
             external_user_id,
             poster_path=giveaway.digital_poster_path if giveaway else None,
             codes=codes,
             intro="Оплата прошла успешно! Ваши номера:",
         )
     else:
-        await telegram_channel.send_message(external_user_id, _FAILURE_TEXT)
+        await channel.send_message(external_user_id, _FAILURE_TEXT)
 
 
 async def notify_late_success_no_tickets(
-    db: Database, telegram_channel: TelegramChannel, outcome: FinalizeOutcome
+    db: Database,
+    outcome: FinalizeOutcome,
+    *,
+    telegram_channel: NotifiableChannel | None,
+    vk_channel: NotifiableChannel | None,
 ) -> None:
     """Платёж подтверждён банком уже ПОСЛЕ того, как он был помечен
     CANCELLED/FAILED (отмена участником или истечение TTL) и резерв роздан —
@@ -96,7 +147,11 @@ async def notify_late_success_no_tickets(
     неведении, что деньги списаны."""
     if outcome.participant_id is None:
         return
-    external_user_id = _resolve_telegram_external_id(db, outcome.participant_id)
-    if external_user_id is None:
+    target = _resolve_notify_target(db, outcome.participant_id)
+    if target is None:
         return
-    await telegram_channel.send_message(external_user_id, _LATE_SUCCESS_NO_TICKETS_TEXT)
+    channel_type, external_user_id = target
+    channel = _channel_for(channel_type, telegram_channel=telegram_channel, vk_channel=vk_channel)
+    if channel is None:
+        return
+    await channel.send_message(external_user_id, _LATE_SUCCESS_NO_TICKETS_TEXT)

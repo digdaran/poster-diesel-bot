@@ -1,6 +1,7 @@
 """Тесты TelegramChannel и фабрики каналов (п.5.4.1, 10.4, 20.1 ТЗ):
 UI-примитивы, отправка сообщений/медиа/QR через мокнутый aiogram Bot,
-заглушки VK/MAX поднимают NotImplementedError, активен только Telegram."""
+заглушка MAX поднимает NotImplementedError. Telegram и VK активны в проде
+(см. tests/unit/test_vk_channel.py, DECISIONS.md #32/#33)."""
 
 from __future__ import annotations
 
@@ -122,20 +123,12 @@ async def test_deliver_purchase_without_poster_sends_intro_and_codes(
     assert channel.bot.send_message.await_count == 2  # интро + коды
 
 
-def test_only_telegram_active_in_production() -> None:
-    assert frozenset({ChannelType.TELEGRAM}) == ACTIVE_CHANNELS
+def test_telegram_and_vk_active_max_stub_in_production() -> None:
+    """Telegram и VK активны (DECISIONS.md #33); MAX остаётся заготовкой (п.21 ТЗ)."""
+    assert frozenset({ChannelType.TELEGRAM, ChannelType.VK}) == ACTIVE_CHANNELS
     assert is_channel_active(ChannelType.TELEGRAM) is True
-    assert is_channel_active(ChannelType.VK) is False
+    assert is_channel_active(ChannelType.VK) is True
     assert is_channel_active(ChannelType.MAX) is False
-
-
-async def test_vk_channel_stub_raises_not_implemented() -> None:
-    vk_cls = get_channel_class(ChannelType.VK)
-    vk = vk_cls()
-    with pytest.raises(NotImplementedError):
-        await vk.send_message("1", "hi")
-    with pytest.raises(NotImplementedError):
-        await vk.request_contact("1")
 
 
 async def test_max_channel_stub_raises_not_implemented() -> None:

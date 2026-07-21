@@ -1,6 +1,8 @@
 """Тесты проактивных уведомлений об исходе платежа (см. app/services/notification_service.py,
-DECISIONS.md): успех доставляет постер+коды через привязку Telegram участника,
-отказ шлёт короткое уведомление, отсутствие привязки — тихий no-op."""
+DECISIONS.md #33): успех доставляет постер+коды через привязку участника,
+отказ шлёт короткое уведомление, отсутствие привязки — тихий no-op. Отдельно —
+выбор канала при нескольких привязках (Telegram в приоритете, VK — только при
+разрешении messages_allowed)."""
 
 from __future__ import annotations
 
@@ -18,7 +20,7 @@ from app.services import ticket_pool_service as pool_svc
 
 
 @dataclass
-class FakeTelegramChannel:
+class FakeChannel:
     deliver_purchase_calls: list[dict] = field(default_factory=list)
     send_message_calls: list[tuple[str, str]] = field(default_factory=list)
 
@@ -89,8 +91,10 @@ async def test_notify_success_delivers_purchase_via_binding(db: Database) -> Non
     )
     assert finalize.applied
 
-    channel = FakeTelegramChannel()
-    await notification_service.notify_payment_outcome(db, channel, finalize)
+    channel = FakeChannel()
+    await notification_service.notify_payment_outcome(
+        db, finalize, telegram_channel=channel, vk_channel=None
+    )
 
     assert len(channel.deliver_purchase_calls) == 1
     call = channel.deliver_purchase_calls[0]
@@ -114,8 +118,10 @@ async def test_notify_failure_sends_short_message(db: Database) -> None:
     finalize = svc.finalize_payment(db, order_id=outcome.order_id, new_status=PaymentStatus.FAILED)
     assert finalize.applied
 
-    channel = FakeTelegramChannel()
-    await notification_service.notify_payment_outcome(db, channel, finalize)
+    channel = FakeChannel()
+    await notification_service.notify_payment_outcome(
+        db, finalize, telegram_channel=channel, vk_channel=None
+    )
 
     assert not channel.deliver_purchase_calls
     assert len(channel.send_message_calls) == 1
@@ -139,8 +145,10 @@ async def test_notify_without_binding_is_noop(db: Database) -> None:
     )
     assert finalize.applied
 
-    channel = FakeTelegramChannel()
-    await notification_service.notify_payment_outcome(db, channel, finalize)
+    channel = FakeChannel()
+    await notification_service.notify_payment_outcome(
+        db, finalize, telegram_channel=channel, vk_channel=None
+    )
 
     assert not channel.deliver_purchase_calls
     assert not channel.send_message_calls
@@ -150,8 +158,10 @@ async def test_notify_noop_when_not_applied(db: Database) -> None:
     """`applied=False` означает повторный webhook/гонку с фоновой сверкой —
     уведомление уже было отправлено при первой финализации, повторно слать не нужно."""
     not_applied = svc.FinalizeOutcome(applied=False)
-    channel = FakeTelegramChannel()
-    await notification_service.notify_payment_outcome(db, channel, not_applied)
+    channel = FakeChannel()
+    await notification_service.notify_payment_outcome(
+        db, not_applied, telegram_channel=channel, vk_channel=None
+    )
     assert not channel.deliver_purchase_calls
     assert not channel.send_message_calls
 
@@ -159,9 +169,11 @@ async def test_notify_noop_when_not_applied(db: Database) -> None:
 async def test_notify_late_success_no_tickets_sends_message_via_binding(db: Database) -> None:
     pid = make_participant_with_binding(db)
     outcome = svc.FinalizeOutcome(applied=False, participant_id=pid, late_success_no_tickets=True)
-    channel = FakeTelegramChannel()
+    channel = FakeChannel()
 
-    await notification_service.notify_late_success_no_tickets(db, channel, outcome)
+    await notification_service.notify_late_success_no_tickets(
+        db, outcome, telegram_channel=channel, vk_channel=None
+    )
 
     assert len(channel.send_message_calls) == 1
     assert channel.send_message_calls[0][0] == "123456"
@@ -171,8 +183,97 @@ async def test_notify_late_success_no_tickets_sends_message_via_binding(db: Data
 async def test_notify_late_success_no_tickets_without_binding_is_noop(db: Database) -> None:
     pid = make_participant_without_binding(db)
     outcome = svc.FinalizeOutcome(applied=False, participant_id=pid, late_success_no_tickets=True)
-    channel = FakeTelegramChannel()
+    channel = FakeChannel()
 
-    await notification_service.notify_late_success_no_tickets(db, channel, outcome)
+    await notification_service.notify_late_success_no_tickets(
+        db, outcome, telegram_channel=channel, vk_channel=None
+    )
 
     assert not channel.send_message_calls
+
+
+def make_participant_with_vk_binding(
+    db: Database, *, phone: str = "79995551122", messages_allowed: bool | None = True
+) -> int:
+    with db.session() as session:
+        p = Participant(phone=phone, phone_verified=False)
+        session.add(p)
+        session.flush()
+        session.add(
+            ChannelBinding(
+                participant_id=p.id,
+                channel=ChannelType.VK,
+                external_user_id="987654",
+                phone_verified=False,
+                messages_allowed=messages_allowed,
+            )
+        )
+        session.flush()
+        return p.id
+
+
+async def test_notify_uses_vk_when_only_vk_binding_allowed(db: Database) -> None:
+    pid = make_participant_with_vk_binding(db, messages_allowed=True)
+    outcome = svc.FinalizeOutcome(applied=False, participant_id=pid, late_success_no_tickets=True)
+    vk_channel = FakeChannel()
+
+    await notification_service.notify_late_success_no_tickets(
+        db, outcome, telegram_channel=None, vk_channel=vk_channel
+    )
+
+    assert len(vk_channel.send_message_calls) == 1
+    assert vk_channel.send_message_calls[0][0] == "987654"
+
+
+async def test_notify_skips_vk_when_messages_not_allowed(db: Database) -> None:
+    """VK-разрешение отозвано (`message_deny`, см. DECISIONS.md #32/#33) —
+    проактивно писать нельзя, участник остаётся без уведомления (реактивный
+    путь через "Проверить статус оплаты" в боте остаётся рабочим fallback'ом)."""
+    pid = make_participant_with_vk_binding(db, messages_allowed=False)
+    outcome = svc.FinalizeOutcome(applied=False, participant_id=pid, late_success_no_tickets=True)
+    vk_channel = FakeChannel()
+
+    await notification_service.notify_late_success_no_tickets(
+        db, outcome, telegram_channel=None, vk_channel=vk_channel
+    )
+
+    assert not vk_channel.send_message_calls
+
+
+async def test_notify_prefers_telegram_over_vk_when_both_bound(db: Database) -> None:
+    with db.session() as session:
+        p = Participant(phone="79995559900", phone_verified=True)
+        session.add(p)
+        session.flush()
+        session.add(
+            ChannelBinding(
+                participant_id=p.id,
+                channel=ChannelType.TELEGRAM,
+                external_user_id="tg-1",
+                phone_verified=True,
+            )
+        )
+        session.add(
+            ChannelBinding(
+                participant_id=p.id,
+                channel=ChannelType.VK,
+                external_user_id="vk-1",
+                phone_verified=False,
+                messages_allowed=True,
+            )
+        )
+        session.flush()
+        pid = p.id
+
+    outcome = svc.FinalizeOutcome(applied=False, participant_id=pid, late_success_no_tickets=True)
+    telegram_channel = FakeChannel()
+    vk_channel = FakeChannel()
+
+    await notification_service.notify_late_success_no_tickets(
+        db, outcome, telegram_channel=telegram_channel, vk_channel=vk_channel
+    )
+
+    assert telegram_channel.send_message_calls == [
+        ("tg-1", notification_service._LATE_SUCCESS_NO_TICKETS_TEXT)
+    ]
+    assert not vk_channel.send_message_calls

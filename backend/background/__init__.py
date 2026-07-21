@@ -28,6 +28,7 @@ from sqlalchemy import select
 
 if TYPE_CHECKING:
     from channels.telegram.channel import TelegramChannel
+    from channels.vk.channel import VkChannel
 
 logger = structlog.get_logger(__name__)
 
@@ -95,28 +96,32 @@ def _release_expired_manual_registrations(
 
 
 async def run_background_loop(
-    db: Database, settings: Settings, telegram_channel: TelegramChannel | None = None
+    db: Database,
+    settings: Settings,
+    telegram_channel: TelegramChannel | None = None,
+    vk_channel: VkChannel | None = None,
 ) -> None:
     """Работает, пока не отменена (см. backend/main.py::lifespan). Синхронная
     работа (SQLite-сессии, сетевые вызовы check_status у банков) выполняется в
     отдельном потоке через `asyncio.to_thread`, чтобы не блокировать event loop
     и не задерживать обработку конкурентных HTTP-запросов. Уведомления о
     финализированных платежах (`notification_service`) отправляются уже после
-    возврата на event loop, т.к. отправка сообщений в Telegram — асинхронный
-    сетевой вызов."""
+    возврата на event loop, т.к. отправка сообщений в мессенджер — асинхронный
+    сетевой вызов. `notification_service` сам выбирает канал получателя
+    (Telegram/VK) по привязкам — см. DECISIONS.md #33."""
     while True:
         try:
             outcomes = await asyncio.to_thread(_reconcile_pending_payments, db, settings)
             await asyncio.to_thread(_release_expired_manual_registrations, db, settings)
-            if telegram_channel is not None:
+            if telegram_channel is not None or vk_channel is not None:
                 for outcome in outcomes:
                     if outcome.late_success_no_tickets:
                         await notification_service.notify_late_success_no_tickets(
-                            db, telegram_channel, outcome
+                            db, outcome, telegram_channel=telegram_channel, vk_channel=vk_channel
                         )
                     else:
                         await notification_service.notify_payment_outcome(
-                            db, telegram_channel, outcome
+                            db, outcome, telegram_channel=telegram_channel, vk_channel=vk_channel
                         )
         except Exception:
             logger.exception("background_reconciliation_tick_failed")

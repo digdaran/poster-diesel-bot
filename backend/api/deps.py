@@ -15,6 +15,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from channels.telegram.channel import TelegramChannel
+from channels.vk.channel import VkChannel
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -27,6 +28,13 @@ def get_telegram_channel(request: Request) -> TelegramChannel | None:
     """Outbound-only инстанс для проактивных уведомлений (см. backend/main.py
     lifespan) — `None`, если `TELEGRAM_BOT_TOKEN` не задан (dev/тесты)."""
     return request.app.state.telegram_channel
+
+
+def get_vk_channel(request: Request) -> VkChannel | None:
+    """Outbound-only инстанс для проактивных уведомлений (см. backend/main.py
+    lifespan) — `None`, если `VK_GROUP_TOKEN` не задан (dev/тесты, см.
+    DECISIONS.md #33)."""
+    return request.app.state.vk_channel
 
 
 def get_session(request: Request) -> Iterator[Session]:

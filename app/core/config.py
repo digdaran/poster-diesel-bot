@@ -1,6 +1,6 @@
 """Конфигурация приложения из переменных окружения (.env).
 
-Единый источник настроек для всех процессов (backend, channel-telegram),
+Единый источник настроек для всех процессов (backend, channel-telegram, channel-vk),
 переиспользующих общий пакет app/.
 """
 
@@ -48,6 +48,9 @@ class Settings(BaseSettings):
 
     telegram_bot_token: str = Field(default="", alias="TELEGRAM_BOT_TOKEN")
     telegram_proxy_url: str = Field(default="", alias="TELEGRAM_PROXY_URL")
+
+    vk_group_token: str = Field(default="", alias="VK_GROUP_TOKEN")
+    vk_group_id: int | None = Field(default=None, alias="VK_GROUP_ID")
 
     panel_domain: str = Field(default="localhost", alias="PANEL_DOMAIN")
     panel_ip_whitelist: str = Field(default="127.0.0.1", alias="PANEL_IP_WHITELIST")

@@ -37,6 +37,7 @@ from backend.api import (
 )
 from backend.webhooks import payments as payments_webhooks
 from channels.telegram.channel import TelegramChannel
+from channels.vk.channel import VkChannel
 
 logger = structlog.get_logger(__name__)
 
@@ -58,9 +59,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.db = db
     app.state.settings = settings
 
-    # Outbound-only инстанс — этот процесс не запускает start_polling, нужен
-    # только для проактивных уведомлений об исходе платежа (webhook, фоновая
-    # сверка) через app/services/notification_service.py, см. DECISIONS.md.
+    # Outbound-only инстансы — этот процесс не запускает polling ни для одного
+    # канала, они нужны только для проактивных уведомлений об исходе платежа
+    # (webhook, фоновая сверка) через app/services/notification_service.py,
+    # см. DECISIONS.md #24, #33.
     telegram_channel = (
         TelegramChannel(
             token=settings.telegram_bot_token, proxy_url=settings.telegram_proxy_url or None
@@ -70,13 +72,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     app.state.telegram_channel = telegram_channel
 
-    task = asyncio.create_task(background.run_background_loop(db, settings, telegram_channel))
+    vk_channel = (
+        VkChannel(token=settings.vk_group_token, group_id=settings.vk_group_id)
+        if settings.vk_group_token
+        else None
+    )
+    app.state.vk_channel = vk_channel
+
+    task = asyncio.create_task(
+        background.run_background_loop(db, settings, telegram_channel, vk_channel)
+    )
     yield
     task.cancel()
     with suppress(asyncio.CancelledError):
         await task
     if telegram_channel is not None:
         await telegram_channel.bot.session.close()
+    if vk_channel is not None:
+        await vk_channel.bot.api.http_client.close()
 
 
 def create_app() -> FastAPI:

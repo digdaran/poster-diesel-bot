@@ -63,13 +63,24 @@ WHERE id = :id AND status = 'PENDING';
 - `ChannelBinding(channel, external_user_id)` — уникальная пара, привязка только по подтверждённому номеру (`phone_verified=true`) либо при включённом `PlatformSettings.ignore_phone_verification`.
 - `app/services/participant_service.py` инкапсулирует всю логику идентификации (find-or-create, приоритет подтверждённого номера, подарочные покупки на неподтверждённый номер).
 - `ignore_phone_verification` (тумблер Super Admin) должен оставаться обратимым: `can_access_own_account()` вычисляет `phone_verified OR ignore_phone_verification` каждый раз в момент обращения, а не снимает снимок в момент привязки — выключение флага должно немедленно отозвать доступ у привязок, у которых он держался только флагом (п.7.1/10.3 ТЗ).
+- `ChannelBinding.messages_allowed` (`bool | None`) — отзываемое разрешение канала писать участнику первым, там где это применимо (VK: `message_allow`/`message_deny`, см. §7.1); `NULL` для каналов, где право неявно и не отзывается (Telegram).
 
 ## 7. Каналы и провайдеры — расширяемость (п.5.4 ТЗ)
 
 - `BaseMessengerChannel` (app/channels/base.py) — абстрактный интерфейс + `ChannelCapabilities` (флаги).
 - `BasePaymentProvider` (app/payments/base.py) — абстрактный интерфейс.
 - Обе фабрики (`app/channels/factory.py`, `app/payments/factory.py`) регистрируют реализации по конфигурации; добавление нового канала/банка не требует правок сервисного слоя.
-- Рассылки (`broadcast_service`) идут только через Telegram (продуктовое решение); транзакционные уведомления идут через тот канал, которым участник совершал покупку.
+- Рассылки (`broadcast_service`) идут только через Telegram (продуктовое решение). Реактивная доставка (ответ в чат покупателя, напр. `_deliver_tickets` в каждом `channels/*/handlers.py`) идёт через тот канал, которым участник совершал покупку; проактивные уведомления backend (webhook банка, фоновая сверка) выбирают канал получателя по его привязкам через `app/services/notification_service.py::_resolve_notify_target` — Telegram в приоритете, VK только если участник явно разрешил сообщения от сообщества (см. §7.1, DECISIONS.md #33).
+
+### 7.1. VK-адаптер (`channels/vk/`)
+
+Реализован на `vkbottle` (Bots Long Poll API, без Callback API/вебхука — та же топология "канал = отдельный процесс", что и у `channel-telegram`); активен в проде (`ACTIVE_CHANNELS`, см. DECISIONS.md #32/#33). Структура `channels/vk/` (`dispatcher.py`/`handlers.py`/`state.py`/`main.py`) параллельна `channels/telegram/`.
+
+- `ChannelCapabilities.can_initiate_dialog=True`, но право отзываемо: VK `message_allow`/`message_deny` события пишутся в `ChannelBinding.messages_allowed` (см. §6) — в отличие от Telegram, это не разовый флаг, а отслеживаемое состояние, которое проверяется перед каждой проактивной отправкой.
+- `supports_verified_phone=False` — только `ignore_phone_verification` + ручной ввод номера.
+- Медиа — upload-флоу VK (`photos.getMessagesUploadServer`/`saveMessagesPhoto` через `PhotoMessageUploader`), кэш attachment-строки в существующем `Giveaway.poster_media_cache`.
+- Инлайн-кнопки — VK `Keyboard(inline=True)`; нажатия приходят отдельным типом события `message_event` (не обычным сообщением), обрабатываются одним диспетчером `_dispatch_message_event` по `payload["a"]` и подтверждаются через `messages.sendMessageEventAnswer` (аналог `callback.answer()` в Telegram).
+- Деплой — процесс `channel-vk` (`docker/vk.Dockerfile`), extras `vk`. Backend дополнительно поднимает свой outbound-only `VkChannel` (без polling, `backend/main.py::lifespan`) для проактивных уведомлений — тем же способом, что и `TelegramChannel` (DECISIONS.md #24) — поэтому `docker/backend.Dockerfile` тоже ставит `[vk]`-зависимости (см. DECISIONS.md #25 про инцидент с забытыми зависимостями канала в образе backend).
 
 ## 8. Инфраструктура
 

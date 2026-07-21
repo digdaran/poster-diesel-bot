@@ -33,6 +33,21 @@ services:
     networks: [internal]
     restart: unless-stopped
 
+  channel-vk:
+    build:
+      context: .
+      dockerfile: docker/vk.Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_PATH: /data/raffle.db
+    volumes:
+      - ./data/db:/data
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks: [internal]
+    restart: unless-stopped
+
   frontend:
     build:
       context: .

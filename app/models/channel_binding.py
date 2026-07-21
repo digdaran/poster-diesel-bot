@@ -37,6 +37,11 @@ class ChannelBinding(Base):
     external_user_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     username: Mapped[str | None] = mapped_column(String(255), nullable=True)
     phone_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    messages_allowed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    """Разрешено ли каналу писать участнику первым (проактивно), там, где это
+    отзываемо (VK: событие `message_allow`/`message_deny`, см. DECISIONS.md #32).
+    `NULL` — канал не отслеживает это отдельно от `can_initiate_dialog` (напр.
+    Telegram: право неявно и не отзывается пользователем)."""
     linked_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )
