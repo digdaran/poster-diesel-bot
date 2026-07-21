@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 _FAILURE_TEXT = "Платёж не прошёл. Резерв снят — можете попробовать оформить покупку заново."
 _LATE_SUCCESS_NO_TICKETS_TEXT = (
     "Ваш платёж всё же прошёл успешно, но, к сожалению, к этому моменту свободные "
-    "номерки закончились. Пожалуйста, обратитесь в поддержку — деньги не потеряны, "
+    "экземпляры закончились. Пожалуйста, обратитесь в поддержку — деньги не потеряны, "
     "мы решим вопрос вручную."
 )
 
@@ -79,7 +79,7 @@ async def notify_payment_outcome(
             external_user_id,
             poster_path=giveaway.digital_poster_path if giveaway else None,
             codes=codes,
-            intro="Оплата прошла успешно! Ваши номерки:",
+            intro="Оплата прошла успешно! Ваши номера:",
         )
     else:
         await telegram_channel.send_message(external_user_id, _FAILURE_TEXT)

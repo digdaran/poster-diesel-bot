@@ -18,8 +18,8 @@ const NAV_ITEMS: NavItem[] = [
     label: "Ручные регистрации",
     permission: "manual_registration_create",
   },
-  { to: "/tickets", label: "Номерки", permission: "view_tickets" },
-  { to: "/giveaways", label: "Розыгрыши", permission: "view_giveaways" },
+  { to: "/tickets", label: "Номера", permission: "view_tickets" },
+  { to: "/giveaways", label: "Коллекции", permission: "view_giveaways" },
   { to: "/broadcasts", label: "Рассылки", permission: "broadcast_view" },
   { to: "/reports", label: "Отчёты", permission: "reports_view" },
   { to: "/settings", label: "Настройки", permission: "settings_view" },
@@ -54,12 +54,12 @@ export function Layout() {
         <button className="mobile-nav-toggle" onClick={() => setNavOpen(true)}>
           ☰
         </button>
-        <span className="sidebar-title">Платформа розыгрышей</span>
+        <span className="sidebar-title">Платформа коллекций</span>
       </div>
       {navOpen && <div className="sidebar-backdrop" onClick={() => setNavOpen(false)} />}
       <aside className={`sidebar${navOpen ? " sidebar-open" : ""}`}>
         <div className="sidebar-header">
-          <div className="sidebar-title">Платформа розыгрышей</div>
+          <div className="sidebar-title">Платформа коллекций</div>
           <button className="mobile-nav-toggle" onClick={() => setNavOpen(false)}>
             ✕
           </button>

@@ -104,7 +104,7 @@ def create_payment(
         order_id=order_id,
         amount=amount,
         quantity=quantity,
-        description=f"Розыгрыш #{giveaway_id}: {quantity} номерков",
+        description=f"Постер «{giveaway.name}»: {quantity} шт.",
         participant_phone=participant_phone,
     )
     created = provider.create_payment(order)

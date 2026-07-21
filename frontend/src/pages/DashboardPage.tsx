@@ -23,7 +23,7 @@ export function DashboardPage() {
         </div>
         <div className="card">
           <div className="card-value">{data.tickets_issued_count}</div>
-          <div className="card-label">Номерков выдано</div>
+          <div className="card-label">Экземпляров выдано</div>
         </div>
         <div className="card">
           <div className="card-value">{formatMoney(data.revenue_online)}</div>
@@ -39,7 +39,7 @@ export function DashboardPage() {
         </div>
         <div className="card">
           <div className="card-value">{data.giveaways_count}</div>
-          <div className="card-label">Розыгрышей</div>
+          <div className="card-label">Коллекций</div>
         </div>
       </div>
     </div>

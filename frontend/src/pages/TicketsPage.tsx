@@ -75,11 +75,11 @@ export function TicketsPage() {
 
   return (
     <div>
-      <h1>Номерки</h1>
+      <h1>Номера</h1>
 
       <div className="filters">
         <input
-          placeholder="Код номерка"
+          placeholder="Код номера"
           value={fullCode}
           onChange={(e) => {
             setFullCode(e.target.value);
@@ -101,7 +101,7 @@ export function TicketsPage() {
             setPage(1);
           }}
         >
-          <option value="">Все розыгрыши</option>
+          <option value="">Все коллекции</option>
           {giveaways.map((g) => (
             <option key={g.id} value={g.id}>
               {g.name}
@@ -154,7 +154,7 @@ export function TicketsPage() {
           <thead>
             <tr>
               <th>Код</th>
-              <th>Розыгрыш</th>
+              <th>Коллекция</th>
               <th>Участник</th>
               <th>Источник</th>
               <th>Выдан</th>

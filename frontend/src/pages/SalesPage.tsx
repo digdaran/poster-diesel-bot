@@ -112,7 +112,7 @@ export function SalesPage() {
             setPage(1);
           }}
         >
-          <option value="">Все розыгрыши</option>
+          <option value="">Все коллекции</option>
           {giveaways.map((g) => (
             <option key={g.id} value={g.id}>
               {g.name}
@@ -178,7 +178,7 @@ export function SalesPage() {
           <thead>
             <tr>
               <th>ID заказа</th>
-              <th>Розыгрыш</th>
+              <th>Коллекция</th>
               <th>Участник</th>
               <th>Провайдер</th>
               <th>Сумма</th>

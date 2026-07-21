@@ -177,7 +177,7 @@ export function ManualRegistrationsPage() {
           onChange={(e) => setForm({ ...form, giveaway_id: e.target.value })}
           required
         >
-          <option value="">Розыгрыш…</option>
+          <option value="">Коллекция…</option>
           {giveaways.map((g) => (
             <option key={g.id} value={g.id}>
               {g.name} ({g.max_tickets - g.tickets_issued - g.tickets_reserved} своб.)
@@ -237,7 +237,7 @@ export function ManualRegistrationsPage() {
             setPage(1);
           }}
         >
-          <option value="">Все розыгрыши</option>
+          <option value="">Все коллекции</option>
           {allGiveaways.map((g) => (
             <option key={g.id} value={g.id}>
               {g.name}
@@ -291,7 +291,7 @@ export function ManualRegistrationsPage() {
           <thead>
             <tr>
               <th>ID</th>
-              <th>Розыгрыш</th>
+              <th>Коллекция</th>
               <th>Участник</th>
               <th>Кол-во</th>
               <th>Сумма</th>

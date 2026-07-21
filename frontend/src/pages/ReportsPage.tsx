@@ -48,13 +48,13 @@ export function ReportsPage() {
       <h1>Отчёты</h1>
 
       <section>
-        <label htmlFor="giveaway-filter">Розыгрыш: </label>
+        <label htmlFor="giveaway-filter">Коллекция: </label>
         <select
           id="giveaway-filter"
           value={giveawayId ?? ""}
           onChange={(e) => setGiveawayId(e.target.value ? Number(e.target.value) : undefined)}
         >
-          <option value="">Все розыгрыши</option>
+          <option value="">Все коллекции</option>
           {giveaways.map((g) => (
             <option key={g.id} value={g.id}>
               {g.name}
@@ -64,17 +64,17 @@ export function ReportsPage() {
       </section>
 
       <section>
-        <h2>Выручка по розыгрышам</h2>
+        <h2>Выручка по коллекциям</h2>
         {byGiveaway ? (
           <div className="table-wrapper">
             <table>
               <thead>
                 <tr>
-                  <th>Розыгрыш</th>
+                  <th>Коллекция</th>
                   <th>Эквайринг</th>
                   <th>Наличные (оператор)</th>
                   <th>Итого</th>
-                  <th>Номерков выдано</th>
+                  <th>Экземпляров выдано</th>
                 </tr>
               </thead>
               <tbody>
@@ -97,7 +97,7 @@ export function ReportsPage() {
       </section>
 
       <section>
-        <h2>Финансовая сводка {giveawayId ? "по розыгрышу" : "(все розыгрыши)"}</h2>
+        <h2>Финансовая сводка {giveawayId ? "по коллекции" : "(все коллекции)"}</h2>
         {summary ? (
           <ul>
             <li>Эквайринг: {formatMoney(summary.revenue_online)}</li>

@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 router = Router(name="telegram-main")
 
-_MAIN_KEYBOARD_BUTTONS = [["🎟 Купить номерки", "📋 Мои номерки"], ["ℹ️ Помощь"]]
+_MAIN_KEYBOARD_BUTTONS = [["🖼 Купить постер", "📋 Мои покупки"], ["ℹ️ Помощь"]]
 
 _channel: TelegramChannel | None = None  # устанавливается через set_channel() в main.py
 
@@ -86,7 +86,7 @@ async def on_start(message: Message, state: FSMContext) -> None:
         ).ignore_phone_verification
 
     if participant is None:
-        await message.answer("Добро пожаловать в бот розыгрышей цифровых постеров!")
+        await message.answer("Добро пожаловать в бот продажи цифровых постеров!")
         await channel.request_contact(_uid(message))
         if ignore_verification:
             # П.7.1 ТЗ: при включённом флаге ручной ввод номера тоже открывает
@@ -98,15 +98,13 @@ async def on_start(message: Message, state: FSMContext) -> None:
     if participant.full_name is None:
         # Номер подтверждён ещё до появления сбора имени — доспрашиваем при
         # следующем /start, а не только сразу после on_contact.
-        await message.answer("Добро пожаловать в бот розыгрышей цифровых постеров!")
+        await message.answer("Добро пожаловать в бот продажи цифровых постеров!")
         await message.answer("Как вас зовут?")
         await state.set_state(RegistrationStates.awaiting_name)
         return
 
     keyboard = channel.render_keyboard(_MAIN_KEYBOARD_BUTTONS)
-    await message.answer(
-        "Добро пожаловать в бот розыгрышей цифровых постеров!", reply_markup=keyboard
-    )
+    await message.answer("Добро пожаловать в бот продажи цифровых постеров!", reply_markup=keyboard)
 
 
 @router.message(F.contact)
@@ -145,7 +143,7 @@ async def on_contact(message: Message, state: FSMContext) -> None:
         channel = _get_channel()
         keyboard = channel.render_keyboard(_MAIN_KEYBOARD_BUTTONS)
         await message.answer(
-            "Номер подтверждён! Теперь вам доступна история покупок и номерков.",
+            "Номер подтверждён! Теперь вам доступна история покупок.",
             reply_markup=keyboard,
         )
         return
@@ -189,7 +187,7 @@ async def on_phone_typed_for_registration(message: Message, state: FSMContext) -
         keyboard = channel.render_keyboard(_MAIN_KEYBOARD_BUTTONS)
         await state.clear()
         await message.answer(
-            "Номер принят! Теперь вам доступна история покупок и номерков.",
+            "Номер принят! Теперь вам доступна история покупок.",
             reply_markup=keyboard,
         )
         return
@@ -219,7 +217,7 @@ async def on_name_entered(message: Message, state: FSMContext) -> None:
     channel = _get_channel()
     keyboard = channel.render_keyboard(_MAIN_KEYBOARD_BUTTONS)
     await message.answer(
-        f"Приятно познакомиться, {name}! Теперь вам доступна история покупок и номерков.",
+        f"Приятно познакомиться, {name}! Теперь вам доступна история покупок.",
         reply_markup=keyboard,
     )
 
@@ -250,7 +248,7 @@ async def _prompt_giveaway_choice(
     ]
     rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="nav:back:menu")])
     await message.answer(
-        "Выберите розыгрыш:", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+        "Выберите коллекцию:", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
     )
     await state.set_state(PurchaseStates.choosing_giveaway)
 
@@ -285,7 +283,7 @@ async def _offer_active_purchase_cancellation(message: Message, participant_id: 
 
     await message.answer(
         f"У вас уже есть незавершённая покупка: «{giveaway.name if giveaway else '—'}», "
-        f"{quantity} номерок(ов) на сумму {amount / 100:.2f} ₽.\n"
+        f"{quantity} экз. на сумму {amount / 100:.2f} ₽.\n"
         "Оплатите её, дождитесь автоматической отмены по таймауту, либо отмените сейчас.",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
@@ -299,7 +297,7 @@ async def _offer_active_purchase_cancellation(message: Message, participant_id: 
     )
 
 
-@router.message(F.text == "🎟 Купить номерки")
+@router.message(F.text == "🖼 Купить постер")
 async def on_buy(message: Message, state: FSMContext) -> None:
     db = get_channel_db()
     with db.session() as session:
@@ -314,7 +312,7 @@ async def on_buy(message: Message, state: FSMContext) -> None:
         giveaways = _open_giveaways(session)
 
     if not giveaways:
-        await message.answer("Сейчас нет доступных для покупки розыгрышей.")
+        await message.answer("Сейчас нет доступных для покупки коллекций.")
         return
 
     if len(giveaways) == 1:
@@ -338,8 +336,8 @@ async def _prompt_quantity(message: Message, state: FSMContext, giveaway: Giveaw
     ]
     rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data=back_target)])
     await message.answer(
-        f"«{giveaway.name}»: цена номерка {giveaway.ticket_price / 100:.2f} ₽. "
-        f"Сколько номерков хотите приобрести? (доступно {giveaway.free_tickets_count})\n"
+        f"«{giveaway.name}»: цена экземпляра {giveaway.ticket_price / 100:.2f} ₽. "
+        f"Сколько экземпляров хотите приобрести? (доступно {giveaway.free_tickets_count})\n"
         "Выберите вариант или введите число.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
@@ -355,7 +353,7 @@ async def on_giveaway_chosen(callback: CallbackQuery, state: FSMContext) -> None
     with db.session() as session:
         giveaway = session.get(Giveaway, giveaway_id)
     if giveaway is None:
-        await callback.answer("Розыгрыш не найден", show_alert=True)
+        await callback.answer("Коллекция не найдена", show_alert=True)
         return
     await _prompt_quantity(_msg(callback), state, giveaway)
     await callback.answer()
@@ -377,7 +375,7 @@ async def on_back_to_giveaways(callback: CallbackQuery, state: FSMContext) -> No
         giveaways = _open_giveaways(session)
     if not giveaways:
         await state.clear()
-        await callback.answer("Сейчас нет доступных для покупки розыгрышей.", show_alert=True)
+        await callback.answer("Сейчас нет доступных для покупки коллекций.", show_alert=True)
         return
     await _prompt_giveaway_choice(_msg(callback), state, giveaways)
     await callback.answer()
@@ -392,7 +390,7 @@ async def on_back_to_quantity(callback: CallbackQuery, state: FSMContext) -> Non
         giveaway = session.get(Giveaway, giveaway_id)
     if giveaway is None:
         await state.clear()
-        await callback.answer("Розыгрыш недоступен.", show_alert=True)
+        await callback.answer("Коллекция недоступна.", show_alert=True)
         return
     await _prompt_quantity(_msg(callback), state, giveaway)
     await callback.answer()
@@ -418,7 +416,7 @@ async def _handle_quantity_selected(
     await state.update_data(giveaway_id=giveaway_id, quantity=quantity)
     await state.set_state(PurchaseStates.awaiting_phone_for_gift)
     await reply_target.answer(
-        "Введите номер телефона получателя номерков (формат: +7XXXXXXXXXX). "
+        "Введите номер телефона получателя постеров (формат: +7XXXXXXXXXX). "
         "Постер и коды придут в этот чат.",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
@@ -445,7 +443,7 @@ async def on_quantity_chosen(callback: CallbackQuery, state: FSMContext) -> None
 async def on_quantity_typed(message: Message, state: FSMContext) -> None:
     text = (message.text or "").strip()
     if not text.isdigit() or int(text) == 0:
-        await message.answer("Введите количество номерков числом (больше нуля).")
+        await message.answer("Введите количество экземпляров числом (больше нуля).")
         return
 
     data = await state.get_data()
@@ -489,8 +487,8 @@ async def _prompt_confirm_order(
     quantity: int,
     participant_id: int,
 ) -> None:
-    """Шаг подтверждения перед резервированием номерков и созданием платежа —
-    случайный тап по количеству иначе сразу занимал бы номерки из общего пула."""
+    """Шаг подтверждения перед резервированием экземпляров и созданием платежа —
+    случайный тап по количеству иначе сразу занимал бы экземпляры из общего пула."""
     from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
     db = get_channel_db()
@@ -498,7 +496,7 @@ async def _prompt_confirm_order(
         giveaway = session.get(Giveaway, giveaway_id)
     if giveaway is None:
         await state.clear()
-        await reply_target.answer("Розыгрыш недоступен. Начните заново — «🎟 Купить номерки».")
+        await reply_target.answer("Коллекция недоступна. Начните заново — «🖼 Купить постер».")
         return
 
     total = giveaway.ticket_price * quantity / 100
@@ -507,7 +505,7 @@ async def _prompt_confirm_order(
     )
     await state.set_state(PurchaseStates.confirming_order)
     await reply_target.answer(
-        f"«{giveaway.name}»: {quantity} номерок(ов) × {giveaway.ticket_price / 100:.2f} ₽ "
+        f"«{giveaway.name}»: {quantity} экз. × {giveaway.ticket_price / 100:.2f} ₽ "
         f"= {total:.2f} ₽. Подтвердить покупку?",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
@@ -536,7 +534,7 @@ async def on_confirm_order_back(callback: CallbackQuery, state: FSMContext) -> N
         giveaway = session.get(Giveaway, data["giveaway_id"])
     if giveaway is None:
         await state.clear()
-        await callback.answer("Розыгрыш недоступен.", show_alert=True)
+        await callback.answer("Коллекция недоступна.", show_alert=True)
         return
     await _prompt_quantity(_msg(callback), state, giveaway)
     await callback.answer()
@@ -569,7 +567,7 @@ async def _create_and_offer_payment(
             await _offer_active_purchase_cancellation(message, participant_id)
         else:
             await message.answer(
-                "К сожалению, свободных номерков меньше, чем нужно "
+                "К сожалению, свободных экземпляров меньше, чем нужно "
                 f"(доступно {outcome.free_count}). Попробуйте выбрать количество заново."
             )
         return
@@ -583,7 +581,7 @@ async def _create_and_offer_payment(
         has_qr=bool(outcome.created.qr_code_payload),
     )
     await message.answer(
-        f"Счёт создан на {quantity} номерок(ов) на сумму {outcome.amount / 100:.2f} ₽. "
+        f"Счёт создан на {quantity} экз. на сумму {outcome.amount / 100:.2f} ₽. "
         "Оплатите по ссылке ниже, либо нажмите «Показать QR» для оплаты по QR-коду (СБП).",
         reply_markup=keyboard,
     )
@@ -691,8 +689,8 @@ async def on_cancel_payment_prompt(callback: CallbackQuery) -> None:
         quantity, amount = payment.quantity, payment.amount
 
     await _msg(callback).answer(
-        f"Точно отменить платёж на {quantity} номерок(ов) на сумму {amount / 100:.2f} ₽? "
-        "Резерв номерков будет снят.",
+        f"Точно отменить платёж на {quantity} экз. на сумму {amount / 100:.2f} ₽? "
+        "Резерв будет снят.",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
                 [
@@ -758,9 +756,7 @@ async def on_cancel_payment_confirm(callback: CallbackQuery) -> None:
                 entity_id=payment_id,
             )
         await callback.answer("Платёж отменён, резерв снят.")
-        await _msg(callback).answer(
-            "Платёж отменён, резерв номерков снят. Можете оформить новую покупку."
-        )
+        await _msg(callback).answer("Платёж отменён, резерв снят. Можете оформить новую покупку.")
         return
 
     late = outcome.late_success_outcome
@@ -772,7 +768,7 @@ async def on_cancel_payment_confirm(callback: CallbackQuery) -> None:
             await callback.answer("Оплата прошла успешно!")
         elif late.late_success_no_tickets:
             await callback.answer(
-                "Оплата прошла успешно, но свободные номерки закончились. "
+                "Оплата прошла успешно, но свободные экземпляры закончились. "
                 "Обратитесь в поддержку — деньги не потеряны.",
                 show_alert=True,
             )
@@ -796,11 +792,11 @@ async def _deliver_tickets(message: Message, outcome: payment_svc.FinalizeOutcom
         str(message.chat.id),
         poster_path=giveaway.digital_poster_path if giveaway else None,
         codes=codes,
-        intro="Оплата прошла успешно! Ваши номерки:",
+        intro="Оплата прошла успешно! Ваши номера:",
     )
 
 
-@router.message(F.text == "📋 Мои номерки")
+@router.message(F.text == "📋 Мои покупки")
 async def on_my_tickets(message: Message) -> None:
     db = get_channel_db()
     with db.session() as session:
@@ -812,7 +808,7 @@ async def on_my_tickets(message: Message) -> None:
             binding, ignore_phone_verification=platform_settings.ignore_phone_verification
         ):
             await message.answer(
-                "Доступ к истории номерков есть только после подтверждения номера. "
+                "Доступ к истории покупок есть только после подтверждения номера. "
                 "Поделитесь контактом, чтобы получить доступ."
             )
             return
@@ -823,9 +819,9 @@ async def on_my_tickets(message: Message) -> None:
         )
 
     if not tickets:
-        await message.answer("У вас пока нет номерков.")
+        await message.answer("У вас пока нет покупок.")
         return
-    await message.answer(f"Ваши номерки ({len(tickets)}):")
+    await message.answer(f"Ваши номера ({len(tickets)}):")
     await _get_channel().send_ticket_codes(str(message.chat.id), [t.full_code for t in tickets])
 
 
@@ -838,8 +834,8 @@ async def on_help(message: Message) -> None:
     contacts = platform_settings.support_contacts or {}
     lines = [
         "Справка по боту:",
-        "— «Купить номерки» — приобрести номерки в активном розыгрыше.",
-        "— «Мои номерки» — история покупок (после подтверждения номера).",
+        "— «Купить постер» — приобрести постер с уникальным номером в активной коллекции.",
+        "— «Мои покупки» — история покупок (после подтверждения номера).",
     ]
     if contacts:
         lines.append("\nПоддержка:")

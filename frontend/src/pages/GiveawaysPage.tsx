@@ -37,10 +37,10 @@ export function GiveawaysPage() {
       });
       setForm({ name: "", prefix: "", ticket_price: "", max_tickets: "" });
       setShowForm(false);
-      showToast("Розыгрыш создан");
+      showToast("Коллекция создана");
       load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Ошибка создания розыгрыша");
+      setError(err instanceof Error ? err.message : "Ошибка создания коллекции");
     }
   });
 
@@ -63,10 +63,10 @@ export function GiveawaysPage() {
 
   const onLock = async (g: Giveaway) => {
     const confirmed = await confirm(
-      `Заблокировать розыгрыш «${g.name}»? Продажи и выдача номерков остановятся.`,
+      `Заблокировать коллекцию «${g.name}»? Продажи и выдача номеров остановятся.`,
     );
     if (!confirmed) return;
-    void runRowAction(g.id, () => GiveawaysApi.lock(g.id), "Розыгрыш заблокирован");
+    void runRowAction(g.id, () => GiveawaysApi.lock(g.id), "Коллекция заблокирована");
   };
 
   const onCloseRegistration = async (g: Giveaway) => {
@@ -81,10 +81,10 @@ export function GiveawaysPage() {
 
   return (
     <div>
-      <h1>Розыгрыши</h1>
+      <h1>Коллекции</h1>
       {canEdit && (
         <button onClick={() => setShowForm((v) => !v)}>
-          {showForm ? "Отмена" : "Новый розыгрыш"}
+          {showForm ? "Отмена" : "Новая коллекция"}
         </button>
       )}
       {showForm && (
@@ -102,7 +102,7 @@ export function GiveawaysPage() {
             required
           />
           <input
-            placeholder="Цена номерка, ₽"
+            placeholder="Цена экземпляра, ₽"
             type="number"
             step="0.01"
             value={form.ticket_price}
@@ -110,7 +110,7 @@ export function GiveawaysPage() {
             required
           />
           <input
-            placeholder="Тираж"
+            placeholder="Лимит количества"
             type="number"
             value={form.max_tickets}
             onChange={(e) => setForm({ ...form, max_tickets: e.target.value })}
@@ -129,7 +129,7 @@ export function GiveawaysPage() {
               <th>Название</th>
               <th>Префикс</th>
               <th>Цена</th>
-              <th>Тираж</th>
+              <th>Лимит</th>
               <th>Выдано</th>
               <th>Резерв</th>
               <th>Регистрация</th>
@@ -181,7 +181,7 @@ export function GiveawaysPage() {
                             void runRowAction(
                               g.id,
                               () => GiveawaysApi.unlock(g.id),
-                              "Розыгрыш разблокирован",
+                              "Коллекция разблокирована",
                             )
                           }
                         >
