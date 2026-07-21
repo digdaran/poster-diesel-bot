@@ -34,6 +34,7 @@ telegram = [
 ]
 vk = [
     "vkbottle>=4.10,<5.0",
+    "httpx>=0.27,<0.28",
     "qrcode[pil]>=7.4,<8.0",
 ]
 dev = [
