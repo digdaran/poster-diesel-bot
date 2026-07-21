@@ -81,10 +81,18 @@ async def on_start(message: Message, state: FSMContext) -> None:
         participant = participant_service.get_participant_by_channel(
             session, channel=ChannelType.TELEGRAM, external_user_id=_uid(message)
         )
+        ignore_verification = settings_service.get_or_create_settings(
+            session
+        ).ignore_phone_verification
 
     if participant is None:
         await message.answer("Добро пожаловать в бот розыгрышей цифровых постеров!")
         await channel.request_contact(_uid(message))
+        if ignore_verification:
+            # П.7.1 ТЗ: при включённом флаге ручной ввод номера тоже открывает
+            # доступ, поэтому кнопка «Поделиться контактом» — не единственный путь.
+            await message.answer("Либо просто напишите номер телефона в чат.")
+            await state.set_state(RegistrationStates.awaiting_phone)
         return
 
     if participant.full_name is None:
@@ -143,6 +151,50 @@ async def on_contact(message: Message, state: FSMContext) -> None:
         return
 
     await message.answer("Номер подтверждён! Как вас зовут?")
+    await state.set_state(RegistrationStates.awaiting_name)
+
+
+@router.message(RegistrationStates.awaiting_phone)
+async def on_phone_typed_for_registration(message: Message, state: FSMContext) -> None:
+    """Ручной ввод номера при первом /start вместо «Поделиться контактом» —
+    доступен, только если открыт из on_start (флаг ignore_phone_verification
+    включён, п.7.1 ТЗ)."""
+    db = get_channel_db()
+    with db.session() as session:
+        try:
+            result = participant_service.bind_channel_ignoring_verification(
+                session,
+                channel=ChannelType.TELEGRAM,
+                external_user_id=_uid(message),
+                phone_raw=message.text or "",
+                username=message.from_user.username if message.from_user else None,
+            )
+        except InvalidPhoneError:
+            await message.answer("Не удалось распознать номер телефона. Попробуйте ещё раз.")
+            return
+        if result.conflict:
+            logger.warning(
+                "channel_rebind_conflict",
+                external_user_id=_uid(message),
+                phone=message.text,
+            )
+            await message.answer(
+                "Этот телеграм-аккаунт уже привязан к другому номеру. Обратитесь к оператору."
+            )
+            return
+        has_name = bool(result.participant.full_name)
+
+    if has_name:
+        channel = _get_channel()
+        keyboard = channel.render_keyboard(_MAIN_KEYBOARD_BUTTONS)
+        await state.clear()
+        await message.answer(
+            "Номер принят! Теперь вам доступна история покупок и номерков.",
+            reply_markup=keyboard,
+        )
+        return
+
+    await message.answer("Номер принят! Как вас зовут?")
     await state.set_state(RegistrationStates.awaiting_name)
 
 

@@ -46,4 +46,5 @@ class PurchaseStates(StatesGroup):
 
 
 class RegistrationStates(StatesGroup):
+    awaiting_phone = State()
     awaiting_name = State()
