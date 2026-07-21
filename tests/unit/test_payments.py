@@ -509,6 +509,77 @@ def test_poll_pending_payment_max_attempts_exhausted(db: Database) -> None:
     assert result.outcome.new_status == PaymentStatus.FAILED
 
 
+class _AlwaysRaisingProvider(MockProvider):
+    """Регресс на боевой инцидент: check_status стал поднимать исключения при
+    ошибках банка (вместо тихого fallback на PENDING) — но poll_pending_payment
+    звал его без try/except, из-за чего TTL/лимит попыток переставали
+    срабатывать вообще, если банк постоянно недоступен, и платёж зависал в
+    PENDING навсегда."""
+
+    def check_status(self, order_id, *, external_payment_id=None):  # type: ignore[no-untyped-def]
+        raise RuntimeError("банк недоступен")
+
+
+def test_poll_pending_payment_ttl_still_expires_when_check_status_raises(db: Database) -> None:
+    gid = make_giveaway(db, max_tickets=10)
+    pid = make_participant(db)
+    provider = _AlwaysRaisingProvider()
+    outcome = svc.create_payment_safe(
+        db,
+        provider,
+        giveaway_id=gid,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=2,
+    )
+    assert outcome.ok
+    assert pool_svc.get_free_count(db, giveaway_id=gid) == 8
+
+    far_future = utcnow() + dt.timedelta(seconds=700)
+    result = svc.poll_pending_payment(
+        db,
+        provider,
+        payment_id=outcome.payment_id,
+        max_attempts=10,
+        ttl_seconds=600,
+        now=far_future,
+    )
+
+    assert result is not None
+    assert result.outcome is not None
+    assert result.outcome.applied
+    assert result.outcome.new_status == PaymentStatus.FAILED
+    assert pool_svc.get_free_count(db, giveaway_id=gid) == 10
+
+
+def test_poll_pending_payment_increments_attempts_when_check_status_raises(db: Database) -> None:
+    gid = make_giveaway(db, max_tickets=10)
+    pid = make_participant(db)
+    provider = _AlwaysRaisingProvider()
+    outcome = svc.create_payment_safe(
+        db,
+        provider,
+        giveaway_id=gid,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=1,
+    )
+    assert outcome.ok
+
+    result = svc.poll_pending_payment(
+        db, provider, payment_id=outcome.payment_id, max_attempts=10, ttl_seconds=600
+    )
+
+    assert result is not None
+    assert result.outcome is None  # ещё не протухло — только инкремент попыток
+    with db.session() as session:
+        payment = session.execute(
+            select(Payment).where(Payment.id == outcome.payment_id)
+        ).scalar_one()
+        assert payment.poll_attempts == 1
+        assert payment.status == PaymentStatus.PENDING
+
+
 def test_cancel_payment_releases_reservation_and_sets_cancelled(db: Database) -> None:
     gid = make_giveaway(db, max_tickets=10)
     pid = make_participant(db)

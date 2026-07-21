@@ -456,7 +456,12 @@ def poll_pending_payment(
 
     Логика: банк вернул SUCCEEDED/FAILED -> финализация; "в процессе" -> инкремент
     poll_attempts и ожидание; лимит попыток или предельный TTL исчерпан -> платёж
-    помечается FAILED, резерв освобождается.
+    помечается FAILED, резерв освобождается. Это должно срабатывать НЕЗАВИСИМО от
+    того, ответил ли банк вообще: `check_status` может поднять исключение (сеть,
+    ошибка банка, отсутствующий `external_payment_id` у старых платежей) — такой
+    сбой трактуется как "статус пока не подтверждён", а не прерывает функцию
+    целиком, иначе платёж мог бы зависнуть в PENDING навсегда, если банк
+    постоянно недоступен (регресс, обнаруженный в проде — см. DECISIONS.md).
     """
     now = now or utcnow()
     with db.session() as session:
@@ -468,7 +473,11 @@ def poll_pending_payment(
         attempts = payment.poll_attempts
         external_payment_id = payment.external_payment_id
 
-    bank_status = provider.check_status(order_id, external_payment_id=external_payment_id)
+    try:
+        bank_status = provider.check_status(order_id, external_payment_id=external_payment_id)
+    except Exception:
+        logger.exception("payment_check_status_failed", payment_id=payment_id, order_id=order_id)
+        bank_status = PaymentStatus.PENDING
 
     if bank_status in (PaymentStatus.SUCCEEDED, PaymentStatus.FAILED):
         outcome = finalize_payment(db, order_id=order_id, new_status=bank_status, now=now)
