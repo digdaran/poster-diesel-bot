@@ -41,11 +41,19 @@ class TBankProvider(BasePaymentProvider):
         secret_key: str,
         api_base: str,
         notification_url: str | None = None,
+        receipt_taxation: str = "usn_income",
+        receipt_tax: str = "none",
+        receipt_payment_method: str = "full_payment",
+        receipt_payment_object: str = "commodity",
     ) -> None:
         self.terminal_key = terminal_key
         self.secret_key = secret_key
         self.api_base = api_base.rstrip("/")
         self.notification_url = notification_url
+        self.receipt_taxation = receipt_taxation
+        self.receipt_tax = receipt_tax
+        self.receipt_payment_method = receipt_payment_method
+        self.receipt_payment_object = receipt_payment_object
 
     @classmethod
     def from_settings(cls, settings: Settings) -> TBankProvider:
@@ -54,6 +62,10 @@ class TBankProvider(BasePaymentProvider):
             secret_key=settings.tbank_secret_key,
             api_base=settings.tbank_api_base,
             notification_url=f"https://{settings.panel_domain}/webhooks/tbank",
+            receipt_taxation=settings.tbank_receipt_taxation,
+            receipt_tax=settings.tbank_receipt_tax,
+            receipt_payment_method=settings.tbank_receipt_payment_method,
+            receipt_payment_object=settings.tbank_receipt_payment_object,
         )
 
     def _sign(self, params: dict[str, Any]) -> str:
@@ -65,12 +77,38 @@ class TBankProvider(BasePaymentProvider):
         concatenated = "".join(str(flat[k]) for k in sorted(flat.keys()))
         return hashlib.sha256(concatenated.encode("utf-8")).hexdigest()
 
+    def _build_receipt(self, order: PaymentOrder) -> dict[str, Any]:
+        """Формирует Receipt для фискализации чека по 54-ФЗ — банк требует его в
+        каждом Init. `Participant` не хранит email (см. app/models/participant.py),
+        поэтому используется только `Phone` — Т-Банк принимает Phone или Email,
+        любого из двух достаточно. `PaymentObject` намеренно не "lottery"/
+        "gambling_bet": условия эквайринга банка запрещают приём платежей за
+        лотерейные билеты (см. коммит о переименовании терминологии
+        розыгрыш->коллекция, DECISIONS.md) — товар в чеке оформляется как обычный
+        товар ("commodity"), согласованно с `Description` ("Постер «...»")."""
+        return {
+            "Phone": f"+{order.participant_phone}",
+            "Taxation": self.receipt_taxation,
+            "Items": [
+                {
+                    "Name": order.description,
+                    "Price": order.unit_price,
+                    "Quantity": order.quantity,
+                    "Amount": order.amount,
+                    "Tax": self.receipt_tax,
+                    "PaymentMethod": self.receipt_payment_method,
+                    "PaymentObject": self.receipt_payment_object,
+                }
+            ],
+        }
+
     def create_payment(self, order: PaymentOrder) -> CreatedPayment:
         request_body: dict[str, Any] = {
             "TerminalKey": self.terminal_key,
             "Amount": order.amount,
             "OrderId": order.order_id,
             "Description": order.description,
+            "Receipt": self._build_receipt(order),
         }
         if self.notification_url:
             # Явно передаём URL уведомления в каждом запросе — не полагаемся на

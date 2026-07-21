@@ -19,7 +19,8 @@ class PaymentOrder:
     """Заказ на создание онлайн-платежа (создаётся сервисным слоем)."""
 
     order_id: str
-    amount: int  # копейки
+    amount: int  # копейки, итого
+    unit_price: int  # копейки, цена одного экземпляра — для Receipt.Items[].Price
     quantity: int
     description: str
     participant_phone: str

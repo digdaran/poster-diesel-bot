@@ -103,6 +103,7 @@ def create_payment(
     order = PaymentOrder(
         order_id=order_id,
         amount=amount,
+        unit_price=giveaway.ticket_price,
         quantity=quantity,
         description=f"Постер «{giveaway.name}»: {quantity} шт.",
         participant_phone=participant_phone,

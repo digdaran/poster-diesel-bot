@@ -99,12 +99,86 @@ def test_create_payment_extracts_external_payment_id(provider: TBankProvider) ->
             PaymentOrder(
                 order_id="order-1",
                 amount=1000,
+                unit_price=1000,
                 quantity=1,
                 description="test",
                 participant_phone="79991234567",
             )
         )
     assert created.external_payment_id == "bank-payment-99"
+
+
+def test_create_payment_includes_receipt(provider: TBankProvider) -> None:
+    """Банк требует Receipt в каждом Init для фискализации чека по 54-ФЗ."""
+    from app.payments.base import PaymentOrder
+
+    with patch("app.payments.tbank.httpx.post") as mock_post:
+        mock_post.return_value = _response(
+            {
+                "Success": True,
+                "PaymentURL": "https://acq.tbank.example/pay/xyz",
+                "PaymentId": "bank-payment-99",
+            }
+        )
+        provider.create_payment(
+            PaymentOrder(
+                order_id="order-1",
+                amount=3000,
+                unit_price=1000,
+                quantity=3,
+                description="Постер «X»: 3 шт.",
+                participant_phone="79991234567",
+            )
+        )
+
+    _, kwargs = mock_post.call_args
+    receipt = kwargs["json"]["Receipt"]
+    assert receipt["Phone"] == "+79991234567"
+    assert receipt["Taxation"] == provider.receipt_taxation
+    assert receipt["Items"] == [
+        {
+            "Name": "Постер «X»: 3 шт.",
+            "Price": 1000,
+            "Quantity": 3,
+            "Amount": 3000,
+            "Tax": provider.receipt_tax,
+            "PaymentMethod": provider.receipt_payment_method,
+            "PaymentObject": provider.receipt_payment_object,
+        }
+    ]
+
+
+def test_create_payment_receipt_not_included_in_signature(provider: TBankProvider) -> None:
+    """Receipt — вложенный объект, банк исключает вложенные поля из подписи Token
+    (см. `_sign`) — Token должен совпадать независимо от содержимого Receipt."""
+    from app.payments.base import PaymentOrder
+
+    order_a = PaymentOrder(
+        order_id="order-1",
+        amount=1000,
+        unit_price=1000,
+        quantity=1,
+        description="test",
+        participant_phone="79991234567",
+    )
+    order_b = PaymentOrder(
+        order_id="order-1",
+        amount=1000,
+        unit_price=500,
+        quantity=2,
+        description="test",
+        participant_phone="70000000000",
+    )
+    with patch("app.payments.tbank.httpx.post") as mock_post:
+        mock_post.return_value = _response(
+            {"Success": True, "PaymentURL": "https://x", "PaymentId": "1"}
+        )
+        provider.create_payment(order_a)
+        token_a = mock_post.call_args.kwargs["json"]["Token"]
+        provider.create_payment(order_b)
+        token_b = mock_post.call_args.kwargs["json"]["Token"]
+
+    assert token_a == token_b
 
 
 def test_create_payment_sends_notification_url_when_configured() -> None:
@@ -132,6 +206,7 @@ def test_create_payment_sends_notification_url_when_configured() -> None:
             PaymentOrder(
                 order_id="order-1",
                 amount=1000,
+                unit_price=1000,
                 quantity=1,
                 description="test",
                 participant_phone="79991234567",
@@ -160,6 +235,7 @@ def test_create_payment_omits_notification_url_when_not_configured(
             PaymentOrder(
                 order_id="order-1",
                 amount=1000,
+                unit_price=1000,
                 quantity=1,
                 description="test",
                 participant_phone="79991234567",
@@ -227,3 +303,25 @@ def test_from_settings_builds_notification_url_from_panel_domain() -> None:
     )
     provider = TBankProvider.from_settings(settings)
     assert provider.notification_url == "https://bot.example.ru/webhooks/tbank"
+
+
+def test_from_settings_builds_receipt_config_from_env() -> None:
+    from app.core.config import Settings
+
+    settings = Settings(
+        JWT_SECRET="test-secret-not-for-production-use-only-in-tests",
+        SUPERADMIN_PASSWORD="test-password",
+        PANEL_DOMAIN="bot.example.ru",
+        TBANK_TERMINAL_KEY="term-1",
+        TBANK_SECRET_KEY="secret-1",
+        TBANK_API_BASE="https://acq.tbank.example/v2",
+        TBANK_RECEIPT_TAXATION="osn",
+        TBANK_RECEIPT_TAX="vat20",
+        TBANK_RECEIPT_PAYMENT_METHOD="full_prepayment",
+        TBANK_RECEIPT_PAYMENT_OBJECT="service",
+    )
+    provider = TBankProvider.from_settings(settings)
+    assert provider.receipt_taxation == "osn"
+    assert provider.receipt_tax == "vat20"
+    assert provider.receipt_payment_method == "full_prepayment"
+    assert provider.receipt_payment_object == "service"

@@ -33,6 +33,18 @@ class Settings(BaseSettings):
     tbank_terminal_key: str = Field(default="", alias="TBANK_TERMINAL_KEY")
     tbank_secret_key: str = Field(default="", alias="TBANK_SECRET_KEY")
     tbank_api_base: str = Field(default="https://securepay.tinkoff.ru/v2", alias="TBANK_API_BASE")
+    # Параметры фискального чека (Receipt), передаваемого в каждом Init — банк требует
+    # его для формирования чека по 54-ФЗ (см. DECISIONS.md). Значения по умолчанию —
+    # заглушка; заказчик обязан выставить реальные (система налогообложения, ставка НДС)
+    # согласно своей регистрации в ФНС/личном кабинете эквайринга перед продакшеном.
+    tbank_receipt_taxation: str = Field(default="usn_income", alias="TBANK_RECEIPT_TAXATION")
+    tbank_receipt_tax: str = Field(default="none", alias="TBANK_RECEIPT_TAX")
+    tbank_receipt_payment_method: str = Field(
+        default="full_payment", alias="TBANK_RECEIPT_PAYMENT_METHOD"
+    )
+    tbank_receipt_payment_object: str = Field(
+        default="commodity", alias="TBANK_RECEIPT_PAYMENT_OBJECT"
+    )
     vtb_merchant_id: str = Field(default="", alias="VTB_MERCHANT_ID")
     vtb_secret_key: str = Field(default="", alias="VTB_SECRET_KEY")
     vtb_api_base: str = Field(default="https://api.vtb.ru/acquiring", alias="VTB_API_BASE")
