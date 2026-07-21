@@ -203,10 +203,62 @@ async def _prompt_giveaway_choice(
     await state.set_state(PurchaseStates.choosing_giveaway)
 
 
+async def _offer_active_purchase_cancellation(message: Message, participant_id: int) -> None:
+    """Участник уже имеет активную покупку (п. "одна активная покупка",
+    DECISIONS.md) — показывает её и предлагает отменить (с подтверждением,
+    защита от случайных нажатий — см. `on_cancel_payment_prompt`), не заставляя
+    искать старое сообщение со счётом. Если активная покупка — ручная
+    регистрация у оператора (не Payment), отменить её из бота нельзя (только
+    оператор в панели) — просто просим подождать."""
+    from app.models.payment import Payment
+
+    db = get_channel_db()
+    with db.session() as session:
+        payment = session.execute(
+            select(Payment).where(
+                Payment.participant_id == participant_id, Payment.status == PaymentStatus.PENDING
+            )
+        ).scalar_one_or_none()
+        if payment is None:
+            await message.answer(
+                "У вас уже есть незавершённая покупка (ручная регистрация у оператора). "
+                "Дождитесь её подтверждения или обратитесь к оператору."
+            )
+            return
+        giveaway = session.get(Giveaway, payment.giveaway_id)
+        order_id = payment.order_id
+        quantity, amount = payment.quantity, payment.amount
+
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+    await message.answer(
+        f"У вас уже есть незавершённая покупка: «{giveaway.name if giveaway else '—'}», "
+        f"{quantity} номерок(ов) на сумму {amount / 100:.2f} ₽.\n"
+        "Оплатите её, дождитесь автоматической отмены по таймауту, либо отмените сейчас.",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="❌ Отменить платёж", callback_data=f"cancel_payment:{order_id}"
+                    )
+                ]
+            ]
+        ),
+    )
+
+
 @router.message(F.text == "🎟 Купить номерки")
 async def on_buy(message: Message, state: FSMContext) -> None:
     db = get_channel_db()
     with db.session() as session:
+        participant = participant_service.get_participant_by_channel(
+            session, channel=ChannelType.TELEGRAM, external_user_id=_uid(message)
+        )
+        if participant is not None and participant_service.has_active_purchase(
+            session, participant_id=participant.id
+        ):
+            await _offer_active_purchase_cancellation(message, participant.id)
+            return
         giveaways = _open_giveaways(session)
 
     if not giveaways:
@@ -462,10 +514,7 @@ async def _create_and_offer_payment(
         )
     if not outcome.ok:
         if outcome.has_active_purchase:
-            await message.answer(
-                "У вас уже есть незавершённая покупка. Дождитесь её оплаты или отмены, "
-                "прежде чем начинать новую."
-            )
+            await _offer_active_purchase_cancellation(message, participant_id)
         else:
             await message.answer(
                 "К сожалению, свободных номерков меньше, чем нужно "
@@ -569,10 +618,58 @@ async def on_check_payment(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("cancel_payment:"))
-async def on_cancel_payment(callback: CallbackQuery) -> None:
+async def on_cancel_payment_prompt(callback: CallbackQuery) -> None:
+    """Подтверждение перед отменой — защита от случайных нажатий (по запросу
+    заказчика, см. DECISIONS.md). Сама отмена выполняется только после явного
+    "Да" — см. `on_cancel_payment_confirm`."""
+    assert callback.data is not None
+    order_id = callback.data.split(":", 1)[1]
+
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+    from app.models.payment import Payment
+
+    db = get_channel_db()
+    with db.session() as session:
+        payment = session.execute(
+            select(Payment).where(Payment.order_id == order_id)
+        ).scalar_one_or_none()
+        if payment is None or payment.status != PaymentStatus.PENDING:
+            await callback.answer("Платёж уже недоступен для отмены.", show_alert=True)
+            return
+        quantity, amount = payment.quantity, payment.amount
+
+    await _msg(callback).answer(
+        f"Точно отменить платёж на {quantity} номерок(ов) на сумму {amount / 100:.2f} ₽? "
+        "Резерв номерков будет снят.",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="✅ Да, отменить", callback_data=f"cancel_payment_confirm:{order_id}"
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="◀️ Нет, оставить", callback_data="cancel_payment_abort"
+                    )
+                ],
+            ]
+        ),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "cancel_payment_abort")
+async def on_cancel_payment_abort(callback: CallbackQuery) -> None:
+    await callback.answer("Платёж остаётся активным.")
+
+
+@router.callback_query(F.data.startswith("cancel_payment_confirm:"))
+async def on_cancel_payment_confirm(callback: CallbackQuery) -> None:
     """Отмена НЕОПЛАЧЕННОГО платежа (п.7.5 ТЗ, DECISIONS.md) — снимает резерв
     номерков и закрывает сессию у банка. Не возврат уже оплаченного платежа
-    (ТЗ §21) — работает только пока платёж ещё в статусе PENDING."""
+    (ТЗ §21) — работает только пока платёж ещё в статусе PENDING. Вызывается
+    только после подтверждения — см. `on_cancel_payment_prompt`."""
     assert callback.data is not None
     order_id = callback.data.split(":", 1)[1]
 

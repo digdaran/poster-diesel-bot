@@ -7,12 +7,19 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
+import pytest
 from app.core.db import Database
 from app.models.giveaway import Giveaway
+from app.models.participant import Participant
+from app.payments.mock import MockProvider
+from app.services import payment_service as payment_svc
 from app.services import ticket_pool_service as pool_svc
 from sqlalchemy.orm import Session
 
-from channels.telegram.handlers import _open_giveaways
+from channels.telegram import handlers as handlers_module
+from channels.telegram.handlers import _offer_active_purchase_cancellation, _open_giveaways
 
 
 def make_giveaway(
@@ -76,3 +83,75 @@ def test_open_giveaways_reports_multiple_when_more_than_one_available(db: Databa
         result = {g.id for g in _open_giveaways(session)}
 
     assert result == {gid_a, gid_b}
+
+
+def _fake_message() -> object:
+    message = type("FakeMessage", (), {})()
+    message.answer = AsyncMock()
+    return message
+
+
+async def test_offer_active_purchase_cancellation_shows_cancel_button_for_pending_payment(
+    db: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """По запросу заказчика (см. DECISIONS.md): участник должен видеть кнопку
+    отмены активного платежа сразу при попытке начать новую покупку, а не
+    искать старое сообщение со счётом в истории чата."""
+    monkeypatch.setattr(handlers_module, "get_channel_db", lambda: db)
+    gid = make_giveaway(db, prefix="ACT")
+    with db.session() as session:
+        p = Participant(phone="79990002233")
+        session.add(p)
+        session.flush()
+        pid = p.id
+
+    outcome = payment_svc.create_payment_safe(
+        db,
+        MockProvider(),
+        giveaway_id=gid,
+        participant_id=pid,
+        participant_phone="79990002233",
+        quantity=2,
+    )
+    assert outcome.ok
+
+    message = _fake_message()
+    await _offer_active_purchase_cancellation(message, pid)
+
+    message.answer.assert_awaited_once()  # type: ignore[attr-defined]
+    _, kwargs = message.answer.call_args  # type: ignore[attr-defined]
+    keyboard = kwargs["reply_markup"]
+    button = keyboard.inline_keyboard[0][0]
+    assert button.callback_data == f"cancel_payment:{outcome.order_id}"
+
+
+async def test_offer_active_purchase_cancellation_no_button_for_manual_registration(
+    db: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Активная покупка через ручную регистрацию оператором не имеет Payment —
+    отменить её из бота нельзя (только оператор в панели), кнопки быть не должно."""
+    from app.models.enums import PanelUserRole
+    from app.models.panel_user import PanelUser
+    from app.services import manual_registration_service as manual_svc
+
+    monkeypatch.setattr(handlers_module, "get_channel_db", lambda: db)
+    gid = make_giveaway(db, prefix="MAN")
+    with db.session() as session:
+        p = Participant(phone="79990003344")
+        session.add(p)
+        operator = PanelUser(login="op-test", password_hash="x", role=PanelUserRole.OPERATOR)
+        session.add(operator)
+        session.flush()
+        pid, oid = p.id, operator.id
+
+    outcome = manual_svc.create_manual_registration_safe(
+        db, giveaway_id=gid, participant_id=pid, quantity=1, operator_id=oid, ttl_seconds=3600
+    )
+    assert outcome.ok
+
+    message = _fake_message()
+    await _offer_active_purchase_cancellation(message, pid)
+
+    message.answer.assert_awaited_once()  # type: ignore[attr-defined]
+    _, kwargs = message.answer.call_args  # type: ignore[attr-defined]
+    assert "reply_markup" not in kwargs
