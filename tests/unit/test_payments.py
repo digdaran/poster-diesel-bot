@@ -224,6 +224,32 @@ def test_create_payment_blocked_by_existing_pending_payment(db: Database) -> Non
     assert pool_svc.get_free_count(db, giveaway_id=gid) == 9  # резерв под второй не создан
 
 
+def test_create_payment_rejects_blocked_participant(db: Database) -> None:
+    """Регресс: Participant.is_blocked, устанавливаемый через панель, не проверялся
+    ни в create_payment, ни в боте — заблокированный участник мог покупать."""
+    gid = make_giveaway(db, max_tickets=10)
+    pid = make_participant(db)
+    with db.session() as session:
+        participant = session.get(Participant, pid)
+        assert participant is not None
+        participant.is_blocked = True
+
+    outcome = svc.create_payment_safe(
+        db,
+        MockProvider(),
+        giveaway_id=gid,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=1,
+    )
+    assert not outcome.ok
+    assert outcome.participant_blocked
+    with db.session() as session:
+        count = len(list(session.execute(select(Payment)).scalars()))
+        assert count == 0
+    assert pool_svc.get_free_count(db, giveaway_id=gid) == 10  # резерв не создан
+
+
 def test_create_payment_blocked_by_existing_pending_manual_registration(db: Database) -> None:
     gid = make_giveaway(db, max_tickets=10)
     pid = make_participant(db)

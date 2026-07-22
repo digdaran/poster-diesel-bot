@@ -86,6 +86,27 @@ def test_insufficient_tickets_registration_not_created(db: Database) -> None:
         assert count == 0
 
 
+def test_create_rejects_blocked_participant(db: Database) -> None:
+    """Регресс: заблокированный (Participant.is_blocked) участник не должен
+    получать номера даже через ручную регистрацию оператором."""
+    gid = make_giveaway(db, max_tickets=10)
+    pid = make_participant(db)
+    oid = make_operator(db)
+    with db.session() as session:
+        participant = session.get(Participant, pid)
+        assert participant is not None
+        participant.is_blocked = True
+
+    outcome = svc.create_manual_registration_safe(
+        db, giveaway_id=gid, participant_id=pid, quantity=1, operator_id=oid, ttl_seconds=3600
+    )
+    assert not outcome.ok
+    assert outcome.participant_blocked
+    with db.session() as session:
+        count = len(list(session.execute(select(ManualRegistration)).scalars()))
+        assert count == 0
+
+
 def test_create_blocked_by_existing_pending_manual_registration(db: Database) -> None:
     gid = make_giveaway(db, max_tickets=10)
     pid = make_participant(db)

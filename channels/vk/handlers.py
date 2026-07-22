@@ -485,7 +485,12 @@ async def _create_and_offer_payment(
             channel=ChannelType.VK,
         )
     if not outcome.ok:
-        if outcome.has_active_purchase:
+        if outcome.participant_blocked:
+            await channel.send_message(
+                _uid(peer_id),
+                "Ваш аккаунт заблокирован, покупка недоступна. Обратитесь в поддержку.",
+            )
+        elif outcome.has_active_purchase:
             await _offer_active_purchase_cancellation(peer_id, participant_id)
         else:
             await channel.send_message(

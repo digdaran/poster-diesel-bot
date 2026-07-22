@@ -151,6 +151,11 @@ def create_manual_registration(
     except svc.GiveawayNotSellableError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     if not outcome.ok:
+        if outcome.participant_blocked:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Участник заблокирован — регистрация невозможна",
+            )
         if outcome.has_active_purchase:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,

@@ -564,7 +564,11 @@ async def _create_and_offer_payment(
             channel=ChannelType.TELEGRAM,
         )
     if not outcome.ok:
-        if outcome.has_active_purchase:
+        if outcome.participant_blocked:
+            await message.answer(
+                "Ваш аккаунт заблокирован, покупка недоступна. Обратитесь в поддержку."
+            )
+        elif outcome.has_active_purchase:
             await _offer_active_purchase_cancellation(message, participant_id)
         else:
             await message.answer(

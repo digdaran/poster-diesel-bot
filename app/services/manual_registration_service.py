@@ -40,6 +40,11 @@ class _ActivePurchaseExists(Exception):
         super().__init__("У участника уже есть активная покупка")
 
 
+class _ParticipantBlocked(Exception):
+    def __init__(self) -> None:
+        super().__init__("Участник заблокирован")
+
+
 @dataclass(frozen=True)
 class CreateManualRegistrationOutcome:
     ok: bool
@@ -48,6 +53,8 @@ class CreateManualRegistrationOutcome:
     has_active_purchase: bool = False
     """True — отказ из-за уже существующей активной покупки участника (продуктовое
     правило, см. DECISIONS.md), а не нехватки номеров."""
+    participant_blocked: bool = False
+    """True — отказ из-за Participant.is_blocked (участник заблокирован в панели)."""
 
 
 def create_manual_registration(
@@ -70,6 +77,8 @@ def create_manual_registration(
             raise GiveawayNotSellableError("Регистрация на розыгрыш не открыта")
         if giveaway.is_locked:
             raise GiveawayNotSellableError("Розыгрыш заблокирован (is_locked)")
+        if participant_service.is_participant_blocked(session, participant_id=participant_id):
+            raise _ParticipantBlocked()
         if participant_service.has_active_purchase(session, participant_id=participant_id):
             raise _ActivePurchaseExists()
 
@@ -127,6 +136,10 @@ def create_manual_registration_safe(
     except _ActivePurchaseExists:
         return CreateManualRegistrationOutcome(
             ok=False, manual_registration_id=None, free_count=0, has_active_purchase=True
+        )
+    except _ParticipantBlocked:
+        return CreateManualRegistrationOutcome(
+            ok=False, manual_registration_id=None, free_count=0, participant_blocked=True
         )
 
 

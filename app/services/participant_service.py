@@ -67,6 +67,17 @@ def can_access_own_account(binding: ChannelBinding, *, ignore_phone_verification
     return binding.phone_verified or ignore_phone_verification
 
 
+def is_participant_blocked(session: Session, *, participant_id: int) -> bool:
+    """Заблокирован ли участник в панели (`Participant.is_blocked`, п.6.2 ТЗ) —
+    проверяется перед созданием любой покупки (см. вызовы в
+    `payment_service.create_payment` / `manual_registration_service.create_manual_registration`),
+    чтобы блокировка реально останавливала транзакции, а не была только фильтром
+    в списке участников."""
+    return session.execute(
+        select(Participant.is_blocked).where(Participant.id == participant_id)
+    ).scalar_one()
+
+
 def has_active_purchase(session: Session, *, participant_id: int) -> bool:
     """Есть ли у участника незавершённая покупка — продуктовое решение:
     не более одной активной покупки одновременно, глобально для всех каналов
