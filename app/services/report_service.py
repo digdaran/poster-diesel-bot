@@ -104,6 +104,25 @@ def sales_by_provider(session: Session, *, giveaway_id: int | None = None) -> li
     ]
 
 
+def sales_by_channel(session: Session, *, giveaway_id: int | None = None) -> list[dict[str, Any]]:
+    """Разбивка успешных онлайн-платежей по мессенджер-каналу (Telegram/VK, п.16 ТЗ).
+
+    `Payment.channel` появилось позже платежей, созданных раньше — у них NULL,
+    отображаем как `"unknown"` (задним числом не восстанавливаем, см. DECISIONS.md)."""
+    stmt = (
+        select(Payment.channel, func.count(Payment.id), func.coalesce(func.sum(Payment.amount), 0))
+        .where(Payment.status == PaymentStatus.SUCCEEDED)
+        .group_by(Payment.channel)
+    )
+    if giveaway_id is not None:
+        stmt = stmt.where(Payment.giveaway_id == giveaway_id)
+    rows = session.execute(stmt).all()
+    return [
+        {"channel": channel.value if channel else "unknown", "count": cnt, "amount": amt}
+        for channel, cnt, amt in rows
+    ]
+
+
 def tickets_by_giveaway_and_source(session: Session) -> list[dict[str, Any]]:
     """Выданные номерки по розыгрышам и источнику (online/manual, п.16 ТЗ)."""
     stmt = (
@@ -209,9 +228,19 @@ def revenue_by_giveaway(session: Session) -> list[dict[str, Any]]:
     return result
 
 
+def _stringify_lists(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """CSV/XLSX не умеют писать список в одну ячейку (openpyxl падает с
+    `ValueError: Cannot convert [] to Excel`) — сериализуем list-значения
+    (например, `ParticipantOut.channels`) в строку через запятую перед экспортом."""
+    return [
+        {k: (", ".join(v) if isinstance(v, list) else v) for k, v in row.items()} for row in rows
+    ]
+
+
 def to_csv(rows: list[dict[str, Any]]) -> bytes:
     """CSV с `;`-разделителем и UTF-8 BOM — корректно открывается в Excel на
     русской локали (см. DECISIONS.md)."""
+    rows = _stringify_lists(rows)
     buffer = io.StringIO()
     if rows:
         writer = csv.DictWriter(buffer, fieldnames=list(rows[0].keys()), delimiter=";")
@@ -221,6 +250,7 @@ def to_csv(rows: list[dict[str, Any]]) -> bytes:
 
 
 def to_xlsx(rows: list[dict[str, Any]]) -> bytes:
+    rows = _stringify_lists(rows)
     wb = Workbook()
     ws = wb.active
     assert ws is not None

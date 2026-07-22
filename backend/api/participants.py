@@ -13,7 +13,7 @@ from app.models.participant import Participant
 from app.services import audit_service, participant_service
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from backend.api.deps import get_session, require_permission
 from backend.api.pagination import count_total, page_bounds, validate_page_size
@@ -50,7 +50,12 @@ def list_participants(
 
     total = count_total(session, stmt)
     limit, offset = page_bounds(page=page, page_size=page_size)
-    page_stmt = stmt.order_by(Participant.id.desc()).limit(limit).offset(offset)
+    page_stmt = (
+        stmt.options(selectinload(Participant.channel_bindings))
+        .order_by(Participant.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )
     items = session.execute(page_stmt).scalars().all()
     return {
         "items": [ParticipantOut.model_validate(p).model_dump(mode="json") for p in items],

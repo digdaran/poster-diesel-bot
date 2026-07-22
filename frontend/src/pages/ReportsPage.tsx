@@ -4,7 +4,14 @@ import { apiDownload } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { LoadingState, EmptyStateRow } from "../components/EmptyState";
 import { formatMoney } from "../utils/format";
-import type { Giveaway, RevenueByGiveawayRow } from "../api/types";
+import type { ChannelSalesRow, Giveaway, RevenueByGiveawayRow } from "../api/types";
+
+const CHANNEL_LABELS: Record<string, string> = {
+  telegram: "Telegram",
+  vk: "VK",
+  max: "MAX",
+  unknown: "Неизвестно (до внедрения)",
+};
 
 export function ReportsPage() {
   const { hasPermission } = useAuth();
@@ -22,6 +29,7 @@ export function ReportsPage() {
     { count: number; amount: number }
   > | null>(null);
   const [byGiveaway, setByGiveaway] = useState<RevenueByGiveawayRow[] | null>(null);
+  const [byChannel, setByChannel] = useState<ChannelSalesRow[] | null>(null);
 
   useEffect(() => {
     void GiveawaysApi.list().then(setGiveaways);
@@ -31,6 +39,7 @@ export function ReportsPage() {
   useEffect(() => {
     void ReportsApi.financialSummary(giveawayId).then(setSummary);
     void ReportsApi.onlineVsOffline(giveawayId).then(setOnlineOffline);
+    void ReportsApi.salesByChannel(giveawayId).then(setByChannel);
   }, [giveawayId]);
 
   const downloadReport = async (path: string, format: "csv" | "xlsx") => {
@@ -139,6 +148,35 @@ export function ReportsPage() {
         )}
       </section>
 
+      <section>
+        <h2>Продажи по каналу связи (Telegram/VK)</h2>
+        {byChannel ? (
+          <div className="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Канал</th>
+                  <th>Кол-во</th>
+                  <th>Сумма</th>
+                </tr>
+              </thead>
+              <tbody>
+                {byChannel.length === 0 && <EmptyStateRow colSpan={3} />}
+                {byChannel.map((row) => (
+                  <tr key={row.channel}>
+                    <td>{CHANNEL_LABELS[row.channel] ?? row.channel}</td>
+                    <td>{row.count}</td>
+                    <td>{formatMoney(row.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <LoadingState />
+        )}
+      </section>
+
       {hasPermission("reports_export") && (
         <section>
           <h2>Экспорт</h2>
@@ -147,6 +185,12 @@ export function ReportsPage() {
           </button>
           <button onClick={() => downloadReport("/api/reports/by-provider", "xlsx")}>
             По провайдерам — XLSX
+          </button>
+          <button onClick={() => downloadReport("/api/reports/by-channel", "csv")}>
+            По каналу связи — CSV
+          </button>
+          <button onClick={() => downloadReport("/api/reports/by-channel", "xlsx")}>
+            По каналу связи — XLSX
           </button>
           <button onClick={() => downloadReport("/api/reports/participants", "xlsx")}>
             По участникам — XLSX

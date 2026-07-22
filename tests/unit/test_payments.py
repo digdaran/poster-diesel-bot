@@ -11,7 +11,7 @@ import pytest
 from app.core.db import Database
 from app.models.audit_log import AuditLog
 from app.models.base import utcnow
-from app.models.enums import PanelUserRole, PaymentStatus
+from app.models.enums import ChannelType, PanelUserRole, PaymentStatus
 from app.models.giveaway import Giveaway
 from app.models.panel_user import PanelUser
 from app.models.participant import Participant
@@ -82,6 +82,43 @@ def test_create_payment_persists_external_payment_id(db: Database) -> None:
         ).scalar_one()
         assert payment.external_payment_id == outcome.created.external_payment_id
         assert payment.external_payment_id is not None
+
+
+def test_create_payment_persists_channel(db: Database) -> None:
+    """Канал (Telegram/VK), из которого создан платёж, сохраняется на Payment —
+    нужен для отображения в панели/отчётах. Отсутствие channel= (например, из
+    старого кода вызова) оставляет поле NULL, а не ломает создание платежа."""
+    gid = make_giveaway(db, max_tickets=10)
+    pid = make_participant(db)
+    with_channel = svc.create_payment_safe(
+        db,
+        MockProvider(),
+        giveaway_id=gid,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=1,
+        channel=ChannelType.TELEGRAM,
+    )
+    assert with_channel.ok
+    pid_2 = make_participant(db, phone="79997654321")
+    without_channel = svc.create_payment_safe(
+        db,
+        MockProvider(),
+        giveaway_id=gid,
+        participant_id=pid_2,
+        participant_phone="79997654321",
+        quantity=1,
+    )
+    assert without_channel.ok
+    with db.session() as session:
+        payment_with = session.execute(
+            select(Payment).where(Payment.id == with_channel.payment_id)
+        ).scalar_one()
+        payment_without = session.execute(
+            select(Payment).where(Payment.id == without_channel.payment_id)
+        ).scalar_one()
+        assert payment_with.channel == ChannelType.TELEGRAM
+        assert payment_without.channel is None
 
 
 def test_poll_pending_payment_passes_external_payment_id_to_provider(db: Database) -> None:

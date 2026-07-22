@@ -7,6 +7,7 @@ import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { PaginationControls } from "../components/PaginationControls";
 import { useToast } from "../components/Toast";
 import { Badge } from "../components/Badge";
+import { ChannelBadges } from "../components/ChannelBadges";
 import { EmptyStateRow } from "../components/EmptyState";
 import { formatDateTime } from "../utils/format";
 
@@ -155,12 +156,13 @@ export function ParticipantsPage() {
               <th>Имя</th>
               <th>Подтверждён</th>
               <th>Заблокирован</th>
+              <th>Каналы</th>
               <th>Регистрация</th>
               {showActions && <th>Действия</th>}
             </tr>
           </thead>
           <tbody>
-            {participants.length === 0 && <EmptyStateRow colSpan={showActions ? 6 : 5} />}
+            {participants.length === 0 && <EmptyStateRow colSpan={showActions ? 7 : 6} />}
             {participants.map((p) => (
               <tr key={p.id}>
                 <td>{p.phone}</td>
@@ -180,6 +182,9 @@ export function ParticipantsPage() {
                   <Badge tone={p.is_blocked ? "danger" : "muted"}>
                     {p.is_blocked ? "Да" : "Нет"}
                   </Badge>
+                </td>
+                <td>
+                  <ChannelBadges channels={p.channels} />
                 </td>
                 <td>{formatDateTime(p.created_at)}</td>
                 {showActions && (

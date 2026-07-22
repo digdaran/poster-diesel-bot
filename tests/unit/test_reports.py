@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.models.enums import (
+    ChannelType,
     ManualRegistrationStatus,
     PanelUserRole,
     PaymentProviderType,
@@ -81,6 +82,56 @@ def test_sales_by_provider_and_financial_summary(session: Session) -> None:
     assert summary["revenue_total"] == 30000
     assert summary["successful_payments_count"] == 2
     assert summary["average_check"] == 15000
+
+
+def test_sales_by_channel(session: Session) -> None:
+    g = make_giveaway(session)
+    p = make_participant(session, "79990002222")
+    session.add(
+        Payment(
+            order_id="c1",
+            participant_id=p.id,
+            giveaway_id=g.id,
+            provider=PaymentProviderType.MOCK,
+            channel=ChannelType.TELEGRAM,
+            amount=20000,
+            quantity=2,
+            status=PaymentStatus.SUCCEEDED,
+        )
+    )
+    session.add(
+        Payment(
+            order_id="c2",
+            participant_id=p.id,
+            giveaway_id=g.id,
+            provider=PaymentProviderType.MOCK,
+            channel=ChannelType.VK,
+            amount=10000,
+            quantity=1,
+            status=PaymentStatus.SUCCEEDED,
+        )
+    )
+    session.add(
+        # Платёж без канала (создан до появления Payment.channel) — попадает в "unknown".
+        Payment(
+            order_id="c3",
+            participant_id=p.id,
+            giveaway_id=g.id,
+            provider=PaymentProviderType.MOCK,
+            amount=5000,
+            quantity=1,
+            status=PaymentStatus.SUCCEEDED,
+        )
+    )
+    session.flush()
+
+    by_channel = {row["channel"]: row for row in svc.sales_by_channel(session)}
+    assert by_channel["telegram"]["count"] == 1
+    assert by_channel["telegram"]["amount"] == 20000
+    assert by_channel["vk"]["count"] == 1
+    assert by_channel["vk"]["amount"] == 10000
+    assert by_channel["unknown"]["count"] == 1
+    assert by_channel["unknown"]["amount"] == 5000
 
 
 def test_sales_by_operator(session: Session) -> None:
@@ -220,3 +271,18 @@ def test_export_csv_and_xlsx_smoke() -> None:
 
     xlsx_bytes = svc.to_xlsx(rows)
     assert xlsx_bytes[:2] == b"PK"  # xlsx — это zip-контейнер
+
+
+def test_export_csv_and_xlsx_with_list_valued_field() -> None:
+    """Регресс: `ParticipantOut.channels`/`ManualRegistrationOut.participant_channels`
+    (список каналов участника) падал в openpyxl с `ValueError: Cannot convert [] to
+    Excel` — списки должны сериализоваться в строку перед экспортом."""
+    rows = [
+        {"phone": "79990001111", "channels": ["telegram", "vk"]},
+        {"phone": "79990002222", "channels": []},
+    ]
+    csv_bytes = svc.to_csv(rows)
+    assert b"telegram, vk" in csv_bytes
+
+    xlsx_bytes = svc.to_xlsx(rows)
+    assert xlsx_bytes[:2] == b"PK"

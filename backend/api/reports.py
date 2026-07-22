@@ -65,6 +65,17 @@ def by_provider(
     return _maybe_export(rows, export, user, "sales_by_provider")
 
 
+@router.get("/by-channel", response_model=None)
+def by_channel(
+    giveaway_id: int | None = None,
+    export: ExportFormat | None = None,
+    session: Session = Depends(get_session),
+    user: PanelUser = Depends(require_permission(Permission.REPORTS_VIEW)),
+) -> list[dict[str, Any]] | Response:
+    rows = svc.sales_by_channel(session, giveaway_id=giveaway_id)
+    return _maybe_export(rows, export, user, "sales_by_channel")
+
+
 @router.get("/tickets-by-source", response_model=None)
 def tickets_by_source(
     export: ExportFormat | None = None,

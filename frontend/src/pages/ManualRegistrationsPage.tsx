@@ -10,6 +10,7 @@ import { PaginationControls } from "../components/PaginationControls";
 import { useToast } from "../components/Toast";
 import { useConfirm } from "../components/ConfirmDialog";
 import { Badge } from "../components/Badge";
+import { ChannelBadges } from "../components/ChannelBadges";
 import { EmptyStateRow } from "../components/EmptyState";
 import { formatMoney } from "../utils/format";
 import type { Giveaway, ManualRegistration } from "../api/types";
@@ -293,6 +294,7 @@ export function ManualRegistrationsPage() {
               <th>ID</th>
               <th>Коллекция</th>
               <th>Участник</th>
+              <th>Каналы</th>
               <th>Кол-во</th>
               <th>Сумма</th>
               <th>Оператор</th>
@@ -301,12 +303,15 @@ export function ManualRegistrationsPage() {
             </tr>
           </thead>
           <tbody>
-            {registrations.length === 0 && <EmptyStateRow colSpan={8} />}
+            {registrations.length === 0 && <EmptyStateRow colSpan={9} />}
             {registrations.map((r) => (
               <tr key={r.id}>
                 <td>{r.id}</td>
                 <td>{r.giveaway_name}</td>
                 <td>{r.participant_full_name ?? r.participant_phone}</td>
+                <td>
+                  <ChannelBadges channels={r.participant_channels} />
+                </td>
                 <td>{r.quantity}</td>
                 <td>{formatMoney(r.revenue)}</td>
                 <td>{r.operator_login}</td>

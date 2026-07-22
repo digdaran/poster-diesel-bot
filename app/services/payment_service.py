@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.core.db import Database
 from app.models.base import utcnow
-from app.models.enums import AuditActorType, PaymentStatus, TicketSource
+from app.models.enums import AuditActorType, ChannelType, PaymentStatus, TicketSource
 from app.models.giveaway import Giveaway
 from app.models.payment import Payment
 from app.models.ticket import Ticket
@@ -54,6 +54,7 @@ def create_payment(
     participant_id: int,
     participant_phone: str,
     quantity: int,
+    channel: ChannelType | None = None,
 ) -> CreatePaymentOutcome:
     """Создаёт платёж и резервирует номера атомарно (п.7.3, 7.5 ТЗ).
 
@@ -79,6 +80,7 @@ def create_payment(
             participant_id=participant_id,
             giveaway_id=giveaway_id,
             provider=provider.provider_type,
+            channel=channel,
             amount=amount,
             quantity=quantity,
             status=PaymentStatus.PENDING,
@@ -150,6 +152,7 @@ def create_payment_safe(
     participant_id: int,
     participant_phone: str,
     quantity: int,
+    channel: ChannelType | None = None,
 ) -> CreatePaymentOutcome:
     """Обёртка над `create_payment`, превращающая нехватку номеров в обычный
     (не-исключительный) результат — удобно для вызова из ботов/API."""
@@ -161,6 +164,7 @@ def create_payment_safe(
             participant_id=participant_id,
             participant_phone=participant_phone,
             quantity=quantity,
+            channel=channel,
         )
     except _InsufficientTickets as exc:
         return CreatePaymentOutcome(

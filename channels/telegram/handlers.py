@@ -561,6 +561,7 @@ async def _create_and_offer_payment(
             participant_id=participant_id,
             participant_phone=phone,
             quantity=quantity,
+            channel=ChannelType.TELEGRAM,
         )
     if not outcome.ok:
         if outcome.has_active_purchase:

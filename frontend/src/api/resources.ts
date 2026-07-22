@@ -2,6 +2,7 @@ import { apiRequest } from "./client";
 import type {
   AuditLogEntry,
   Broadcast,
+  ChannelSalesRow,
   Dashboard,
   Giveaway,
   ManualRegistration,
@@ -104,6 +105,7 @@ export interface SalesFilter extends PageParams {
   status_filter?: string;
   order_id?: string;
   provider?: string;
+  channel?: string;
   participant_query?: string;
   created_from?: string;
   created_to?: string;
@@ -119,6 +121,7 @@ export interface TicketsFilter extends PageParams {
   full_code?: string;
   participant_query?: string;
   source?: string;
+  channel?: string;
   created_from?: string;
   created_to?: string;
 }
@@ -186,4 +189,6 @@ export const ReportsApi = {
       },
     ),
   revenueByGiveaway: () => apiRequest<RevenueByGiveawayRow[]>("/api/reports/revenue-by-giveaway"),
+  salesByChannel: (giveaway_id?: number) =>
+    apiRequest<ChannelSalesRow[]>("/api/reports/by-channel", { query: { giveaway_id } }),
 };

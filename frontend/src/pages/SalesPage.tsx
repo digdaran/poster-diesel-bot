@@ -6,6 +6,7 @@ import { usePagination } from "../hooks/usePagination";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { PaginationControls } from "../components/PaginationControls";
 import { Badge } from "../components/Badge";
+import { ChannelBadges } from "../components/ChannelBadges";
 import { EmptyStateRow } from "../components/EmptyState";
 import { formatMoney, formatDateTime } from "../utils/format";
 import type { Giveaway, Payment } from "../api/types";
@@ -26,6 +27,7 @@ export function SalesPage() {
   const [giveawayId, setGiveawayId] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [provider, setProvider] = useState("");
+  const [channel, setChannel] = useState("");
   const [orderId, setOrderId] = useState("");
   const [participantQuery, setParticipantQuery] = useState("");
   const [createdFrom, setCreatedFrom] = useState("");
@@ -45,6 +47,7 @@ export function SalesPage() {
       giveaway_id: giveawayId ? Number(giveawayId) : undefined,
       status_filter: statusFilter || undefined,
       provider: provider || undefined,
+      channel: channel || undefined,
       order_id: debouncedOrderId || undefined,
       participant_query: debouncedParticipantQuery || undefined,
       created_from: createdFrom || undefined,
@@ -59,6 +62,7 @@ export function SalesPage() {
     giveawayId,
     statusFilter,
     provider,
+    channel,
     debouncedOrderId,
     debouncedParticipantQuery,
     createdFrom,
@@ -71,6 +75,7 @@ export function SalesPage() {
       giveaway_id: giveawayId ? Number(giveawayId) : undefined,
       status_filter: statusFilter || undefined,
       provider: provider || undefined,
+      channel: channel || undefined,
       order_id: debouncedOrderId || undefined,
       participant_query: debouncedParticipantQuery || undefined,
       created_from: createdFrom || undefined,
@@ -132,6 +137,17 @@ export function SalesPage() {
           <option value="vtb">vtb</option>
         </select>
         <select
+          value={channel}
+          onChange={(e) => {
+            setChannel(e.target.value);
+            setPage(1);
+          }}
+        >
+          <option value="">Все каналы</option>
+          <option value="telegram">Telegram</option>
+          <option value="vk">VK</option>
+        </select>
+        <select
           value={statusFilter}
           onChange={(e) => {
             setStatusFilter(e.target.value);
@@ -181,6 +197,7 @@ export function SalesPage() {
               <th>Коллекция</th>
               <th>Участник</th>
               <th>Провайдер</th>
+              <th>Канал</th>
               <th>Сумма</th>
               <th>Кол-во</th>
               <th>Статус</th>
@@ -189,13 +206,16 @@ export function SalesPage() {
             </tr>
           </thead>
           <tbody>
-            {payments.length === 0 && <EmptyStateRow colSpan={9} />}
+            {payments.length === 0 && <EmptyStateRow colSpan={10} />}
             {payments.map((p) => (
               <tr key={p.id}>
                 <td>{p.order_id}</td>
                 <td>{p.giveaway_name}</td>
                 <td>{p.participant_full_name ?? p.participant_phone}</td>
                 <td>{p.provider}</td>
+                <td>
+                  <ChannelBadges channel={p.channel} />
+                </td>
                 <td>{formatMoney(p.amount)}</td>
                 <td>{p.quantity}</td>
                 <td>

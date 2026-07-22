@@ -61,7 +61,7 @@ def list_manual_registrations(
         contains_eager(ManualRegistration.participant)
         if participant_query
         else joinedload(ManualRegistration.participant)
-    )
+    ).selectinload(Participant.channel_bindings)
     eager_options = (
         participant_load,
         joinedload(ManualRegistration.giveaway),
@@ -101,6 +101,7 @@ def _to_out(session: Session, registration: ManualRegistration) -> ManualRegistr
         participant_id=registration.participant_id,
         participant_phone=registration.participant.phone,
         participant_full_name=registration.participant.full_name,
+        participant_channels=registration.participant.channels,
         giveaway_id=registration.giveaway_id,
         giveaway_name=registration.giveaway.name,
         quantity=registration.quantity,

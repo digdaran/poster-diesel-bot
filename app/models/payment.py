@@ -10,7 +10,7 @@ from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, created_at_column
-from app.models.enums import PaymentProviderType, PaymentStatus
+from app.models.enums import ChannelType, PaymentProviderType, PaymentStatus
 
 if TYPE_CHECKING:
     from app.models.giveaway import Giveaway
@@ -30,6 +30,12 @@ class Payment(Base):
     giveaway_id: Mapped[int] = mapped_column(ForeignKey("giveaways.id"), nullable=False, index=True)
     provider: Mapped[PaymentProviderType] = mapped_column(
         SAEnum(PaymentProviderType, native_enum=False), nullable=False
+    )
+    # Мессенджер-канал, из которого создан платёж (Telegram/VK) — NULL для
+    # платежей, созданных до появления этого поля (задним числом не восстанавливаем,
+    # см. DECISIONS.md). Не путать с `provider` (банк-эквайер).
+    channel: Mapped[ChannelType | None] = mapped_column(
+        SAEnum(ChannelType, native_enum=False), nullable=True
     )
     amount: Mapped[int] = mapped_column(Integer, nullable=False)
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)

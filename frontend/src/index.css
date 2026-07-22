@@ -383,6 +383,13 @@ section {
 
 /* Badges */
 
+.badge-group {
+  display: inline-flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
 .badge {
   display: inline-block;
   padding: 2px 8px;

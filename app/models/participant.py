@@ -43,3 +43,9 @@ class Participant(Base):
     def recompute_phone_verified(self) -> None:
         """Пересчитывает `phone_verified` из привязок (производное поле, п.6.2 ТЗ)."""
         self.phone_verified = any(b.phone_verified for b in self.channel_bindings)
+
+    @property
+    def channels(self) -> list[str]:
+        """Все мессенджер-каналы, к которым привязан участник (может быть больше
+        одного — см. ChannelBinding) — для отображения в панели/отчётах."""
+        return [b.channel.value for b in self.channel_bindings]

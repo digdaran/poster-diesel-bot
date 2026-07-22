@@ -5,6 +5,7 @@ import { useAuth } from "../auth/AuthContext";
 import { usePagination } from "../hooks/usePagination";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { PaginationControls } from "../components/PaginationControls";
+import { ChannelBadges } from "../components/ChannelBadges";
 import { EmptyStateRow } from "../components/EmptyState";
 import { formatDateTime } from "../utils/format";
 import type { Giveaway, Ticket } from "../api/types";
@@ -19,6 +20,7 @@ export function TicketsPage() {
   const [giveawayId, setGiveawayId] = useState("");
   const [fullCode, setFullCode] = useState("");
   const [source, setSource] = useState("");
+  const [channel, setChannel] = useState("");
   const [participantQuery, setParticipantQuery] = useState("");
   const [createdFrom, setCreatedFrom] = useState("");
   const [createdTo, setCreatedTo] = useState("");
@@ -37,6 +39,7 @@ export function TicketsPage() {
       giveaway_id: giveawayId ? Number(giveawayId) : undefined,
       full_code: debouncedFullCode || undefined,
       source: source || undefined,
+      channel: channel || undefined,
       participant_query: debouncedParticipantQuery || undefined,
       created_from: createdFrom || undefined,
       created_to: createdTo || undefined,
@@ -50,6 +53,7 @@ export function TicketsPage() {
     giveawayId,
     debouncedFullCode,
     source,
+    channel,
     debouncedParticipantQuery,
     createdFrom,
     createdTo,
@@ -61,6 +65,7 @@ export function TicketsPage() {
       giveaway_id: giveawayId ? Number(giveawayId) : undefined,
       full_code: debouncedFullCode || undefined,
       source: source || undefined,
+      channel: channel || undefined,
       participant_query: debouncedParticipantQuery || undefined,
       created_from: createdFrom || undefined,
       created_to: createdTo || undefined,
@@ -119,6 +124,17 @@ export function TicketsPage() {
           <option value="online">Онлайн</option>
           <option value="manual">Ручная</option>
         </select>
+        <select
+          value={channel}
+          onChange={(e) => {
+            setChannel(e.target.value);
+            setPage(1);
+          }}
+        >
+          <option value="">Все каналы</option>
+          <option value="telegram">Telegram</option>
+          <option value="vk">VK</option>
+        </select>
         <label>
           Выдан с{" "}
           <input
@@ -157,17 +173,21 @@ export function TicketsPage() {
               <th>Коллекция</th>
               <th>Участник</th>
               <th>Источник</th>
+              <th>Канал</th>
               <th>Выдан</th>
             </tr>
           </thead>
           <tbody>
-            {tickets.length === 0 && <EmptyStateRow colSpan={5} />}
+            {tickets.length === 0 && <EmptyStateRow colSpan={6} />}
             {tickets.map((t) => (
               <tr key={t.id}>
                 <td>{t.full_code}</td>
                 <td>{t.giveaway_name}</td>
                 <td>{t.participant_full_name ?? t.participant_phone}</td>
                 <td>{t.source === "online" ? "Онлайн" : "Ручная"}</td>
+                <td>
+                  <ChannelBadges channel={t.channel} />
+                </td>
                 <td>{formatDateTime(t.created_at)}</td>
               </tr>
             ))}

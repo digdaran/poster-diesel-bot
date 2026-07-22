@@ -41,6 +41,7 @@ class ParticipantOut(BaseModel):
     phone_verified: bool
     full_name: str | None
     is_blocked: bool
+    channels: list[str]
     created_at: dt.datetime
 
     model_config = {"from_attributes": True}
@@ -88,6 +89,7 @@ class ManualRegistrationOut(BaseModel):
     participant_id: int
     participant_phone: str
     participant_full_name: str | None
+    participant_channels: list[str]
     giveaway_id: int
     giveaway_name: str
     quantity: int
@@ -128,6 +130,7 @@ class PaymentOut(BaseModel):
     giveaway_id: int
     giveaway_name: str
     provider: str
+    channel: str | None
     amount: int
     quantity: int
     status: str
@@ -147,6 +150,7 @@ class TicketOut(BaseModel):
     participant_phone: str
     participant_full_name: str | None
     source: str
+    channel: str | None
     created_at: dt.datetime
 
     model_config = {"from_attributes": True}

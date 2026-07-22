@@ -11,6 +11,7 @@ export interface Participant {
   phone_verified: boolean;
   full_name: string | null;
   is_blocked: boolean;
+  channels: string[];
   created_at: string;
 }
 
@@ -34,6 +35,7 @@ export interface ManualRegistration {
   participant_id: number;
   participant_phone: string;
   participant_full_name: string | null;
+  participant_channels: string[];
   giveaway_id: number;
   giveaway_name: string;
   quantity: number;
@@ -56,6 +58,7 @@ export interface Payment {
   giveaway_id: number;
   giveaway_name: string;
   provider: string;
+  channel: string | null;
   amount: number;
   quantity: number;
   status: "PENDING" | "SUCCEEDED" | "FAILED";
@@ -73,6 +76,7 @@ export interface Ticket {
   participant_phone: string;
   participant_full_name: string | null;
   source: "online" | "manual";
+  channel: string | null;
   created_at: string;
 }
 
@@ -135,6 +139,12 @@ export interface RevenueByGiveawayRow {
   revenue_offline: number;
   revenue_total: number;
   tickets_issued: number;
+}
+
+export interface ChannelSalesRow {
+  channel: string;
+  count: number;
+  amount: number;
 }
 
 export interface Page<T> {

@@ -6,9 +6,10 @@ import datetime as dt
 from typing import Any
 
 from app.core.permissions import Permission
-from app.models.enums import TicketSource
+from app.models.enums import ChannelType, TicketSource
 from app.models.panel_user import PanelUser
 from app.models.participant import Participant
+from app.models.payment import Payment
 from app.models.ticket import Ticket
 from fastapi import APIRouter, Depends, Response
 from sqlalchemy import or_, select
@@ -33,6 +34,7 @@ def _to_dict(t: Ticket) -> dict[str, Any]:
         participant_phone=t.participant.phone,
         participant_full_name=t.participant.full_name,
         source=t.source.value,
+        channel=t.payment.channel.value if t.payment and t.payment.channel else None,
         created_at=t.created_at,
     ).model_dump(mode="json")
 
@@ -43,6 +45,7 @@ def list_tickets(
     full_code: str | None = None,
     participant_query: str | None = None,
     source: TicketSource | None = None,
+    channel: ChannelType | None = None,
     created_from: dt.date | None = None,
     created_to: dt.date | None = None,
     page: int = 1,
@@ -59,6 +62,8 @@ def list_tickets(
         stmt = stmt.where(Ticket.full_code.like(f"%{full_code}%"))
     if source is not None:
         stmt = stmt.where(Ticket.source == source)
+    if channel is not None:
+        stmt = stmt.join(Ticket.payment).where(Payment.channel == channel)
     if created_from is not None:
         stmt = stmt.where(Ticket.created_at >= created_from)
     if created_to is not None:
@@ -71,18 +76,21 @@ def list_tickets(
     participant_load = (
         contains_eager(Ticket.participant) if participant_query else joinedload(Ticket.participant)
     )
+    payment_load = (
+        contains_eager(Ticket.payment) if channel is not None else joinedload(Ticket.payment)
+    )
 
     if export is not None:
-        eager_stmt = stmt.options(participant_load, joinedload(Ticket.giveaway)).order_by(
-            Ticket.id.desc()
-        )
+        eager_stmt = stmt.options(
+            participant_load, joinedload(Ticket.giveaway), payment_load
+        ).order_by(Ticket.id.desc())
         rows = [_to_dict(t) for t in session.execute(eager_stmt).scalars()]
         return maybe_export(rows, export, user, "tickets", permission=Permission.SALES_EXPORT)
 
     total = count_total(session, stmt)
     limit, offset = page_bounds(page=page, page_size=page_size)
     eager_stmt = (
-        stmt.options(participant_load, joinedload(Ticket.giveaway))
+        stmt.options(participant_load, joinedload(Ticket.giveaway), payment_load)
         .order_by(Ticket.id.desc())
         .limit(limit)
         .offset(offset)

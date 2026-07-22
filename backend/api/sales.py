@@ -6,7 +6,7 @@ import datetime as dt
 from typing import Any
 
 from app.core.permissions import Permission
-from app.models.enums import PaymentProviderType, PaymentStatus
+from app.models.enums import ChannelType, PaymentProviderType, PaymentStatus
 from app.models.panel_user import PanelUser
 from app.models.participant import Participant
 from app.models.payment import Payment
@@ -32,6 +32,7 @@ def _to_dict(p: Payment) -> dict[str, Any]:
         giveaway_id=p.giveaway_id,
         giveaway_name=p.giveaway.name,
         provider=p.provider.value,
+        channel=p.channel.value if p.channel else None,
         amount=p.amount,
         quantity=p.quantity,
         status=p.status.value,
@@ -46,6 +47,7 @@ def list_payments(
     status_filter: PaymentStatus | None = None,
     order_id: str | None = None,
     provider: PaymentProviderType | None = None,
+    channel: ChannelType | None = None,
     participant_query: str | None = None,
     created_from: dt.date | None = None,
     created_to: dt.date | None = None,
@@ -65,6 +67,8 @@ def list_payments(
         stmt = stmt.where(Payment.order_id.like(f"%{order_id}%"))
     if provider is not None:
         stmt = stmt.where(Payment.provider == provider)
+    if channel is not None:
+        stmt = stmt.where(Payment.channel == channel)
     if created_from is not None:
         stmt = stmt.where(Payment.created_at >= created_from)
     if created_to is not None:
