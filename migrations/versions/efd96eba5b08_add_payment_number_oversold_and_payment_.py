@@ -38,11 +38,18 @@ def upgrade() -> None:
         batch_op.create_index(batch_op.f('ix_payment_receipts_uploaded_at'), ['uploaded_at'], unique=False)
 
     with op.batch_alter_table('giveaways', schema=None) as batch_op:
-        batch_op.add_column(sa.Column('next_payment_number', sa.Integer(), nullable=False))
+        # server_default обязателен: без него SQLite отказывается добавлять NOT
+        # NULL колонку в уже непустую таблицу (боевой инцидент — прод уже имел
+        # существующие розыгрыши, см. DECISIONS.md).
+        batch_op.add_column(
+            sa.Column('next_payment_number', sa.Integer(), nullable=False, server_default='1')
+        )
 
     with op.batch_alter_table('payments', schema=None) as batch_op:
         batch_op.add_column(sa.Column('payment_number', sa.Integer(), nullable=True))
-        batch_op.add_column(sa.Column('oversold', sa.Boolean(), nullable=False))
+        batch_op.add_column(
+            sa.Column('oversold', sa.Boolean(), nullable=False, server_default=sa.false())
+        )
         batch_op.alter_column('provider',
                existing_type=sa.VARCHAR(length=5),
                type_=sa.Enum('TBANK', 'VTB', 'MOCK', 'REQUISITES_QR', name='paymentprovidertype', native_enum=False),
