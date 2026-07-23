@@ -24,14 +24,22 @@ class PaymentOrder:
     quantity: int
     description: str
     participant_phone: str
+    # Номер счёта на оплату (PREFIX-NNNNN, см. Giveaway.format_invoice_number) —
+    # заполняется только для провайдеров без резервирования "на лету"
+    # (см. BasePaymentProvider.reserves_tickets_on_create); нужен RequisitesQrProvider
+    # для назначения платежа. None для интернет-эквайринга (не используется).
+    invoice_no: str | None = None
 
 
 @dataclass(frozen=True)
 class CreatedPayment:
-    """Результат создания платежа в банке: куда направить участника для оплаты."""
+    """Результат создания платежа: куда направить участника для оплаты.
 
-    payment_url: str
-    qr_code_payload: str | None = None  # данные для рендера QR СБП (п.9.1 ТЗ)
+    `payment_url` — `None` у провайдеров без ссылки на оплату (напр.
+    `RequisitesQrProvider` — только статический QR по реквизитам)."""
+
+    payment_url: str | None
+    qr_code_payload: str | None = None  # данные для рендера QR (СБП/ST00012)
     external_payment_id: str | None = None
 
 
@@ -50,6 +58,14 @@ class WebhookVerificationError(Exception):
 
 class BasePaymentProvider(ABC):
     provider_type: PaymentProviderType
+
+    # Резервирует ли провайдер номерки АТОМАРНО в момент создания платежа
+    # (см. app/services/payment_service.py::create_payment). True для
+    # интернет-эквайринга (Т-Банк/ВТБ/mock) — деньги подтверждаются почти сразу,
+    # резерв на короткий TTL оправдан. False для `RequisitesQrProvider` — деньги
+    # по банковскому переводу могут идти несколько дней, номерки выдаются только
+    # по факту зачисления (см. DECISIONS.md) — резерва при создании платежа нет.
+    reserves_tickets_on_create: bool = True
 
     @abstractmethod
     def create_payment(self, order: PaymentOrder) -> CreatedPayment:

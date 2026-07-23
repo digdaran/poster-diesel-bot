@@ -10,19 +10,24 @@ from app.models.enums import ChannelType, PaymentProviderType, PaymentStatus
 from app.models.panel_user import PanelUser
 from app.models.participant import Participant
 from app.models.payment import Payment
-from fastapi import APIRouter, Depends, Response
+from app.models.payment_receipt import PaymentReceipt
+from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi.responses import FileResponse
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, contains_eager, joinedload
 
 from backend.api.deps import get_session, require_permission
 from backend.api.export_utils import ExportFormat, maybe_export
 from backend.api.pagination import count_total, page_bounds, validate_page_size
-from backend.api.schemas import PaymentOut
+from backend.api.schemas import PaymentOut, PaymentReceiptOut
 
 router = APIRouter(prefix="/payments", tags=["sales"])
 
 
 def _to_dict(p: Payment) -> dict[str, Any]:
+    invoice_no = (
+        p.giveaway.format_invoice_number(p.payment_number) if p.payment_number is not None else None
+    )
     return PaymentOut(
         id=p.id,
         order_id=p.order_id,
@@ -38,6 +43,9 @@ def _to_dict(p: Payment) -> dict[str, Any]:
         status=p.status.value,
         created_at=p.created_at,
         confirmed_at=p.confirmed_at,
+        invoice_no=invoice_no,
+        oversold=p.oversold,
+        receipt_count=len(p.receipts),
     ).model_dump(mode="json")
 
 
@@ -86,25 +94,59 @@ def list_payments(
         else joinedload(Payment.participant)
     )
 
+    eager_options = (participant_load, joinedload(Payment.giveaway), joinedload(Payment.receipts))
+
     if export is not None:
-        eager_stmt = stmt.options(participant_load, joinedload(Payment.giveaway)).order_by(
-            Payment.id.desc()
-        )
-        rows = [_to_dict(p) for p in session.execute(eager_stmt).scalars()]
+        eager_stmt = stmt.options(*eager_options).order_by(Payment.id.desc())
+        rows = [_to_dict(p) for p in session.execute(eager_stmt).unique().scalars()]
         return maybe_export(rows, export, user, "sales", permission=Permission.SALES_EXPORT)
 
     total = count_total(session, stmt)
     limit, offset = page_bounds(page=page, page_size=page_size)
     eager_stmt = (
-        stmt.options(participant_load, joinedload(Payment.giveaway))
-        .order_by(Payment.id.desc())
-        .limit(limit)
-        .offset(offset)
+        stmt.options(*eager_options).order_by(Payment.id.desc()).limit(limit).offset(offset)
     )
-    items = session.execute(eager_stmt).scalars()
+    items = session.execute(eager_stmt).unique().scalars()
     return {
         "items": [_to_dict(p) for p in items],
         "total": total,
         "page": page,
         "page_size": page_size,
     }
+
+
+@router.get("/{payment_id}/receipts", response_model=list[PaymentReceiptOut])
+def list_payment_receipts(
+    payment_id: int,
+    session: Session = Depends(get_session),
+    _user: PanelUser = Depends(require_permission(Permission.VIEW_SALES)),
+) -> list[PaymentReceiptOut]:
+    receipts = list(
+        session.execute(
+            select(PaymentReceipt)
+            .where(PaymentReceipt.payment_id == payment_id)
+            .order_by(PaymentReceipt.id.desc())
+        ).scalars()
+    )
+    return [PaymentReceiptOut.model_validate(r) for r in receipts]
+
+
+@router.get("/{payment_id}/receipts/{receipt_id}/file")
+def download_payment_receipt(
+    payment_id: int,
+    receipt_id: int,
+    session: Session = Depends(get_session),
+    _user: PanelUser = Depends(require_permission(Permission.VIEW_SALES)),
+) -> FileResponse:
+    receipt = session.execute(
+        select(PaymentReceipt).where(
+            PaymentReceipt.id == receipt_id, PaymentReceipt.payment_id == payment_id
+        )
+    ).scalar_one_or_none()
+    if receipt is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Квитанция не найдена")
+    return FileResponse(
+        receipt.file_path,
+        media_type=receipt.content_type or "application/octet-stream",
+        filename=receipt.original_filename or f"receipt_{receipt.id}",
+    )

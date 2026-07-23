@@ -29,7 +29,38 @@ class Settings(BaseSettings):
     superadmin_login: str = Field(default="admin", alias="SUPERADMIN_LOGIN")
     superadmin_password: str = Field(default="", alias="SUPERADMIN_PASSWORD")
 
-    payment_provider: str = Field(default="mock", alias="PAYMENT_PROVIDER")
+    payment_provider: str = Field(default="requisites_qr", alias="PAYMENT_PROVIDER")
+
+    # ---- requisites_qr: реквизиты получателя для статического QR (ГОСТ Р 56042-2014,
+    # ST00012) — активный провайдер по умолчанию в этой версии, интернет-эквайринг
+    # (tbank/vtb ниже) не используется, см. DECISIONS.md.
+    requisites_recipient_name: str = Field(default="", alias="REQUISITES_RECIPIENT_NAME")
+    requisites_recipient_inn: str = Field(default="", alias="REQUISITES_RECIPIENT_INN")
+    requisites_recipient_kpp: str = Field(default="", alias="REQUISITES_RECIPIENT_KPP")
+    requisites_personal_acc: str = Field(default="", alias="REQUISITES_PERSONAL_ACC")
+    requisites_bank_name: str = Field(default="", alias="REQUISITES_BANK_NAME")
+    requisites_bic: str = Field(default="", alias="REQUISITES_BIC")
+    requisites_corr_acc: str = Field(default="", alias="REQUISITES_CORR_ACC")
+    requisites_vat_rate_percent: int = Field(default=20, alias="REQUISITES_VAT_RATE_PERCENT")
+    requisites_invoice_ttl_days: int = Field(default=14, alias="REQUISITES_INVOICE_TTL_DAYS")
+
+    # ---- Сверка платежей через выписку Т-Банк (T-API) — по документации, без
+    # реального прогона (нет тестовых доступов Т-Бизнес), см. DECISIONS.md.
+    tbank_statement_api_base: str = Field(
+        default="https://business.tbank.ru/openapi/api/v1", alias="TBANK_STATEMENT_API_BASE"
+    )
+    tbank_statement_api_token: str = Field(default="", alias="TBANK_STATEMENT_API_TOKEN")
+    tbank_statement_account_number: str = Field(default="", alias="TBANK_STATEMENT_ACCOUNT_NUMBER")
+    # По умолчанию >= requisites_invoice_ttl_days: иначе неоплаченный счёт,
+    # успевший выпасть из окна выписки до истечения TTL, никогда не был бы
+    # сопоставлен, даже если оплата фактически прошла (см. DECISIONS.md).
+    bank_statement_lookback_days: int = Field(default=14, alias="BANK_STATEMENT_LOOKBACK_DAYS")
+
+    # Квитанции, присланные участниками (не распознаются, только хранятся для
+    # просмотра в панели) — тот же паттерн bind-mount в ./data/, что и для БД
+    # (см. DECISIONS.md №28).
+    receipts_dir: str = Field(default="./data/receipts", alias="RECEIPTS_DIR")
+
     tbank_terminal_key: str = Field(default="", alias="TBANK_TERMINAL_KEY")
     tbank_secret_key: str = Field(default="", alias="TBANK_SECRET_KEY")
     tbank_api_base: str = Field(default="https://securepay.tinkoff.ru/v2", alias="TBANK_API_BASE")
@@ -76,6 +107,12 @@ class Settings(BaseSettings):
         path = Path(self.database_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         return f"sqlite:///{path.as_posix()}"
+
+    @property
+    def receipts_path(self) -> Path:
+        path = Path(self.receipts_dir)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
 
 
 @lru_cache

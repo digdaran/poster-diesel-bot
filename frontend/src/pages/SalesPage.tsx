@@ -69,6 +69,16 @@ export function SalesPage() {
     createdTo,
   ]);
 
+  const viewReceipt = async (paymentId: number) => {
+    const receipts = await SalesApi.listReceipts(paymentId);
+    const latest = receipts[0];
+    if (!latest) return;
+    const { blob } = await SalesApi.downloadReceipt(paymentId, latest.id);
+    const url = URL.createObjectURL(blob);
+    window.open(url, "_blank");
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  };
+
   const downloadReport = async (format: "csv" | "xlsx") => {
     const { blob, filename } = await apiDownload("/api/payments", {
       export: format,
@@ -132,6 +142,7 @@ export function SalesPage() {
           }}
         >
           <option value="">Все провайдеры</option>
+          <option value="requisites_qr">requisites_qr</option>
           <option value="mock">mock</option>
           <option value="tbank">tbank</option>
           <option value="vtb">vtb</option>
@@ -194,6 +205,7 @@ export function SalesPage() {
           <thead>
             <tr>
               <th>ID заказа</th>
+              <th>Счёт №</th>
               <th>Коллекция</th>
               <th>Участник</th>
               <th>Провайдер</th>
@@ -201,15 +213,17 @@ export function SalesPage() {
               <th>Сумма</th>
               <th>Кол-во</th>
               <th>Статус</th>
+              <th>Квитанция</th>
               <th>Создан</th>
               <th>Подтверждён</th>
             </tr>
           </thead>
           <tbody>
-            {payments.length === 0 && <EmptyStateRow colSpan={10} />}
+            {payments.length === 0 && <EmptyStateRow colSpan={12} />}
             {payments.map((p) => (
               <tr key={p.id}>
                 <td>{p.order_id}</td>
+                <td>{p.invoice_no ?? "—"}</td>
                 <td>{p.giveaway_name}</td>
                 <td>{p.participant_full_name ?? p.participant_phone}</td>
                 <td>{p.provider}</td>
@@ -220,6 +234,21 @@ export function SalesPage() {
                 <td>{p.quantity}</td>
                 <td>
                   <Badge tone={STATUS_TONE[p.status] ?? "muted"}>{p.status}</Badge>
+                  {p.oversold && (
+                    <>
+                      {" "}
+                      <Badge tone="danger">нет номерков</Badge>
+                    </>
+                  )}
+                </td>
+                <td>
+                  {p.receipt_count > 0 ? (
+                    <button onClick={() => void viewReceipt(p.id)}>
+                      Посмотреть{p.receipt_count > 1 ? ` (${p.receipt_count})` : ""}
+                    </button>
+                  ) : (
+                    "—"
+                  )}
                 </td>
                 <td>{formatDateTime(p.created_at)}</td>
                 <td>{p.confirmed_at ? formatDateTime(p.confirmed_at) : "—"}</td>

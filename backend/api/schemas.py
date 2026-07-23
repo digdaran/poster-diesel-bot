@@ -136,6 +136,19 @@ class PaymentOut(BaseModel):
     status: str
     created_at: dt.datetime
     confirmed_at: dt.datetime | None
+    invoice_no: str | None
+    oversold: bool
+    receipt_count: int
+
+    model_config = {"from_attributes": True}
+
+
+class PaymentReceiptOut(BaseModel):
+    id: int
+    payment_id: int
+    original_filename: str | None
+    content_type: str | None
+    uploaded_at: dt.datetime
 
     model_config = {"from_attributes": True}
 

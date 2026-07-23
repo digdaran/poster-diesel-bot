@@ -99,6 +99,10 @@ def _is_help(message: Message) -> bool:
     return (message.text or "").strip().lower() in _HELP_TEXTS
 
 
+def _is_receipt_upload(message: Message) -> bool:
+    return any(a.photo is not None or a.doc is not None for a in (message.attachments or []))
+
+
 @labeler.message(func=_is_start)
 async def on_start(message: Message) -> None:
     """Главная клавиатура (покупка/история/помощь) открывается только после
@@ -133,6 +137,91 @@ async def on_start(message: Message) -> None:
 
     keyboard = channel.render_keyboard(_MAIN_KEYBOARD_BUTTONS)
     await message.answer("Добро пожаловать в бот розыгрышей цифровых постеров!", keyboard=keyboard)
+
+
+@labeler.message(func=_is_receipt_upload)
+async def on_receipt_upload(message: Message) -> None:
+    """Квитанция об оплате, присланная участником — привязывается к его
+    текущему неоплаченному счёту (`Payment.status == PENDING`), сохраняется
+    как есть, БЕЗ распознавания (см. ТЗ, DECISIONS.md). См.
+    `channels.telegram.handlers.on_receipt_upload` — тот же сценарий,
+    зарегистрирован рано (как `on_start`), чтобы не оказаться в тени
+    состояний диалога регистрации/покупки."""
+    from app.models.payment import Payment
+
+    db = get_channel_db()
+    with db.session() as session:
+        participant = participant_service.get_participant_by_channel(
+            session, channel=ChannelType.VK, external_user_id=_uid(message.peer_id)
+        )
+        payment = None
+        if participant is not None:
+            payment = (
+                session.execute(
+                    select(Payment)
+                    .where(
+                        Payment.participant_id == participant.id,
+                        Payment.status == PaymentStatus.PENDING,
+                    )
+                    .order_by(Payment.id.desc())
+                )
+                .scalars()
+                .first()
+            )
+
+    if payment is None:
+        await message.answer(
+            "Не нашёл неоплаченного счёта, к которому можно привязать квитанцию. "
+            "Если вы уже оформили покупку и это не так — напишите в поддержку."
+        )
+        return
+
+    attachment = next(
+        a for a in (message.attachments or []) if a.photo is not None or a.doc is not None
+    )
+    original_filename: str | None = None
+    content_type: str | None = None
+    vk_attachment: str | None = None
+    url: str | None = None
+    if attachment.photo is not None:
+        photo = attachment.photo
+        sizes = photo.sizes or []
+        largest = max(sizes, key=lambda s: (s.width or 0) * (s.height or 0), default=None)
+        url = largest.url if largest else None
+        content_type = "image/jpeg"
+        vk_attachment = f"photo{photo.owner_id}_{photo.id}"
+    elif attachment.doc is not None:
+        doc = attachment.doc
+        url = doc.url
+        original_filename = doc.title
+        vk_attachment = f"doc{doc.owner_id}_{doc.id}"
+
+    if not url:
+        await message.answer("Не удалось обработать вложение. Попробуйте прислать ещё раз.")
+        return
+
+    import httpx
+    from app.core.config import get_settings
+    from app.services import receipt_service
+
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, timeout=30.0)
+        response.raise_for_status()
+        content = response.content
+
+    receipt_service.save_receipt(
+        db,
+        get_settings(),
+        payment_id=payment.id,
+        content=content,
+        content_type=content_type,
+        original_filename=original_filename,
+        vk_attachment=vk_attachment,
+    )
+    await message.answer(
+        "Квитанция получена, спасибо! Номерки придут после зачисления денег на "
+        "расчётный счёт — это может занять несколько дней."
+    )
 
 
 @labeler.message(state=RegistrationStates.AWAITING_PHONE)
@@ -508,10 +597,21 @@ async def _create_and_offer_payment(
         order_id=outcome.order_id,
         has_qr=bool(outcome.created.qr_code_payload),
     )
+    invoice_line = f" Счёт № {outcome.invoice_no}." if outcome.invoice_no else ""
+    if outcome.created.payment_url:
+        instruction = (
+            "Оплатите по ссылке ниже, либо нажмите «Показать QR» для оплаты по QR-коду (СБП)."
+        )
+    else:
+        instruction = (
+            "Нажмите «Показать QR» и оплатите по QR-коду в банковском приложении по "
+            "реквизитам. После оплаты пришлите сюда квитанцию — номерки придут после "
+            "зачисления денег на расчётный счёт (может занять несколько дней)."
+        )
     await channel.send_message(
         _uid(peer_id),
-        f"Счёт создан на {quantity} номерок(ов) на сумму {outcome.amount / 100:.2f} ₽. "
-        "Оплатите по ссылке ниже, либо нажмите «Показать QR» для оплаты по QR-коду (СБП).",
+        f"Счёт создан на {quantity} номерок(ов) на сумму {outcome.amount / 100:.2f} ₽."
+        f"{invoice_line} {instruction}",
         keyboard=keyboard,
     )
 
@@ -817,8 +917,7 @@ async def _handle_cancel_payment_prompt(
     keyboard.add(Callback("◀️ Нет, оставить", payload={"a": "cancel_payment_abort"}))
     await _get_channel().send_message(
         _uid(peer_id),
-        f"Точно отменить платёж на {quantity} номерок(ов) на сумму {amount / 100:.2f} ₽? "
-        "Резерв номерков будет снят.",
+        f"Точно отменить платёж на {quantity} номерок(ов) на сумму {amount / 100:.2f} ₽?",
         keyboard=keyboard.get_json(),
     )
     await _answer_event(event)
@@ -862,9 +961,9 @@ async def _handle_cancel_payment_confirm(
                 entity_type="payment",
                 entity_id=payment_id,
             )
-        await _answer_event(event, snackbar="Платёж отменён, резерв снят.")
+        await _answer_event(event, snackbar="Платёж отменён.")
         await _get_channel().send_message(
-            _uid(peer_id), "Платёж отменён, резерв номерков снят. Можете оформить новую покупку."
+            _uid(peer_id), "Платёж отменён. Можете оформить новую покупку."
         )
         return
 

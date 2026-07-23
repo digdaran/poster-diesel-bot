@@ -33,6 +33,7 @@ app/channels/    BaseMessengerChannel, capability flags, фабрика кана
   3. Если найдено меньше `quantity` — `ROLLBACK`, возвращается фактический остаток, резерв не создаётся ("всё-или-ничего").
   4. Иначе — `UPDATE ... SET status='reserved', reserved_until=?, participant_id=?, payment_id=?/manual_registration_id=? WHERE id IN (...) RETURNING *`, инкремент `Giveaway.tickets_reserved`, `COMMIT`.
 - Конкурентные вызовы из разных процессов (backend, channel-telegram) сериализуются через `busy_timeout` на соединении — конкурирующий писатель ждёт снятия блокировки вместо `SQLITE_BUSY`.
+- **Провайдеры без резервирования "на лету"** (`BasePaymentProvider.reserves_tickets_on_create=False`, см. §7 — активный по умолчанию `RequisitesQrProvider`) НЕ вызывают `reserve_tickets` в `payment_service.create_payment` вообще: оплата по банковскому переводу подтверждается не мгновенно (может занять несколько дней), поэтому держать резерв пула на это время признано нежелательным (по решению заказчика, см. DECISIONS.md) — участник получает номерки только по факту зачисления денег (см. §4). `create_payment` в этом случае делает только информационную проверку `quantity <= giveaway.free_tickets_count` (без блокировки строк пула — тот же справочный остаток, что и в UI выбора количества), плюс атомарно присваивает `Payment.payment_number` из `Giveaway.next_payment_number` (тот же паттерн инкремента писателя, что и `tickets_reserved`).
 
 ## 4. Идемпотентная финализация платежа (п.7.6 ТЗ)
 
@@ -49,6 +50,8 @@ WHERE id = :id AND status = 'PENDING';
 Вызывается из двух независимых точек: webhook-роутера банка и фонового planner'а сверки (`check_status`). Оба используют один и тот же метод — гонка исключена атомарностью условного `UPDATE`.
 
 `manual_registration_service` использует тот же паттерн для `confirm`/`cancel`, но с другой семантикой повтора: `finalize_payment` на повторный вызов молча no-op (`applied=False`), а `confirm_manual_registration`/`cancel_manual_registration` вместо этого **поднимают** `ManualRegistrationStateError` — асимметрия намеренная (соответствует формулировке ТЗ), не баг.
+
+**Выдача номерков в момент подтверждения — единый путь для "обычного" и "позднего" случая.** SUCCEEDED-ветка `finalize_payment` сначала пробует `issue_reserved` (резерв, сделанный в `create_payment`, — для провайдеров с `reserves_tickets_on_create=True`). Если резерва нет (`issue_reserved` вернул пусто — единственно возможный случай для провайдеров без резервирования "на лету", см. §3), вызывается общий приватный хелпер `_reserve_and_issue_now` — тот же самый, что обрабатывает и старый edge case "банк подтвердил SUCCEEDED уже ПОСЛЕ того, как платёж был помечен CANCELLED/FAILED и резерв роздан" (переход из `CANCELLED`/`FAILED` в `SUCCEEDED`). Оба случая эквивалентны с точки зрения пула: под платёж нет активного резерва, и нужно захватить `quantity` номеров прямо сейчас, не проверяя `is_locked`/`is_registration_open` розыгрыша (деньги уже списаны). При нехватке номеров — `Payment.oversold=True` (без автовозврата, вне объёма ТЗ §21), тот же сигнал `FinalizeOutcome.late_success_no_tickets`, что и раньше (имя поля не переименовано ради минимального диффа, хотя семантика теперь шире "поздней" оплаты).
 
 ## 5. Права доступа (п.11 ТЗ)
 
@@ -68,7 +71,7 @@ WHERE id = :id AND status = 'PENDING';
 ## 7. Каналы и провайдеры — расширяемость (п.5.4 ТЗ)
 
 - `BaseMessengerChannel` (app/channels/base.py) — абстрактный интерфейс + `ChannelCapabilities` (флаги).
-- `BasePaymentProvider` (app/payments/base.py) — абстрактный интерфейс.
+- `BasePaymentProvider` (app/payments/base.py) — абстрактный интерфейс. `TBankProvider`/`VTBProvider` (интернет-эквайринг) реализованы, но по продуктовому решению НЕ используются в этой версии — оставлены в коде выключенными (не выбираются `.env`/панелью по умолчанию), см. DECISIONS.md.
 - Обе фабрики (`app/channels/factory.py`, `app/payments/factory.py`) регистрируют реализации по конфигурации; добавление нового канала/банка не требует правок сервисного слоя.
 - Рассылки (`broadcast_service`) идут только через Telegram (продуктовое решение). Реактивная доставка (ответ в чат покупателя, напр. `_deliver_tickets` в каждом `channels/*/handlers.py`) идёт через тот канал, которым участник совершал покупку; проактивные уведомления backend (webhook банка, фоновая сверка) выбирают канал получателя по его привязкам через `app/services/notification_service.py::_resolve_notify_target` — Telegram в приоритете, VK только если участник явно разрешил сообщения от сообщества (см. §7.1, DECISIONS.md #33).
 
@@ -82,10 +85,24 @@ WHERE id = :id AND status = 'PENDING';
 - Инлайн-кнопки — VK `Keyboard(inline=True)`; нажатия приходят отдельным типом события `message_event` (не обычным сообщением), обрабатываются одним диспетчером `_dispatch_message_event` по `payload["a"]` и подтверждаются через `messages.sendMessageEventAnswer` (аналог `callback.answer()` в Telegram).
 - Деплой — процесс `channel-vk` (`docker/vk.Dockerfile`), extras `vk`. Backend дополнительно поднимает свой outbound-only `VkChannel` (без polling, `backend/main.py::lifespan`) для проактивных уведомлений — тем же способом, что и `TelegramChannel` (DECISIONS.md #24) — поэтому `docker/backend.Dockerfile` тоже ставит `[vk]`-зависимости (см. DECISIONS.md #25 про инцидент с забытыми зависимостями канала в образе backend).
 
+### 7.2. `RequisitesQrProvider` — оплата по QR с банковскими реквизитами (активный провайдер по умолчанию)
+
+`app/payments/requisites_qr.py` — единственный активный способ приёма оплаты в этой версии (см. DECISIONS.md):
+
+- `create_payment` — без сети: собирает QR-payload по ГОСТ Р 56042-2014 (формат ST00012, `app/payments/qr_requisites.py::build_st00012_payload`) из реквизитов получателя (`.env`, `REQUISITES_*`) и назначения платежа `"Оплата по счету № {PREFIX}-{NNNNN} от {дата}, в т.ч. НДС..."` (номер счёта — `Giveaway.format_invoice_number`, ставка НДС — `.env REQUISITES_VAT_RATE_PERCENT`). QR рендерится в канале (`channels/*/channel.py::send_qr_code`) как байты **Windows-1251** — общепринятая практика для банковских QR-сканеров (риск для проверки на реальных приложениях, см. DECISIONS.md).
+- `reserves_tickets_on_create=False` (см. §3) — нет резерва при создании, `payment_url=None` (нет ссылки на оплату, только QR).
+- `verify_and_parse_webhook` не поддерживается (нет вебхука у этого провайдера).
+- `check_status` — разовая сверка по запросу участника: ищет совпадение по номеру счёта в свежей выписке (та же логика, что и в фоновой сверке ниже), не полагаясь на ожидание следующего тика.
+- `cancel` — no-op (`CANCELLED` без сетевого вызова, нет банковской сессии для закрытия). Статический QR технически может быть оплачен и после отмены счёта в боте — это не теряется: фоновая сверка найдёт деньги и обработает их через `_reserve_and_issue_now` (см. §4), как и любую "позднюю" оплату.
+
+**Подтверждение оплаты — сверка выписки расчётного счёта, не вебхук.** `app/services/bank_reconciliation_service.py::reconcile()` (вызывается фоновым циклом `backend/background/__init__.py::run_background_loop` наравне с `_reconcile_pending_payments`, но независимо от него — см. §3): раз в тик забирает входящие операции по счёту за скользящее окно (`BANK_STATEMENT_LOOKBACK_DAYS`) через `BaseBankStatementProvider` (`app/payments/bank_statement.py`, реализация — `TBankStatementProvider` поверх Т-Банк T-API `GET /api/v1/statement`, по документации, без реального прогона — тот же принятый риск, что и у `TBankProvider`/DECISIONS.md №1) и сопоставляет их с неоплаченными `Payment(provider=REQUISITES_QR)` **только по назначению платежа** (префикс розыгрыша + номер счёта, `Giveaway.prefix` уникален глобально — см. DECISIONS.md), без сверки суммы. Найденные совпадения финализируются через обычный `payment_service.finalize_payment(SUCCEEDED)`. Неоплаченные счета старше `REQUISITES_INVOICE_TTL_DAYS` помечаются `FAILED` (резерва нет — освобождать нечего, только снимается блокировка "одна активная покупка").
+
+**Квитанции.** Участник присылает в бот фото/документ квитанции ПОСЛЕ оплаты — `app/services/receipt_service.py::save_receipt` сохраняет файл на диск (`RECEIPTS_DIR`, тот же bind-mount паттерн `./data/`, что и БД) и создаёт `PaymentReceipt`, привязанную к последнему `PENDING`-платежу участника. Не распознаётся — только хранится, просматривается оператором в панели («Продажи» → колонка «Квитанция»).
+
 ## 8. Инфраструктура
 
 - SQLite в режиме WAL, единый файл `DATABASE_PATH`, все процессы открывают соединение с `PRAGMA journal_mode=WAL; PRAGMA busy_timeout=<мс>`.
-- Все чувствительные рантайм-данные (БД, бэкапы, TLS-сертификаты/ACME-аккаунт Caddy) — bind mount в `./data/` внутри репозитория (не именованные Docker volumes), ради переносимости: копия каталога проекта содержит всё состояние для запуска на другом хосте (см. DECISIONS.md #28). `./data/` в `.gitignore`.
+- Все чувствительные рантайм-данные (БД, бэкапы, квитанции участников, TLS-сертификаты/ACME-аккаунт Caddy) — bind mount в `./data/` внутри репозитория (не именованные Docker volumes), ради переносимости: копия каталога проекта содержит всё состояние для запуска на другом хосте (см. DECISIONS.md #28). `./data/` в `.gitignore`. Квитанции (`RECEIPTS_DIR=/data/receipts`) смонтированы во все три процесса, пишущих/читающих их напрямую через `app/` (backend, channel-telegram, channel-vk) — тот же принцип, что и для `DATABASE_PATH`.
 - Caddy: HTTPS (ACME или self-signed для dev), IP-whitelist для панели (`frontend`/`backend` API), проксирование только webhook-эндпоинтов банков наружу, `/metrics` не проксируется.
 - `scripts/backup_db.sh` — `sqlite3 $DB "VACUUM INTO '$BACKUP'"`, gzip, ротация по `BACKUP_RETENTION_DAYS`.
 - `scripts/deploy.sh` — `git pull`, `docker compose build`, `docker compose up -d`, ожидание healthcheck.

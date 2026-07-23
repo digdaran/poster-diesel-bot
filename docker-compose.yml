@@ -6,8 +6,10 @@ services:
     env_file: .env
     environment:
       DATABASE_PATH: /data/raffle.db
+      RECEIPTS_DIR: /data/receipts
     volumes:
       - ./data/db:/data
+      - ./data/receipts:/data/receipts
       - ./data/backups:/backups
     networks: [internal]
     healthcheck:
@@ -25,8 +27,10 @@ services:
     env_file: .env
     environment:
       DATABASE_PATH: /data/raffle.db
+      RECEIPTS_DIR: /data/receipts
     volumes:
       - ./data/db:/data
+      - ./data/receipts:/data/receipts
     depends_on:
       backend:
         condition: service_healthy
@@ -40,8 +44,10 @@ services:
     env_file: .env
     environment:
       DATABASE_PATH: /data/raffle.db
+      RECEIPTS_DIR: /data/receipts
     volumes:
       - ./data/db:/data
+      - ./data/receipts:/data/receipts
     depends_on:
       backend:
         condition: service_healthy

@@ -31,8 +31,10 @@ def get_provider_for_type(provider_type: PaymentProviderType) -> BasePaymentProv
     """Провайдер конкретного типа, без учёта текущего активного/override —
     для сверки статуса УЖЕ созданного платежа (п.9.3 ТЗ: "уже созданный платёж
     дообрабатывается тем банком, через который был создан", независимо от того,
-    какой провайдер активен для НОВЫХ платежей сейчас). См. DECISIONS.md."""
-    return payment_factory.create_provider(get_settings(), provider_type)
+    какой провайдер активен для НОВЫХ платежей сейчас). См. DECISIONS.md.
+    `db` передаётся на случай `RequisitesQrProvider.check_status`, которому нужен
+    доступ к БД для разовой сверки по запросу пользователя."""
+    return payment_factory.create_provider(get_settings(), provider_type, db=get_channel_db())
 
 
 QUANTITY_OPTIONS: tuple[int, ...] = (1, 3, 5, 10)

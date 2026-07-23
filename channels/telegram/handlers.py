@@ -152,6 +152,84 @@ async def on_contact(message: Message, state: FSMContext) -> None:
     await state.set_state(RegistrationStates.awaiting_name)
 
 
+@router.message(F.photo | F.document)
+async def on_receipt_upload(message: Message) -> None:
+    """Квитанция об оплате, присланная участником — привязывается к его текущему
+    неоплаченному счёту (`Payment.status == PENDING`), сохраняется как есть, БЕЗ
+    распознавания (см. ТЗ, DECISIONS.md). Не привязана к FSM-состоянию — участник
+    может прислать квитанцию в любой момент после получения QR, поэтому
+    зарегистрирован рано (как `on_contact`), чтобы не оказаться в тени
+    состояний диалога регистрации/покупки."""
+    from app.models.payment import Payment
+
+    db = get_channel_db()
+    with db.session() as session:
+        participant = participant_service.get_participant_by_channel(
+            session, channel=ChannelType.TELEGRAM, external_user_id=_uid(message)
+        )
+        payment = None
+        if participant is not None:
+            payment = (
+                session.execute(
+                    select(Payment)
+                    .where(
+                        Payment.participant_id == participant.id,
+                        Payment.status == PaymentStatus.PENDING,
+                    )
+                    .order_by(Payment.id.desc())
+                )
+                .scalars()
+                .first()
+            )
+
+    if payment is None:
+        await message.answer(
+            "Не нашёл неоплаченного счёта, к которому можно привязать квитанцию. "
+            "Если вы уже оформили покупку и это не так — напишите в поддержку."
+        )
+        return
+
+    original_filename: str | None
+    content_type: str | None
+    if message.photo:
+        file_id = message.photo[-1].file_id
+        original_filename = None
+        content_type = "image/jpeg"
+    elif message.document:
+        file_id = message.document.file_id
+        original_filename = message.document.file_name
+        content_type = message.document.mime_type
+    else:
+        return
+
+    import io
+
+    from app.core.config import get_settings
+    from app.services import receipt_service
+
+    bot = _get_channel().bot
+    file = await bot.get_file(file_id)
+    if file.file_path is None:
+        await message.answer("Не удалось скачать файл квитанции. Попробуйте прислать ещё раз.")
+        return
+    buffer = io.BytesIO()
+    await bot.download_file(file.file_path, destination=buffer)
+
+    receipt_service.save_receipt(
+        db,
+        get_settings(),
+        payment_id=payment.id,
+        content=buffer.getvalue(),
+        content_type=content_type,
+        original_filename=original_filename,
+        telegram_file_id=file_id,
+    )
+    await message.answer(
+        "Квитанция получена, спасибо! Номера придут после зачисления денег на "
+        "расчётный счёт — это может занять несколько дней."
+    )
+
+
 @router.message(RegistrationStates.awaiting_phone)
 async def on_phone_typed_for_registration(message: Message, state: FSMContext) -> None:
     """Ручной ввод номера при первом /start вместо «Поделиться контактом» —
@@ -585,9 +663,20 @@ async def _create_and_offer_payment(
         order_id=outcome.order_id,
         has_qr=bool(outcome.created.qr_code_payload),
     )
+    invoice_line = f" Счёт № {outcome.invoice_no}." if outcome.invoice_no else ""
+    if outcome.created.payment_url:
+        instruction = (
+            "Оплатите по ссылке ниже, либо нажмите «Показать QR» для оплаты по QR-коду (СБП)."
+        )
+    else:
+        instruction = (
+            "Нажмите «Показать QR» и оплатите по QR-коду в банковском приложении по "
+            "реквизитам.\nПосле оплаты пришлите сюда квитанцию — номера придут после "
+            "зачисления денег на расчётный счёт (может занять несколько дней)."
+        )
     await message.answer(
-        f"Счёт создан на {quantity} экз. на сумму {outcome.amount / 100:.2f} ₽. "
-        "Оплатите по ссылке ниже, либо нажмите «Показать QR» для оплаты по QR-коду (СБП).",
+        f"Счёт создан на {quantity} экз. на сумму {outcome.amount / 100:.2f} ₽.{invoice_line} "
+        f"{instruction}",
         reply_markup=keyboard,
     )
 
@@ -694,8 +783,7 @@ async def on_cancel_payment_prompt(callback: CallbackQuery) -> None:
         quantity, amount = payment.quantity, payment.amount
 
     await _msg(callback).answer(
-        f"Точно отменить платёж на {quantity} экз. на сумму {amount / 100:.2f} ₽? "
-        "Резерв будет снят.",
+        f"Точно отменить платёж на {quantity} экз. на сумму {amount / 100:.2f} ₽?",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
                 [
@@ -760,8 +848,8 @@ async def on_cancel_payment_confirm(callback: CallbackQuery) -> None:
                 entity_type="payment",
                 entity_id=payment_id,
             )
-        await callback.answer("Платёж отменён, резерв снят.")
-        await _msg(callback).answer("Платёж отменён, резерв снят. Можете оформить новую покупку.")
+        await callback.answer("Платёж отменён.")
+        await _msg(callback).answer("Платёж отменён. Можете оформить новую покупку.")
         return
 
     late = outcome.late_success_outcome
