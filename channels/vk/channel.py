@@ -150,15 +150,20 @@ class VkChannel(BaseMessengerChannel):
                 keyboard.add(Text(label))
         return keyboard.get_json()
 
-    def render_payment_prompt(self, *, payment_url: str, order_id: str, has_qr: bool) -> str:
+    def render_payment_prompt(self, *, payment_url: str | None, order_id: str, has_qr: bool) -> str:
         keyboard = Keyboard(inline=True)
-        keyboard.add(OpenLink(payment_url, "💳 Оплатить"))
+        first_row = True
+        if payment_url:
+            keyboard.add(OpenLink(payment_url, "💳 Оплатить"))
+            first_row = False
         if has_qr:
-            keyboard.row()
+            if not first_row:
+                keyboard.row()
             keyboard.add(
                 Callback("🔳 Показать QR", payload={"a": "show_qr", "order_id": order_id}),
                 color=KeyboardButtonColor.SECONDARY,
             )
+            first_row = False
         keyboard.row()
         keyboard.add(
             Callback("🔄 Проверить статус оплаты", payload={"a": "check_payment"}),
@@ -177,8 +182,11 @@ class VkChannel(BaseMessengerChannel):
     async def send_qr_code(
         self, external_user_id: str, qr_code_payload: str, *, caption: str | None = None
     ) -> None:
-        """QR-код СБП как изображение для оплаты с другого устройства (п.9.1 ТЗ)."""
-        img = qrcode.make(qr_code_payload)
+        """QR-код для оплаты (СБП-ссылка либо ST00012 по реквизитам, п.9.1 ТЗ,
+        ГОСТ Р 56042-2014) как изображение для оплаты с другого устройства —
+        см. `channels.telegram.channel.TelegramChannel.send_qr_code` про
+        Windows-1251-кодирование payload'а перед рендером (DECISIONS.md)."""
+        img = qrcode.make(qr_code_payload.encode("cp1251"))
         buffer = io.BytesIO()
         img.save(buffer, format="PNG")  # type: ignore[call-arg]
         buffer.name = "sbp_qr.png"

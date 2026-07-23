@@ -26,6 +26,10 @@ class PaymentProviderType(str, enum.Enum):
     TBANK = "tbank"
     VTB = "vtb"
     MOCK = "mock"
+    # QR по банковским реквизитам (ГОСТ Р 56042-2014, ST00012) — активный провайдер
+    # по умолчанию в этой версии, см. DECISIONS.md. TBANK/VTB (интернет-эквайринг)
+    # остаются реализованными, но не используются по продуктовому решению.
+    REQUISITES_QR = "requisites_qr"
 
 
 class PaymentStatus(str, enum.Enum):

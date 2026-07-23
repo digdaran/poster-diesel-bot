@@ -1,4 +1,4 @@
-import { apiRequest } from "./client";
+import { apiDownload, apiRequest } from "./client";
 import type {
   AuditLogEntry,
   Broadcast,
@@ -11,6 +11,7 @@ import type {
   PanelUser,
   Participant,
   Payment,
+  PaymentReceipt,
   PlatformSettings,
   RevenueByGiveawayRow,
   Ticket,
@@ -114,6 +115,10 @@ export interface SalesFilter extends PageParams {
 export const SalesApi = {
   list: (params: SalesFilter = {}) =>
     apiRequest<Page<Payment>>("/api/payments", { query: { ...params } }),
+  listReceipts: (paymentId: number) =>
+    apiRequest<PaymentReceipt[]>(`/api/payments/${paymentId}/receipts`),
+  downloadReceipt: (paymentId: number, receiptId: number) =>
+    apiDownload(`/api/payments/${paymentId}/receipts/${receiptId}/file`),
 };
 
 export interface TicketsFilter extends PageParams {

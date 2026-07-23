@@ -26,6 +26,7 @@ from app.core.db import Database
 from app.models.channel_binding import ChannelBinding
 from app.models.enums import ChannelType, PaymentStatus
 from app.models.giveaway import Giveaway
+from app.services import settings_service
 from app.services.payment_service import FinalizeOutcome
 
 
@@ -42,12 +43,23 @@ class NotifiableChannel(Protocol):
     ) -> None: ...
 
 
-_FAILURE_TEXT = "Платёж не прошёл. Резерв снят — можете попробовать оформить покупку заново."
+_FAILURE_TEXT = "Платёж не прошёл. Можете попробовать оформить покупку заново."
 _LATE_SUCCESS_NO_TICKETS_TEXT = (
     "Ваш платёж всё же прошёл успешно, но, к сожалению, к этому моменту свободные "
-    "экземпляры закончились. Пожалуйста, обратитесь в поддержку — деньги не потеряны, "
-    "мы решим вопрос вручную."
+    "экземпляры закончились. Пожалуйста, обратитесь в поддержку для возврата средств — "
+    "деньги не потеряны, мы решим вопрос вручную."
 )
+
+
+def _format_support_contacts(contacts: dict[str, Any]) -> str:
+    """Та же приписка контактов поддержки, что уже показывается в `on_help`
+    (`channels/*/handlers.py`) — переиспользуется здесь для сообщения об
+    отсутствии свободных номерков после подтверждённой оплаты."""
+    if not contacts:
+        return ""
+    lines = ["\nПоддержка:"]
+    lines.extend(f"{key}: {value}" for key, value in contacts.items())
+    return "\n".join(lines)
 
 
 def _resolve_notify_target(db: Database, participant_id: int) -> tuple[ChannelType, str] | None:
@@ -154,4 +166,8 @@ async def notify_late_success_no_tickets(
     channel = _channel_for(channel_type, telegram_channel=telegram_channel, vk_channel=vk_channel)
     if channel is None:
         return
-    await channel.send_message(external_user_id, _LATE_SUCCESS_NO_TICKETS_TEXT)
+    with db.session() as session:
+        platform_settings = settings_service.get_or_create_settings(session)
+        contacts = platform_settings.support_contacts or {}
+    text = _LATE_SUCCESS_NO_TICKETS_TEXT + _format_support_contacts(contacts)
+    await channel.send_message(external_user_id, text)

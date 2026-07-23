@@ -46,6 +46,9 @@ class CreatePaymentOutcome:
     правило, см. DECISIONS.md), а не нехватки номеров."""
     participant_blocked: bool = False
     """True — отказ из-за Participant.is_blocked (участник заблокирован в панели)."""
+    invoice_no: str | None = None
+    """Номер счёта на оплату (PREFIX-NNNNN) — заполняется только у провайдеров
+    без резервирования "на лету" (см. BasePaymentProvider.reserves_tickets_on_create)."""
 
 
 def create_payment(
@@ -66,6 +69,7 @@ def create_payment(
     БД-транзакции — чтобы не удерживать write-lock SQLite на время сетевого I/O.
     """
     order_id = uuid.uuid4().hex
+    invoice_no: str | None = None
 
     with db.immediate_session() as session:
         giveaway = session.execute(select(Giveaway).where(Giveaway.id == giveaway_id)).scalar_one()
@@ -90,19 +94,37 @@ def create_payment(
             status=PaymentStatus.PENDING,
         )
         session.add(payment)
-        session.flush()  # получаем payment.id для ссылки в резерве
+        session.flush()  # получаем payment.id для ссылки в резерве/счёте
 
-        result = repo.reserve_tickets(
-            session,
-            giveaway_id=giveaway_id,
-            quantity=quantity,
-            participant_id=participant_id,
-            payment_id=payment.id,
-            reserved_until=utcnow() + dt.timedelta(seconds=600),
-        )
-        if not result.ok:
-            # Откатываем ВСЮ транзакцию — платёж не должен быть создан (п.7.5 ТЗ).
-            raise _InsufficientTickets(result.free_count_at_attempt)
+        if provider.reserves_tickets_on_create:
+            result = repo.reserve_tickets(
+                session,
+                giveaway_id=giveaway_id,
+                quantity=quantity,
+                participant_id=participant_id,
+                payment_id=payment.id,
+                reserved_until=utcnow() + dt.timedelta(seconds=600),
+            )
+            if not result.ok:
+                # Откатываем ВСЮ транзакцию — платёж не должен быть создан (п.7.5 ТЗ).
+                raise _InsufficientTickets(result.free_count_at_attempt)
+        else:
+            # Провайдер без резервирования "на лету" (напр. requisites_qr — деньги
+            # по банковскому переводу могут идти несколько дней, номерки выдаются
+            # только по факту зачисления, см. DECISIONS.md). Проверка ниже —
+            # ТОЛЬКО информационная (не резервирует и не блокирует строки пула,
+            # остаток "справочный" — см. DECISIONS.md, открытые вопросы), нужна
+            # исключительно чтобы не выставлять счёт на заведомо невозможный объём.
+            if quantity > giveaway.free_tickets_count:
+                raise _InsufficientTickets(giveaway.free_tickets_count)
+            payment_number = giveaway.next_payment_number
+            session.execute(
+                update(Giveaway)
+                .where(Giveaway.id == giveaway_id)
+                .values(next_payment_number=Giveaway.next_payment_number + 1)
+            )
+            payment.payment_number = payment_number
+            invoice_no = giveaway.format_invoice_number(payment_number)
 
         payment_id = payment.id
 
@@ -113,6 +135,7 @@ def create_payment(
         quantity=quantity,
         description=f"Постер «{giveaway.name}»: {quantity} шт.",
         participant_phone=participant_phone,
+        invoice_no=invoice_no,
     )
     created = provider.create_payment(order)
 
@@ -134,6 +157,7 @@ def create_payment(
         created=created,
         free_count=0,
         amount=amount,
+        invoice_no=invoice_no,
     )
 
 
@@ -219,14 +243,30 @@ class FinalizeOutcome:
     отдельным сообщением (`notification_service.notify_late_success_no_tickets`)."""
 
 
-def _recover_late_success(
-    session: Session, *, payment: Payment, raw_payload: dict | None, now: dt.datetime
+def _reserve_and_issue_now(
+    session: Session,
+    *,
+    payment: Payment,
+    raw_payload: dict | None,
+    now: dt.datetime,
+    success_action: str,
+    no_tickets_action: str,
 ) -> FinalizeOutcome:
-    """Банк подтвердил SUCCEEDED уже после того, как платёж был помечен
-    CANCELLED/FAILED (и резерв роздан) — пытается заново захватить `quantity`
-    номеров под тот же payment_id и выдать их, как будто платёж только что
-    подтверждён. Намеренно НЕ проверяет `is_locked`/`is_registration_open`
-    розыгрыша — деньги уже списаны, эти флаги гейтят только НОВЫЕ покупки."""
+    """Резервирует `quantity` номеров ПРЯМО СЕЙЧАС и сразу выдаёт их — общий путь
+    для двух случаев, у которых под платёж ещё нет резерва в пуле в момент
+    подтверждения оплаты:
+
+    1. Обычное подтверждение у провайдера без резервирования "на лету"
+       (`BasePaymentProvider.reserves_tickets_on_create=False`, напр.
+       requisites_qr — деньги по банковскому переводу идут не мгновенно,
+       номерки выдаются только по факту зачисления, см. DECISIONS.md).
+    2. Банк подтвердил SUCCEEDED уже ПОСЛЕ того, как платёж был помечен
+       CANCELLED/FAILED (и прежний резерв роздан) — "поздняя оплата".
+
+    Намеренно НЕ проверяет `is_locked`/`is_registration_open` розыгрыша — деньги
+    уже списаны, эти флаги гейтят только НОВЫЕ покупки. При нехватке номеров
+    возврат вне объёма ТЗ §21 — фиксируется `Payment.oversold=True` для
+    видимости в админ-панели, участнику нужно обращаться в поддержку вручную."""
     result = repo.reserve_tickets(
         session,
         giveaway_id=payment.giveaway_id,
@@ -236,9 +276,10 @@ def _recover_late_success(
         reserved_until=now,
     )
     if not result.ok:
+        session.execute(update(Payment).where(Payment.id == payment.id).values(oversold=True))
         audit_service.log(
             session,
-            action="payment_late_success_no_tickets_available",
+            action=no_tickets_action,
             actor_type=AuditActorType.SYSTEM,
             actor_label="finalize_payment",
             entity_type="payment",
@@ -285,7 +326,7 @@ def _recover_late_success(
     session.flush()
     audit_service.log(
         session,
-        action="payment_late_success_recovered",
+        action=success_action,
         actor_type=AuditActorType.SYSTEM,
         actor_label="finalize_payment",
         entity_type="payment",
@@ -314,11 +355,15 @@ def finalize_payment(
 
     Атомарный условный UPDATE `WHERE status='PENDING'` — если платёж уже
     финализирован (0 строк обновлено), это обычно no-op (повторный webhook или
-    гонка webhook/фоновой сверки), КРОМЕ одного случая: банк сообщает SUCCEEDED,
-    а у нас платёж уже CANCELLED/FAILED — тогда это "поздняя оплата после
-    отказа/отмены", и вместо тихого no-op запускается восстановление
-    (`_recover_late_success`), закрывающее пробел, ранее описанный в ТЗ, но
-    никогда не реализованный.
+    гонка webhook/фоновой сверки), КРОМЕ одного случая: банк/выписка сообщает
+    SUCCEEDED, а у нас платёж уже CANCELLED/FAILED — тогда это "поздняя оплата
+    после отказа/отмены", и вместо тихого no-op запускается восстановление
+    (`_reserve_and_issue_now`), закрывающее пробел, ранее описанный в ТЗ, но
+    никогда не реализованный. Тот же хелпер используется и в обычном
+    (не "позднем") пути ниже — для провайдеров без резервирования "на лету"
+    (см. `BasePaymentProvider.reserves_tickets_on_create`, DECISIONS.md) резерва
+    под платёж ещё нет даже при первом подтверждении, поэтому `issue_reserved`
+    там всегда возвращает пусто и нужен тот же "резервируем и выдаём сейчас".
     """
     now = now or utcnow()
     if new_status not in (PaymentStatus.SUCCEEDED, PaymentStatus.FAILED):
@@ -339,8 +384,13 @@ def finalize_payment(
                 and new_status == PaymentStatus.SUCCEEDED
                 and payment.status in (PaymentStatus.CANCELLED, PaymentStatus.FAILED)
             ):
-                return _recover_late_success(
-                    session, payment=payment, raw_payload=raw_payload, now=now
+                return _reserve_and_issue_now(
+                    session,
+                    payment=payment,
+                    raw_payload=raw_payload,
+                    now=now,
+                    success_action="payment_late_success_recovered",
+                    no_tickets_action="payment_late_success_no_tickets_available",
                 )
             return FinalizeOutcome(applied=False)
 
@@ -352,6 +402,18 @@ def finalize_payment(
                 select(Giveaway).where(Giveaway.id == payment.giveaway_id)
             ).scalar_one()
             issued_rows = repo.issue_reserved(session, payment_id=payment.id, issued_at=now)
+            if not issued_rows:
+                # Ничего не было зарезервировано под этот платёж заранее — провайдер
+                # без резервирования "на лету" (см. reserves_tickets_on_create),
+                # выдаём номерки прямо сейчас, по факту подтверждения оплаты.
+                return _reserve_and_issue_now(
+                    session,
+                    payment=payment,
+                    raw_payload=raw_payload,
+                    now=now,
+                    success_action="payment_issued_on_confirmation",
+                    no_tickets_action="payment_confirmed_no_tickets_available",
+                )
             for row in issued_rows:
                 ticket = Ticket(
                     giveaway_id=giveaway.id,

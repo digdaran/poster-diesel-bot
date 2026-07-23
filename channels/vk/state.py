@@ -29,7 +29,7 @@ def get_active_provider(db: Database) -> BasePaymentProvider:
 def get_provider_for_type(provider_type: PaymentProviderType) -> BasePaymentProvider:
     """См. `channels.telegram.state.get_provider_for_type` — сверка статуса УЖЕ
     созданного платежа тем банком, которым он был создан, а не текущим активным."""
-    return payment_factory.create_provider(get_settings(), provider_type)
+    return payment_factory.create_provider(get_settings(), provider_type, db=get_channel_db())
 
 
 QUANTITY_OPTIONS: tuple[int, ...] = (1, 3, 5, 10)

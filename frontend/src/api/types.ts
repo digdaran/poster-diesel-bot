@@ -64,6 +64,17 @@ export interface Payment {
   status: "PENDING" | "SUCCEEDED" | "FAILED";
   created_at: string;
   confirmed_at: string | null;
+  invoice_no: string | null;
+  oversold: boolean;
+  receipt_count: number;
+}
+
+export interface PaymentReceipt {
+  id: number;
+  payment_id: number;
+  original_filename: string | null;
+  content_type: string | null;
+  uploaded_at: string;
 }
 
 export interface Ticket {

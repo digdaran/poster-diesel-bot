@@ -125,9 +125,11 @@ class TelegramChannel(BaseMessengerChannel):
         )
 
     def render_payment_prompt(
-        self, *, payment_url: str, order_id: str, has_qr: bool
+        self, *, payment_url: str | None, order_id: str, has_qr: bool
     ) -> InlineKeyboardMarkup:
-        rows = [[InlineKeyboardButton(text="💳 Оплатить", url=payment_url)]]
+        rows: list[list[InlineKeyboardButton]] = []
+        if payment_url:
+            rows.append([InlineKeyboardButton(text="💳 Оплатить", url=payment_url)])
         if has_qr:
             rows.append(
                 [InlineKeyboardButton(text="🔳 Показать QR", callback_data=f"show_qr:{order_id}")]
@@ -147,8 +149,14 @@ class TelegramChannel(BaseMessengerChannel):
     async def send_qr_code(
         self, external_user_id: str, qr_code_payload: str, *, caption: str | None = None
     ) -> None:
-        """QR-код СБП как изображение для оплаты с другого устройства (п.9.1 ТЗ)."""
-        img = qrcode.make(qr_code_payload)
+        """QR-код для оплаты (СБП-ссылка либо ST00012 по реквизитам, п.9.1 ТЗ,
+        ГОСТ Р 56042-2014) как изображение для оплаты с другого устройства.
+
+        Кодируем payload в байты Windows-1251 перед рендером — общепринятая
+        практика для банковских приложений, сканирующих такие QR (см.
+        DECISIONS.md; для ASCII-only payload'ов старых провайдеров результат не
+        отличается от UTF-8/latin1, так что это безопасно и для них)."""
+        img = qrcode.make(qr_code_payload.encode("cp1251"))
         buffer = io.BytesIO()
         img.save(buffer, format="PNG")  # type: ignore[call-arg]
         photo = BufferedInputFile(buffer.getvalue(), filename="sbp_qr.png")

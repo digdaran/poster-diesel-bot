@@ -20,8 +20,8 @@ from app.models.enums import PaymentProviderType, PaymentStatus
 from app.models.payment import Payment
 from app.payments.factory import create_provider
 from app.repositories import ticket_pool_repo as pool_repo
+from app.services import bank_reconciliation_service, notification_service
 from app.services import manual_registration_service as manual_svc
-from app.services import notification_service
 from app.services import payment_service as payment_svc
 from app.services.payment_service import FinalizeOutcome
 from sqlalchemy import select
@@ -36,10 +36,20 @@ logger = structlog.get_logger(__name__)
 def _reconcile_pending_payments(
     db: Database, settings: Settings, *, now: dt.datetime | None = None
 ) -> list[FinalizeOutcome]:
+    """Резервная сверка через `check_status` — только для провайдеров с
+    резервированием "на лету" (Т-Банк/ВТБ/mock, `reserves_tickets_on_create=True`).
+    `requisites_qr` не резервирует номерки и подтверждается батч-сверкой выписки
+    (`bank_reconciliation_service.reconcile`, отдельный шаг фонового цикла ниже) —
+    смешивать эти два платежа было бы неверно: TTL здесь короткий (секунды/минуты,
+    `ONLINE_RESERVATION_TTL_SEC`), а деньги по банковскому переводу могут идти
+    несколько дней (см. DECISIONS.md)."""
     with db.session() as session:
         pending: list[tuple[int, PaymentProviderType]] = list(
             session.execute(
-                select(Payment.id, Payment.provider).where(Payment.status == PaymentStatus.PENDING)
+                select(Payment.id, Payment.provider).where(
+                    Payment.status == PaymentStatus.PENDING,
+                    Payment.provider != PaymentProviderType.REQUISITES_QR,
+                )
             )
             .tuples()
             .all()
@@ -112,6 +122,7 @@ async def run_background_loop(
     while True:
         try:
             outcomes = await asyncio.to_thread(_reconcile_pending_payments, db, settings)
+            outcomes += await asyncio.to_thread(bank_reconciliation_service.reconcile, db, settings)
             await asyncio.to_thread(_release_expired_manual_registrations, db, settings)
             if telegram_channel is not None or vk_channel is not None:
                 for outcome in outcomes:

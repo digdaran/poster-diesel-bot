@@ -20,6 +20,7 @@ from app.models.manual_registration import ManualRegistration
 from app.models.panel_user import PanelUser
 from app.models.participant import Participant
 from app.models.payment import Payment
+from app.models.payment_receipt import PaymentReceipt
 from app.models.platform_settings import PlatformSettings
 from app.models.ticket import Ticket
 from app.models.ticket_pool import TicketPool
@@ -32,6 +33,7 @@ __all__ = [
     "TicketPool",
     "Ticket",
     "Payment",
+    "PaymentReceipt",
     "ManualRegistration",
     "PanelUser",
     "AuditLog",

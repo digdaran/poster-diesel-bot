@@ -42,6 +42,16 @@ def make_participant(db: Database, phone: str = "79991234567") -> int:
         return p.id
 
 
+class FakeNoReserveProvider(MockProvider):
+    """Провайдер без резервирования "на лету" (см.
+    `BasePaymentProvider.reserves_tickets_on_create`) — та же семантика, что и у
+    `RequisitesQrProvider` (деньги подтверждаются не мгновенно, номерки
+    выдаются только по факту зачисления), но без реальной сборки QR — для
+    юнит-тестов сервисного слоя достаточно поведения `MockProvider`."""
+
+    reserves_tickets_on_create = False
+
+
 def test_create_payment_reserves_tickets(db: Database) -> None:
     gid = make_giveaway(db, max_tickets=10)
     pid = make_participant(db)
@@ -911,3 +921,235 @@ def test_finalize_late_success_no_tickets_available_writes_audit_and_stays_cance
         )
         assert len(audit_entries) == 1
         assert audit_entries[0].entity_id == outcome.payment_id
+
+
+def test_create_payment_without_reservation_does_not_touch_pool(db: Database) -> None:
+    """Провайдер без резервирования "на лету" (requisites_qr и подобные) не
+    должен трогать пул номеров при создании платежа вообще — деньги по
+    банковскому переводу могут идти несколько дней, см. DECISIONS.md."""
+    gid = make_giveaway(db, max_tickets=10)
+    pid = make_participant(db)
+    outcome = svc.create_payment_safe(
+        db,
+        FakeNoReserveProvider(),
+        giveaway_id=gid,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=3,
+    )
+    assert outcome.ok
+    assert pool_svc.get_free_count(db, giveaway_id=gid) == 10  # ничего не зарезервировано
+    with db.session() as session:
+        giveaway = session.get(Giveaway, gid)
+        assert giveaway is not None
+        assert giveaway.tickets_reserved == 0
+
+
+def test_create_payment_without_reservation_assigns_invoice_number(db: Database) -> None:
+    gid = make_giveaway(db, max_tickets=10, prefix="INV")
+    pid = make_participant(db)
+    outcome = svc.create_payment_safe(
+        db,
+        FakeNoReserveProvider(),
+        giveaway_id=gid,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=1,
+    )
+    assert outcome.ok
+    assert outcome.invoice_no == "INV-00001"
+    with db.session() as session:
+        payment = session.execute(
+            select(Payment).where(Payment.id == outcome.payment_id)
+        ).scalar_one()
+        assert payment.payment_number == 1
+        giveaway = session.get(Giveaway, gid)
+        assert giveaway is not None
+        assert giveaway.next_payment_number == 2
+
+
+def test_payment_number_unique_per_giveaway_not_global(db: Database) -> None:
+    """Номер счёта уникален В РАМКАХ розыгрыша (начинается с 1 для каждого),
+    а не глобально — см. DECISIONS.md."""
+    gid_a = make_giveaway(db, max_tickets=10, prefix="AAA")
+    gid_b = make_giveaway(db, max_tickets=10, prefix="BBB")
+    pid_a = make_participant(db)
+    pid_b = make_participant(db, "79997654321")
+
+    outcome_a = svc.create_payment_safe(
+        db,
+        FakeNoReserveProvider(),
+        giveaway_id=gid_a,
+        participant_id=pid_a,
+        participant_phone="79991234567",
+        quantity=1,
+    )
+    outcome_b = svc.create_payment_safe(
+        db,
+        FakeNoReserveProvider(),
+        giveaway_id=gid_b,
+        participant_id=pid_b,
+        participant_phone="79997654321",
+        quantity=1,
+    )
+    assert outcome_a.invoice_no == "AAA-00001"
+    assert outcome_b.invoice_no == "BBB-00001"
+
+
+def test_create_payment_without_reservation_rejects_when_quantity_exceeds_free(
+    db: Database,
+) -> None:
+    gid = make_giveaway(db, max_tickets=2)
+    pid = make_participant(db)
+    outcome = svc.create_payment_safe(
+        db,
+        FakeNoReserveProvider(),
+        giveaway_id=gid,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=5,
+    )
+    assert not outcome.ok
+    assert outcome.free_count == 2
+    with db.session() as session:
+        count = len(list(session.execute(select(Payment)).scalars()))
+        assert count == 0  # платёж не создан вовсе
+
+
+def test_finalize_success_without_prior_reservation_issues_tickets_now(db: Database) -> None:
+    """Без резервирования "на лету" `issue_reserved` в обычной SUCCEEDED-ветке
+    ничего не найдёт — должен сработать тот же `_reserve_and_issue_now`, что
+    и для восстановления после отмены/просрочки (см. ARCHITECTURE.md §4)."""
+    gid = make_giveaway(db, max_tickets=10)
+    pid = make_participant(db)
+    provider = FakeNoReserveProvider()
+    outcome = svc.create_payment_safe(
+        db,
+        provider,
+        giveaway_id=gid,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=3,
+    )
+    assert outcome.ok
+    assert pool_svc.get_free_count(db, giveaway_id=gid) == 10
+
+    result = svc.finalize_payment(db, order_id=outcome.order_id, new_status=PaymentStatus.SUCCEEDED)
+
+    assert result.applied
+    assert len(result.tickets or []) == 3
+    assert pool_svc.get_free_count(db, giveaway_id=gid) == 7
+    with db.session() as session:
+        payment = session.execute(
+            select(Payment).where(Payment.id == outcome.payment_id)
+        ).scalar_one()
+        assert payment.status == PaymentStatus.SUCCEEDED
+        assert payment.oversold is False
+        audit_entries = list(
+            session.execute(
+                select(AuditLog).where(AuditLog.action == "payment_issued_on_confirmation")
+            ).scalars()
+        )
+        assert len(audit_entries) == 1
+
+
+def test_finalize_success_without_prior_reservation_oversold_when_pool_exhausted(
+    db: Database,
+) -> None:
+    """Деньги подтверждены, но к этому моменту пул уже разобран другими
+    покупателями (никакого резерва не было, чтобы придержать номерки) —
+    Payment.oversold=True, без авто-возврата (ТЗ §21), см. DECISIONS.md."""
+    gid = make_giveaway(db, max_tickets=2)
+    pid = make_participant(db)
+    other_pid = make_participant(db, "79990009999")
+    provider = FakeNoReserveProvider()
+    outcome = svc.create_payment_safe(
+        db,
+        provider,
+        giveaway_id=gid,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=2,
+    )
+    assert outcome.ok
+
+    # Другой покупатель успевает выкупить весь остаток, пока первый платёж ещё
+    # не подтверждён (резерва под первый платёж нет, значит номерки доступны).
+    other_outcome = svc.create_payment_safe(
+        db,
+        MockProvider(),
+        giveaway_id=gid,
+        participant_id=other_pid,
+        participant_phone="79990009999",
+        quantity=2,
+    )
+    assert other_outcome.ok
+    assert pool_svc.get_free_count(db, giveaway_id=gid) == 0
+
+    result = svc.finalize_payment(db, order_id=outcome.order_id, new_status=PaymentStatus.SUCCEEDED)
+
+    assert not result.applied
+    assert result.late_success_no_tickets
+    with db.session() as session:
+        payment = session.execute(
+            select(Payment).where(Payment.id == outcome.payment_id)
+        ).scalar_one()
+        assert payment.oversold is True
+        audit_entries = list(
+            session.execute(
+                select(AuditLog).where(AuditLog.action == "payment_confirmed_no_tickets_available")
+            ).scalars()
+        )
+        assert len(audit_entries) == 1
+
+
+def test_cancel_payment_without_prior_reservation_is_noop_on_pool(db: Database) -> None:
+    """`cancel()` без резервирования не вызывает сеть и не должно менять пул
+    (нечего освобождать) — статус всё равно переходит в CANCELLED."""
+    gid = make_giveaway(db, max_tickets=10)
+    pid = make_participant(db)
+    provider = FakeNoReserveProvider()
+    outcome = svc.create_payment_safe(
+        db,
+        provider,
+        giveaway_id=gid,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=3,
+    )
+    assert outcome.ok
+    assert pool_svc.get_free_count(db, giveaway_id=gid) == 10
+
+    cancel_outcome = svc.cancel_payment(db, provider, payment_id=outcome.payment_id)
+
+    assert cancel_outcome.applied
+    assert cancel_outcome.current_status == PaymentStatus.CANCELLED
+    assert pool_svc.get_free_count(db, giveaway_id=gid) == 10
+
+
+def test_finalize_late_success_after_cancel_still_works_without_prior_reservation(
+    db: Database,
+) -> None:
+    """Счёт без резервирования отменён, но деньги всё же пришли позже (участник
+    оплатил статический QR уже после отмены в боте) — тот же механизм
+    восстановления, что и у старых провайдеров, должен сработать и здесь."""
+    gid = make_giveaway(db, max_tickets=10)
+    pid = make_participant(db)
+    provider = FakeNoReserveProvider()
+    outcome = svc.create_payment_safe(
+        db,
+        provider,
+        giveaway_id=gid,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=2,
+    )
+    assert outcome.ok
+    cancel_outcome = svc.cancel_payment(db, provider, payment_id=outcome.payment_id)
+    assert cancel_outcome.applied
+
+    late = svc.finalize_payment(db, order_id=outcome.order_id, new_status=PaymentStatus.SUCCEEDED)
+
+    assert late.applied
+    assert len(late.tickets or []) == 2
+    assert pool_svc.get_free_count(db, giveaway_id=gid) == 8

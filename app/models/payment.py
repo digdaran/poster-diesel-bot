@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import JSON, ForeignKey, Integer, String
+from sqlalchemy import JSON, Boolean, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -15,12 +15,18 @@ from app.models.enums import ChannelType, PaymentProviderType, PaymentStatus
 if TYPE_CHECKING:
     from app.models.giveaway import Giveaway
     from app.models.participant import Participant
+    from app.models.payment_receipt import PaymentReceipt
     from app.models.ticket import Ticket
     from app.models.ticket_pool import TicketPool
 
 
 class Payment(Base):
     __tablename__ = "payments"
+    __table_args__ = (
+        UniqueConstraint(
+            "giveaway_id", "payment_number", name="uq_payments_giveaway_id_payment_number"
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     order_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
@@ -67,7 +73,21 @@ class Payment(Base):
     # check_status — см. DECISIONS.md).
     poll_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
+    # Номер счёта на оплату в рамках розыгрыша (см. Giveaway.next_payment_number/
+    # format_invoice_number) — заполняется только у провайдеров без резервирования
+    # номерков "на лету" (см. requisites_qr); у старых платежей (Т-Банк/ВТБ/mock)
+    # остаётся NULL — SQLite допускает несколько NULL в уникальном индексе.
+    payment_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Деньги подтверждены (SUCCEEDED), но к этому моменту свободных номерков не
+    # хватило на quantity — возврат вне объёма ТЗ §21, участнику нужно обращаться
+    # в поддержку вручную. Только для видимости в админ-панели (см. DECISIONS.md).
+    oversold: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
     participant: Mapped[Participant] = relationship(back_populates="payments")
     giveaway: Mapped[Giveaway] = relationship(back_populates="payments")
     pool_rows: Mapped[list[TicketPool]] = relationship(back_populates="payment")
     tickets: Mapped[list[Ticket]] = relationship(back_populates="payment")
+    receipts: Mapped[list[PaymentReceipt]] = relationship(
+        back_populates="payment", cascade="all, delete-orphan"
+    )
