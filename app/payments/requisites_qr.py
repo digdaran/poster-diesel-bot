@@ -134,6 +134,7 @@ class RequisitesQrProvider(BasePaymentProvider):
             if payment.status != PaymentStatus.PENDING:
                 return payment.status
             since = payment.created_at
+            expected_amount = payment.amount
 
         from app.payments.tbank_statement import TBankStatementProvider
         from app.services.bank_reconciliation_service import find_matching_entry
@@ -144,8 +145,8 @@ class RequisitesQrProvider(BasePaymentProvider):
         except Exception:
             return PaymentStatus.PENDING
 
-        match = find_matching_entry(entries, external_payment_id)
-        return PaymentStatus.SUCCEEDED if match is not None else PaymentStatus.PENDING
+        result = find_matching_entry(entries, external_payment_id, expected_amount)
+        return PaymentStatus.SUCCEEDED if result.matched is not None else PaymentStatus.PENDING
 
     def cancel(self, order_id: str, *, external_payment_id: str | None = None) -> PaymentStatus:
         """Нет банковской сессии для закрытия — статический QR остаётся валидным

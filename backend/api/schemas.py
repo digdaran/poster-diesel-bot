@@ -138,6 +138,8 @@ class PaymentOut(BaseModel):
     confirmed_at: dt.datetime | None
     invoice_no: str | None
     oversold: bool
+    amount_mismatch: bool
+    amount_mismatch_bank_amount: int | None
     receipt_count: int
 
     model_config = {"from_attributes": True}

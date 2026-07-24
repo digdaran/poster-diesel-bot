@@ -1,20 +1,24 @@
 """Сверка входящих платежей по выписке расчётного счёта с неоплаченными счетами
-`requisites_qr` (см. DECISIONS.md, ARCHITECTURE.md §3/§4).
+`requisites_qr` (см. DECISIONS.md №38/39, ARCHITECTURE.md §3/§4).
 
-Сопоставление — только по назначению платежа: префикс розыгрыша + номер счёта
-(`Giveaway.format_invoice_number`), без сверки суммы (по прямому запросу
-заказчика) — `Giveaway.prefix` уникален по всей системе (см. app/models/giveaway.py),
-поэтому номер счёта `PREFIX-NNNNN` тоже уникален глобально и однозначно указывает
-на один `Payment`.
+Сопоставление — по назначению платежа (префикс розыгрыша + номер счёта,
+`Giveaway.format_invoice_number` — `Giveaway.prefix` уникален по всей системе, см.
+app/models/giveaway.py, поэтому номер счёта `PREFIX-NNNNN` тоже уникален глобально
+и однозначно указывает на один `Payment`) И точному совпадению суммы операции с
+`Payment.amount`. Операция с совпавшим назначением, но другой суммой, счёт не
+закрывает (остаётся PENDING до ручной проверки/TTL) — вместо этого помечается на
+`Payment` (`amount_mismatch`/`amount_mismatch_bank_amount`) для подсветки в панели
+(«Продажи») и логируется (`bank_statement_amount_mismatch`).
 """
 
 from __future__ import annotations
 
 import datetime as dt
 import re
+from dataclasses import dataclass
 
 import structlog
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.orm import joinedload
 
 from app.core.config import Settings
@@ -30,14 +34,40 @@ from app.services.payment_service import FinalizeOutcome
 logger = structlog.get_logger(__name__)
 
 
+@dataclass(frozen=True)
+class InvoiceMatchResult:
+    matched: BankStatementEntry | None
+    """Точное совпадение — назначение платежа И сумма. Готово к финализации."""
+    mismatched: BankStatementEntry | None
+    """Назначение платежа совпало, сумма — нет (первая такая операция в выписке).
+    Не финализирует счёт — только повод подсветить его в панели оператору."""
+
+
 def find_matching_entry(
-    entries: list[BankStatementEntry], invoice_no: str
-) -> BankStatementEntry | None:
+    entries: list[BankStatementEntry], invoice_no: str, expected_amount: int
+) -> InvoiceMatchResult:
+    """Совпадение по номеру счёта в назначении платежа И точной сумме. Операция
+    с верным назначением, но другой суммой, не считается совпадением (не должна
+    закрывать счёт по неполной/избыточной оплате) — возвращается отдельно
+    (`mismatched`) для сохранения на `Payment`, чтобы оператор увидел расхождение
+    в панели."""
     pattern = re.compile(r"№?\s*" + re.escape(invoice_no) + r"\b")
+    mismatched: BankStatementEntry | None = None
     for entry in entries:
-        if pattern.search(entry.purpose):
-            return entry
-    return None
+        if not pattern.search(entry.purpose):
+            continue
+        if entry.amount == expected_amount:
+            return InvoiceMatchResult(matched=entry, mismatched=None)
+        if mismatched is None:
+            mismatched = entry
+        logger.warning(
+            "bank_statement_amount_mismatch",
+            invoice_no=invoice_no,
+            expected_amount=expected_amount,
+            actual_amount=entry.amount,
+            external_id=entry.external_id,
+        )
+    return InvoiceMatchResult(matched=None, mismatched=mismatched)
 
 
 def reconcile(
@@ -92,8 +122,8 @@ def reconcile(
     outcomes: list[FinalizeOutcome] = []
     for payment in candidates:
         invoice_no = payment.giveaway.format_invoice_number(payment.payment_number)  # type: ignore[arg-type]
-        match = find_matching_entry(entries, invoice_no)
-        if match is not None:
+        result = find_matching_entry(entries, invoice_no, payment.amount)
+        if result.matched is not None:
             try:
                 outcome = payment_svc.finalize_payment(
                     db,
@@ -101,10 +131,10 @@ def reconcile(
                     new_status=PaymentStatus.SUCCEEDED,
                     raw_payload={
                         "bank_entry": {
-                            "external_id": match.external_id,
-                            "amount": match.amount,
-                            "purpose": match.purpose,
-                            "operation_date": match.operation_date.isoformat(),
+                            "external_id": result.matched.external_id,
+                            "amount": result.matched.amount,
+                            "purpose": result.matched.purpose,
+                            "operation_date": result.matched.operation_date.isoformat(),
                         }
                     },
                     now=now,
@@ -113,6 +143,13 @@ def reconcile(
                     outcomes.append(outcome)
             except Exception:
                 logger.exception("bank_statement_finalize_failed", payment_id=payment.id)
+            continue
+
+        if result.mismatched is not None:
+            _mark_amount_mismatch(db, payment_id=payment.id, bank_amount=result.mismatched.amount)
+            # Деньги по этому счёту фактически идут (просто не той суммой) — не
+            # даём TTL молча похоронить его как FAILED, пока расхождение не
+            # разобрано оператором вручную в панели (см. DECISIONS.md №39).
             continue
 
         if payment.status == PaymentStatus.PENDING and payment.created_at < ttl_cutoff:
@@ -126,3 +163,15 @@ def reconcile(
                 logger.exception("bank_statement_ttl_expire_failed", payment_id=payment.id)
 
     return outcomes
+
+
+def _mark_amount_mismatch(db: Database, *, payment_id: int, bank_amount: int) -> None:
+    try:
+        with db.session() as session:
+            session.execute(
+                update(Payment)
+                .where(Payment.id == payment_id)
+                .values(amount_mismatch=True, amount_mismatch_bank_amount=bank_amount)
+            )
+    except Exception:
+        logger.exception("bank_statement_mismatch_persist_failed", payment_id=payment_id)

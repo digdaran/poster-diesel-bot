@@ -45,6 +45,8 @@ def _to_dict(p: Payment) -> dict[str, Any]:
         confirmed_at=p.confirmed_at,
         invoice_no=invoice_no,
         oversold=p.oversold,
+        amount_mismatch=p.amount_mismatch,
+        amount_mismatch_bank_amount=p.amount_mismatch_bank_amount,
         receipt_count=len(p.receipts),
     ).model_dump(mode="json")
 

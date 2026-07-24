@@ -236,6 +236,12 @@ tbody tr:hover {
   background: var(--color-surface-alt);
 }
 
+/* Платёж по requisites_qr с несовпадающей суммой — требует ручной проверки оператором */
+tbody tr.row-amount-mismatch,
+tbody tr.row-amount-mismatch:hover {
+  background: var(--color-danger-bg);
+}
+
 .cards {
   display: flex;
   flex-wrap: wrap;
