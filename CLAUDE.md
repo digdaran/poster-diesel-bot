@@ -8,7 +8,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 architecture or business logic, check it. Section 21 of the ТЗ lists features that must **not** be
 implemented in this version (ready VK/MAX adapters, VK Mini App, payment refunds, cancellation of
 confirmed manual registrations, automatic winner selection, million-scale ticket pools) — do not add
-them without explicit sign-off from the project owner.
+them without explicit sign-off from the project owner. **The VK adapter is the one exception**: the
+project owner signed off on it and it has since been built and is active in production alongside
+Telegram (see DECISIONS.md #32/#33, ARCHITECTURE.md §7.1) — the ТЗ text itself wasn't updated to
+reflect that. MAX is still just a stub (`channels/max/`, raises `NotImplementedError`) — do not
+implement it without sign-off.
 
 Decisions and defaults not explicitly covered by the ТЗ are recorded in `DECISIONS.md` — check it before
 introducing a new convention, and add an entry there when you make a similar judgment call.
@@ -22,7 +26,7 @@ run of ruff, black --check, mypy, and pytest — treat that sequence as the CI g
 
 ## Commands
 
-Backend/Python (run from repo root; requires a venv with `pip install -e ".[backend,telegram,dev]"`):
+Backend/Python (run from repo root; requires a venv with `pip install -e ".[backend,telegram,vk,dev]"`):
 
 ```bash
 # Lint / format / typecheck (all must be clean before pushing)
@@ -39,7 +43,7 @@ pytest
 
 # Single test file / test
 pytest tests/unit/test_ticket_pool.py
-pytest tests/unit/test_ticket_pool.py::test_concurrent_reservation_tail_race -v
+pytest tests/unit/test_ticket_pool.py::test_concurrent_capture_on_the_tail_no_duplicates_no_overselling -v
 
 # DB migrations
 alembic upgrade head
@@ -50,6 +54,9 @@ uvicorn backend.main:app --reload
 
 # Run Telegram channel locally (separate process)
 python -m channels.telegram.main
+
+# Run VK channel locally (separate process)
+python -m channels.vk.main
 ```
 
 Note: `pyproject.toml` declares `requires-python = ">=3.11"` (and Docker images use

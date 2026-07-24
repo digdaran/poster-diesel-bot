@@ -7,7 +7,8 @@
 | Процесс | Образ | Технология | Роль |
 |---|---|---|---|
 | `backend` | `docker/backend.Dockerfile` | FastAPI + Uvicorn | REST API панели, webhook-роутеры банков, фоновые задачи (сверка платежей, освобождение просроченных резервов), `/metrics`. |
-| `channel-telegram` | `docker/telegram.Dockerfile` | aiogram 3, long polling | Единственный активный в проде мессенджер-канал. |
+| `channel-telegram` | `docker/telegram.Dockerfile` | aiogram 3, long polling | Активный в проде мессенджер-канал (наравне с `channel-vk`). |
+| `channel-vk` | `docker/vk.Dockerfile` | vkbottle, Bots Long Poll API | Второй активный в проде мессенджер-канал, см. §7.1. |
 | `frontend` | `docker/frontend.Dockerfile` | React+TS, статика | Веб-панель (Nginx или Caddy отдаёт статику). |
 | `reverse-proxy` | `caddy` (офиц. образ) | Caddy | HTTPS, IP-whitelist панели, маршрутизация только webhook наружу. |
 
