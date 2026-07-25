@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
+import { Link } from "react-router-dom";
 import { GiveawaysApi } from "../api/resources";
 import type { Giveaway } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
@@ -141,7 +142,9 @@ export function GiveawaysPage() {
             {giveaways.length === 0 && <EmptyStateRow colSpan={columnCount} />}
             {giveaways.map((g) => (
               <tr key={g.id}>
-                <td>{g.name}</td>
+                <td>
+                  <Link to={`/giveaways/${g.id}`}>{g.name}</Link>
+                </td>
                 <td>{g.prefix}</td>
                 <td>{formatMoney(g.ticket_price)}</td>
                 <td>{g.max_tickets}</td>

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 import time
 from collections.abc import Iterator
@@ -31,6 +32,7 @@ def api_client() -> Iterator[TestClient]:
     fd, db_path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
     os.remove(db_path)
+    poster_dir = tempfile.mkdtemp(suffix="-posters")
 
     env_overrides = {
         "DATABASE_PATH": db_path,
@@ -38,6 +40,7 @@ def api_client() -> Iterator[TestClient]:
         "SUPERADMIN_LOGIN": "admin",
         "SUPERADMIN_PASSWORD": "admin-strong-pass-123",
         "PAYMENT_PROVIDER": "mock",
+        "POSTER_DIR": poster_dir,
     }
     old_env = {k: os.environ.get(k) for k in env_overrides}
     os.environ.update(env_overrides)
@@ -59,6 +62,7 @@ def api_client() -> Iterator[TestClient]:
         p = db_path + suffix
         if os.path.exists(p):
             _remove_with_retry(p)
+    shutil.rmtree(poster_dir, ignore_errors=True)
 
 
 def login(client: TestClient, login_: str, password: str) -> str:

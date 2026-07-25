@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import random
 from typing import Any, Protocol
 
 import structlog
@@ -130,10 +131,12 @@ async def notify_payment_outcome(
     if not targets:
         return
 
-    giveaway: Giveaway | None = None
+    poster_path: str | None = None
     if outcome.new_status == PaymentStatus.SUCCEEDED and outcome.giveaway_id is not None:
         with db.session() as session:
             giveaway = session.get(Giveaway, outcome.giveaway_id)
+            if giveaway is not None and giveaway.posters:
+                poster_path = random.choice([p.file_path for p in giveaway.posters])
     codes = [t.full_code for t in (outcome.tickets or [])]
 
     for channel_type, external_user_id in targets:
@@ -146,7 +149,7 @@ async def notify_payment_outcome(
             if outcome.new_status == PaymentStatus.SUCCEEDED:
                 await channel.deliver_purchase(
                     external_user_id,
-                    poster_path=giveaway.digital_poster_path if giveaway else None,
+                    poster_path=poster_path,
                     codes=codes,
                     intro="Оплата прошла успешно! Ваши номера:",
                 )

@@ -7,9 +7,11 @@ services:
     environment:
       DATABASE_PATH: /data/raffle.db
       RECEIPTS_DIR: /data/receipts
+      POSTER_DIR: /data/posters
     volumes:
       - ./data/db:/data
       - ./data/receipts:/data/receipts
+      - ./data/posters:/data/posters
       - ./data/backups:/backups
     networks: [internal]
     healthcheck:
@@ -28,9 +30,11 @@ services:
     environment:
       DATABASE_PATH: /data/raffle.db
       RECEIPTS_DIR: /data/receipts
+      POSTER_DIR: /data/posters
     volumes:
       - ./data/db:/data
       - ./data/receipts:/data/receipts
+      - ./data/posters:/data/posters
     depends_on:
       backend:
         condition: service_healthy
@@ -45,9 +49,11 @@ services:
     environment:
       DATABASE_PATH: /data/raffle.db
       RECEIPTS_DIR: /data/receipts
+      POSTER_DIR: /data/posters
     volumes:
       - ./data/db:/data
       - ./data/receipts:/data/receipts
+      - ./data/posters:/data/posters
     depends_on:
       backend:
         condition: service_healthy

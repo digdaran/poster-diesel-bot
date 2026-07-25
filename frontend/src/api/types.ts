@@ -30,6 +30,14 @@ export interface Giveaway {
   created_at: string;
 }
 
+export interface GiveawayPoster {
+  id: number;
+  giveaway_id: number;
+  original_filename: string | null;
+  content_type: string | null;
+  created_at: string;
+}
+
 export interface ManualRegistration {
   id: number;
   participant_id: number;

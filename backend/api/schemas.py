@@ -84,6 +84,16 @@ class GiveawayUpdateRequest(BaseModel):
     digital_poster_caption: str | None = None
 
 
+class GiveawayPosterOut(BaseModel):
+    id: int
+    giveaway_id: int
+    original_filename: str | None
+    content_type: str | None
+    created_at: dt.datetime
+
+    model_config = {"from_attributes": True}
+
+
 class ManualRegistrationOut(BaseModel):
     id: int
     participant_id: int

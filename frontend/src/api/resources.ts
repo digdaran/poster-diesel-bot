@@ -1,10 +1,11 @@
-import { apiDownload, apiRequest } from "./client";
+import { apiDownload, apiRequest, apiUpload } from "./client";
 import type {
   AuditLogEntry,
   Broadcast,
   ChannelSalesRow,
   Dashboard,
   Giveaway,
+  GiveawayPoster,
   ManualRegistration,
   Page,
   PageSize,
@@ -74,6 +75,12 @@ export const GiveawaysApi = {
   unlock: (id: number) => apiRequest<Giveaway>(`/api/giveaways/${id}/unlock`, { method: "POST" }),
   closeRegistration: (id: number) =>
     apiRequest<Giveaway>(`/api/giveaways/${id}/close-registration`, { method: "POST" }),
+  listPosters: (id: number) => apiRequest<GiveawayPoster[]>(`/api/giveaways/${id}/posters`),
+  uploadPoster: (id: number, file: File) =>
+    apiUpload<GiveawayPoster>(`/api/giveaways/${id}/posters`, file),
+  deletePoster: (id: number, posterId: number) =>
+    apiRequest<void>(`/api/giveaways/${id}/posters/${posterId}`, { method: "DELETE" }),
+  posterFileUrl: (id: number, posterId: number) => `/api/giveaways/${id}/posters/${posterId}/file`,
 };
 
 export interface ManualRegistrationsFilter extends PageParams {

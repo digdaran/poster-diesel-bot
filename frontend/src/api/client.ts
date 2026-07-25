@@ -110,6 +110,38 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   return (await resp.blob()) as unknown as T;
 }
 
+export async function apiUpload<T>(path: string, file: File, method = "POST"): Promise<T> {
+  const doFetch = async (): Promise<Response> => {
+    const headers: Record<string, string> = {};
+    if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
+    const body = new FormData();
+    body.append("file", file);
+    // Content-Type умышленно не указывается — браузер сам проставит
+    // multipart-boundary при передаче FormData.
+    return fetch(buildUrl(path), { method, headers, body });
+  };
+
+  let resp = await doFetch();
+  if (resp.status === 401 && getRefreshToken()) {
+    const refreshed = await refreshAccessToken();
+    if (refreshed) resp = await doFetch();
+  }
+
+  if (!resp.ok) {
+    let detail = resp.statusText;
+    try {
+      const data = await resp.json();
+      detail = data.detail ?? detail;
+    } catch {
+      /* тело не JSON — оставляем statusText */
+    }
+    throw new ApiError(resp.status, detail);
+  }
+
+  if (resp.status === 204) return undefined as T;
+  return (await resp.json()) as T;
+}
+
 export async function apiDownload(
   path: string,
   query?: RequestOptions["query"],

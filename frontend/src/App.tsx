@@ -9,6 +9,7 @@ import { LoginPage } from "./pages/LoginPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { ParticipantsPage } from "./pages/ParticipantsPage";
 import { GiveawaysPage } from "./pages/GiveawaysPage";
+import { GiveawayDetailPage } from "./pages/GiveawayDetailPage";
 import { ManualRegistrationsPage } from "./pages/ManualRegistrationsPage";
 import { SalesPage } from "./pages/SalesPage";
 import { TicketsPage } from "./pages/TicketsPage";
@@ -37,6 +38,7 @@ export default function App() {
                 <Route index element={<DashboardPage />} />
                 <Route path="participants" element={<ParticipantsPage />} />
                 <Route path="giveaways" element={<GiveawaysPage />} />
+                <Route path="giveaways/:id" element={<GiveawayDetailPage />} />
                 <Route path="manual-registrations" element={<ManualRegistrationsPage />} />
                 <Route path="sales" element={<SalesPage />} />
                 <Route path="tickets" element={<TicketsPage />} />

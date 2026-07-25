@@ -72,6 +72,10 @@ class Settings(BaseSettings):
     # (см. DECISIONS.md №28).
     receipts_dir: str = Field(default="./data/receipts", alias="RECEIPTS_DIR")
 
+    # Цифровые постеры розыгрышей, загружаемые через веб-админку (см. DECISIONS.md
+    # №46) — тот же паттерн bind-mount в ./data/, что и для квитанций выше.
+    poster_dir: str = Field(default="./data/posters", alias="POSTER_DIR")
+
     online_status_poll_interval_sec: int = Field(
         default=60, alias="ONLINE_STATUS_POLL_INTERVAL_SEC"
     )
@@ -103,6 +107,12 @@ class Settings(BaseSettings):
     @property
     def receipts_path(self) -> Path:
         path = Path(self.receipts_dir)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @property
+    def poster_path(self) -> Path:
+        path = Path(self.poster_dir)
         path.mkdir(parents=True, exist_ok=True)
         return path
 

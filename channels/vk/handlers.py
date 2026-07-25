@@ -11,6 +11,7 @@ callback_query, см. ARCHITECTURE.md §7.1, DECISIONS.md #32).
 from __future__ import annotations
 
 import json
+import random
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -592,10 +593,15 @@ async def _deliver_tickets(peer_id: int, outcome: payment_svc.FinalizeOutcome) -
     db = get_channel_db()
     with db.session() as session:
         giveaway = session.get(Giveaway, outcome.giveaway_id)
+        poster_path = (
+            random.choice([p.file_path for p in giveaway.posters])
+            if giveaway is not None and giveaway.posters
+            else None
+        )
     codes = [t.full_code for t in (outcome.tickets or [])]
     await channel.deliver_purchase(
         _uid(peer_id),
-        poster_path=giveaway.digital_poster_path if giveaway else None,
+        poster_path=poster_path,
         codes=codes,
         intro="Оплата прошла успешно! Ваши номера:",
     )

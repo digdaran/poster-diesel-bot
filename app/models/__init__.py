@@ -16,6 +16,7 @@ from app.models.enums import (
     TicketSource,
 )
 from app.models.giveaway import Giveaway
+from app.models.giveaway_poster import GiveawayPoster
 from app.models.manual_registration import ManualRegistration
 from app.models.panel_user import PanelUser
 from app.models.participant import Participant
@@ -30,6 +31,7 @@ __all__ = [
     "Participant",
     "ChannelBinding",
     "Giveaway",
+    "GiveawayPoster",
     "TicketPool",
     "Ticket",
     "Payment",

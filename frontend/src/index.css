@@ -598,3 +598,34 @@ section {
     display: none;
   }
 }
+
+.poster-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.poster-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 160px;
+}
+
+.poster-card img,
+.poster-card-placeholder {
+  width: 160px;
+  height: 160px;
+  object-fit: cover;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+}
+
+.poster-card-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}

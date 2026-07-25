@@ -13,6 +13,7 @@ from app.core.db import Database
 from app.models.channel_binding import ChannelBinding
 from app.models.enums import ChannelType, PaymentStatus
 from app.models.giveaway import Giveaway
+from app.models.giveaway_poster import GiveawayPoster
 from app.models.participant import Participant
 from app.payments.requisites_qr import RequisitesQrProvider
 from app.services import notification_service
@@ -115,6 +116,37 @@ async def test_notify_success_delivers_purchase_via_binding(db: Database) -> Non
     assert call["external_user_id"] == "123456"
     assert len(call["codes"]) == 2
     assert not channel.send_message_calls
+
+
+async def test_notify_success_picks_one_of_uploaded_posters(db: Database) -> None:
+    gid = make_giveaway(db, prefix="NTP")
+    with db.session() as session:
+        session.add(GiveawayPoster(giveaway_id=gid, file_path="/data/posters/1/a.png"))
+        session.add(GiveawayPoster(giveaway_id=gid, file_path="/data/posters/1/b.png"))
+        session.flush()
+    pid = make_participant_with_binding(db)
+    outcome = svc.create_payment_safe(
+        db,
+        make_provider(),
+        giveaway_id=gid,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=1,
+    )
+    assert outcome.ok
+    finalize = svc.finalize_payment(
+        db, order_id=outcome.order_id, new_status=PaymentStatus.SUCCEEDED
+    )
+    assert finalize.applied
+
+    channel = FakeChannel()
+    await notification_service.notify_payment_outcome(
+        db, finalize, telegram_channel=channel, vk_channel=None
+    )
+
+    assert len(channel.deliver_purchase_calls) == 1
+    poster_path = channel.deliver_purchase_calls[0]["poster_path"]
+    assert poster_path in {"/data/posters/1/a.png", "/data/posters/1/b.png"}
 
 
 async def test_notify_failure_sends_short_message(db: Database) -> None:

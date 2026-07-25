@@ -82,7 +82,7 @@ WHERE id = :id AND status = 'PENDING';
 
 - `ChannelCapabilities.can_initiate_dialog=True`, но право отзываемо: VK `message_allow`/`message_deny` события пишутся в `ChannelBinding.messages_allowed` (см. §6) — в отличие от Telegram, это не разовый флаг, а отслеживаемое состояние, которое проверяется перед каждой проактивной отправкой.
 - `supports_verified_phone=False` — только `ignore_phone_verification` + ручной ввод номера.
-- Медиа — upload-флоу VK (`photos.getMessagesUploadServer`/`saveMessagesPhoto` через `PhotoMessageUploader`), кэш attachment-строки в существующем `Giveaway.poster_media_cache`.
+- Медиа — upload-флоу VK (`photos.getMessagesUploadServer`/`saveMessagesPhoto` через `PhotoMessageUploader`), кэш attachment-строки в `GiveawayPoster.media_cache` (перенесено из прежнего `Giveaway.poster_media_cache` при переходе на несколько постеров на розыгрыш, см. DECISIONS.md №46).
 - Инлайн-кнопки — VK `Keyboard(inline=True)`; нажатия приходят отдельным типом события `message_event` (не обычным сообщением), обрабатываются одним диспетчером `_dispatch_message_event` по `payload["a"]` и подтверждаются через `messages.sendMessageEventAnswer` (аналог `callback.answer()` в Telegram).
 - Деплой — процесс `channel-vk` (`docker/vk.Dockerfile`), extras `vk`. Backend дополнительно поднимает свой outbound-only `VkChannel` (без polling, `backend/main.py::lifespan`) для проактивных уведомлений — тем же способом, что и `TelegramChannel` (DECISIONS.md #24) — поэтому `docker/backend.Dockerfile` тоже ставит `[vk]`-зависимости (см. DECISIONS.md #25 про инцидент с забытыми зависимостями канала в образе backend).
 
@@ -103,7 +103,7 @@ WHERE id = :id AND status = 'PENDING';
 ## 8. Инфраструктура
 
 - SQLite в режиме WAL, единый файл `DATABASE_PATH`, все процессы открывают соединение с `PRAGMA journal_mode=WAL; PRAGMA busy_timeout=<мс>`.
-- Все чувствительные рантайм-данные (БД, бэкапы, квитанции участников, TLS-сертификаты/ACME-аккаунт Caddy) — bind mount в `./data/` внутри репозитория (не именованные Docker volumes), ради переносимости: копия каталога проекта содержит всё состояние для запуска на другом хосте (см. DECISIONS.md #28). `./data/` в `.gitignore`. Квитанции (`RECEIPTS_DIR=/data/receipts`) смонтированы во все три процесса, пишущих/читающих их напрямую через `app/` (backend, channel-telegram, channel-vk) — тот же принцип, что и для `DATABASE_PATH`.
+- Все чувствительные рантайм-данные (БД, бэкапы, квитанции участников, TLS-сертификаты/ACME-аккаунт Caddy) — bind mount в `./data/` внутри репозитория (не именованные Docker volumes), ради переносимости: копия каталога проекта содержит всё состояние для запуска на другом хосте (см. DECISIONS.md #28). `./data/` в `.gitignore`. Квитанции (`RECEIPTS_DIR=/data/receipts`) и цифровые постеры розыгрышей (`POSTER_DIR=/data/posters`, загружаются через веб-админку, см. DECISIONS.md №46) смонтированы во все три процесса, пишущих/читающих их напрямую через `app/` (backend, channel-telegram, channel-vk) — тот же принцип, что и для `DATABASE_PATH`.
 - Caddy: HTTPS (ACME или self-signed для dev), IP-whitelist для панели (`frontend`/`backend` API), проксирование только webhook-эндпоинтов банков наружу, `/metrics` не проксируется.
 - `scripts/backup_db.sh` — `sqlite3 $DB "VACUUM INTO '$BACKUP'"`, gzip, ротация по `BACKUP_RETENTION_DAYS`.
 - `scripts/deploy.sh` — `git pull`, `docker compose build`, `docker compose up -d`, ожидание healthcheck.

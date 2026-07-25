@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import datetime as dt
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-from sqlalchemy import JSON, Boolean, Integer, String
+from sqlalchemy import Boolean, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, created_at_column
 
 if TYPE_CHECKING:
+    from app.models.giveaway_poster import GiveawayPoster
     from app.models.manual_registration import ManualRegistration
     from app.models.payment import Payment
     from app.models.ticket import Ticket
@@ -39,15 +40,16 @@ class Giveaway(Base):
     is_registration_open: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     opened_at: Mapped[dt.datetime | None] = mapped_column(nullable=True)
-    digital_poster_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     digital_poster_caption: Mapped[str | None] = mapped_column(String(2000), nullable=True)
-    poster_media_cache: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[dt.datetime] = created_at_column()
 
     ticket_pool_rows: Mapped[list[TicketPool]] = relationship(back_populates="giveaway")
     tickets: Mapped[list[Ticket]] = relationship(back_populates="giveaway")
     payments: Mapped[list[Payment]] = relationship(back_populates="giveaway")
     manual_registrations: Mapped[list[ManualRegistration]] = relationship(back_populates="giveaway")
+    posters: Mapped[list[GiveawayPoster]] = relationship(
+        back_populates="giveaway", cascade="all, delete-orphan", order_by="GiveawayPoster.id"
+    )
 
     @property
     def free_tickets_count(self) -> int:

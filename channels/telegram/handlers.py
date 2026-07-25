@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import random
 from typing import TYPE_CHECKING
 
 import structlog
@@ -741,10 +742,15 @@ async def _deliver_tickets(message: Message, outcome: payment_svc.FinalizeOutcom
     db = get_channel_db()
     with db.session() as session:
         giveaway = session.get(Giveaway, outcome.giveaway_id)
+        poster_path = (
+            random.choice([p.file_path for p in giveaway.posters])
+            if giveaway is not None and giveaway.posters
+            else None
+        )
     codes = [t.full_code for t in (outcome.tickets or [])]
     await channel.deliver_purchase(
         str(message.chat.id),
-        poster_path=giveaway.digital_poster_path if giveaway else None,
+        poster_path=poster_path,
         codes=codes,
         intro="Оплата прошла успешно! Ваши номера:",
     )
