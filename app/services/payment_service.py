@@ -41,9 +41,17 @@ class CreatePaymentOutcome:
     """Актуальный остаток — заполняется при отказе (недостаточно номеров, п.7.5 ТЗ)."""
     amount: int | None = None
     """Сумма платежа в копейках (quantity * ticket_price) — заполняется при ok=True."""
-    has_active_purchase: bool = False
-    """True — отказ из-за уже существующей активной покупки участника (продуктовое
-    правило, см. DECISIONS.md), а не нехватки номеров."""
+    pending_limit_exceeded: bool = False
+    """True — отказ из-за превышения лимита суммарного количества экземпляров во
+    всех текущих незавершённых покупках участника (продуктовое правило, см.
+    DECISIONS.md №45), а не нехватки номеров."""
+    pending_quantity: int = 0
+    """Сколько экземпляров уже "висит" в незавершённых покупках участника —
+    заполняется только при pending_limit_exceeded=True, для осмысленного
+    сообщения участнику/оператору."""
+    pending_limit: int = 0
+    """Настроенный лимит (Settings.max_pending_tickets_per_participant) — заполняется
+    только при pending_limit_exceeded=True."""
     participant_blocked: bool = False
     """True — отказ из-за Participant.is_blocked (участник заблокирован в панели)."""
     invoice_no: str | None = None
@@ -79,8 +87,12 @@ def create_payment(
             raise GiveawayNotSellableError("Розыгрыш заблокирован (is_locked)")
         if participant_service.is_participant_blocked(session, participant_id=participant_id):
             raise _ParticipantBlocked()
-        if participant_service.has_active_purchase(session, participant_id=participant_id):
-            raise _ActivePurchaseExists()
+        pending = participant_service.pending_ticket_quantity(
+            session, participant_id=participant_id
+        )
+        limit = db.settings.max_pending_tickets_per_participant
+        if pending + quantity > limit:
+            raise _PendingLimitExceeded(pending_quantity=pending, limit=limit)
 
         amount = quantity * giveaway.ticket_price
         payment = Payment(
@@ -167,9 +179,13 @@ class _InsufficientTickets(Exception):
         self.free_count = free_count
 
 
-class _ActivePurchaseExists(Exception):
-    def __init__(self) -> None:
-        super().__init__("У участника уже есть активная покупка")
+class _PendingLimitExceeded(Exception):
+    def __init__(self, *, pending_quantity: int, limit: int) -> None:
+        super().__init__(
+            f"Превышен лимит ожидающих экземпляров: {pending_quantity} + новая покупка > {limit}"
+        )
+        self.pending_quantity = pending_quantity
+        self.limit = limit
 
 
 class _ParticipantBlocked(Exception):
@@ -203,14 +219,16 @@ def create_payment_safe(
         return CreatePaymentOutcome(
             ok=False, payment_id=None, order_id=None, created=None, free_count=exc.free_count
         )
-    except _ActivePurchaseExists:
+    except _PendingLimitExceeded as exc:
         return CreatePaymentOutcome(
             ok=False,
             payment_id=None,
             order_id=None,
             created=None,
             free_count=0,
-            has_active_purchase=True,
+            pending_limit_exceeded=True,
+            pending_quantity=exc.pending_quantity,
+            pending_limit=exc.limit,
         )
     except _ParticipantBlocked:
         return CreatePaymentOutcome(

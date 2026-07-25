@@ -156,11 +156,12 @@ def create_manual_registration(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Участник заблокирован — регистрация невозможна",
             )
-        if outcome.has_active_purchase:
+        if outcome.pending_limit_exceeded:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="У участника уже есть активная покупка (ожидает оплаты/подтверждения) — "
-                "новая регистрация невозможна, пока та не завершится",
+                detail=f"У участника уже {outcome.pending_quantity} экз. в ожидании оплаты/"
+                f"подтверждения (лимит одновременно — {outcome.pending_limit}) — новая "
+                "регистрация превысила бы лимит",
             )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

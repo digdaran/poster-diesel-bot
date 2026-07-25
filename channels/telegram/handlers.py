@@ -331,49 +331,10 @@ async def _prompt_giveaway_choice(
     await state.set_state(PurchaseStates.choosing_giveaway)
 
 
-async def _offer_active_purchase_cancellation(message: Message, participant_id: int) -> None:
-    """Участник уже имеет активную покупку (п. "одна активная покупка",
-    DECISIONS.md) — показывает её и просит дождаться оплаты либо автоматической
-    отмены по таймауту (самостоятельная отмена из бота недоступна, см.
-    DECISIONS.md №42). Если активная покупка — ручная регистрация у оператора
-    (не Payment), отменить её из бота нельзя (только оператор в панели)."""
-    from app.models.payment import Payment
-
-    db = get_channel_db()
-    with db.session() as session:
-        payment = session.execute(
-            select(Payment).where(
-                Payment.participant_id == participant_id, Payment.status == PaymentStatus.PENDING
-            )
-        ).scalar_one_or_none()
-        if payment is None:
-            await message.answer(
-                "У вас уже есть незавершённая покупка (ручная регистрация у оператора). "
-                "Дождитесь её подтверждения или обратитесь к оператору."
-            )
-            return
-        giveaway = session.get(Giveaway, payment.giveaway_id)
-        quantity, amount = payment.quantity, payment.amount
-
-    await message.answer(
-        f"У вас уже есть незавершённая покупка: «{giveaway.name if giveaway else '—'}», "
-        f"{quantity} экз. на сумму {amount / 100:.2f} ₽.\n"
-        "Оплатите её или дождитесь автоматической отмены по таймауту."
-    )
-
-
 @router.message(F.text == "🖼 Купить постер")
 async def on_buy(message: Message, state: FSMContext) -> None:
     db = get_channel_db()
     with db.session() as session:
-        participant = participant_service.get_participant_by_channel(
-            session, channel=ChannelType.TELEGRAM, external_user_id=_uid(message)
-        )
-        if participant is not None and participant_service.has_active_purchase(
-            session, participant_id=participant.id
-        ):
-            await _offer_active_purchase_cancellation(message, participant.id)
-            return
         giveaways = _open_giveaways(session)
 
     if not giveaways:
@@ -633,8 +594,12 @@ async def _create_and_offer_payment(
             await message.answer(
                 "Ваш аккаунт заблокирован, покупка недоступна. Обратитесь в поддержку."
             )
-        elif outcome.has_active_purchase:
-            await _offer_active_purchase_cancellation(message, participant_id)
+        elif outcome.pending_limit_exceeded:
+            await message.answer(
+                f"У вас уже {outcome.pending_quantity} экз. в неоплаченных покупках "
+                f"(максимум одновременно — {outcome.pending_limit}). Попробуйте выбрать "
+                "меньшее количество или дождитесь оплаты/автоматической отмены текущих покупок."
+            )
         else:
             await message.answer(
                 "К сожалению, свободных экземпляров меньше, чем нужно "

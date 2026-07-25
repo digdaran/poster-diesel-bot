@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.phone import normalize_phone
@@ -78,31 +78,28 @@ def is_participant_blocked(session: Session, *, participant_id: int) -> bool:
     ).scalar_one()
 
 
-def has_active_purchase(session: Session, *, participant_id: int) -> bool:
-    """Есть ли у участника незавершённая покупка — продуктовое решение:
-    не более одной активной покупки одновременно, глобально для всех каналов
-    продажи (бот, подарочные покупки, ручная регистрация оператором), см.
-    DECISIONS.md. Активная покупка = PENDING онлайн-платёж ИЛИ PENDING ручная
-    регистрация. Вызывается внутри `db.immediate_session()` в
-    `payment_service.create_payment` / `manual_registration_service.create_manual_registration`,
-    чтобы проверка и последующая вставка были атомарны (тот же механизм
-    сериализации писателей SQLite, что и для пула номеров — см. CLAUDE.md)."""
-    has_pending_payment = session.execute(
-        select(Payment.id)
-        .where(Payment.participant_id == participant_id, Payment.status == PaymentStatus.PENDING)
-        .limit(1)
-    ).first()
-    if has_pending_payment is not None:
-        return True
-    has_pending_manual = session.execute(
-        select(ManualRegistration.id)
-        .where(
+def pending_ticket_quantity(session: Session, *, participant_id: int) -> int:
+    """Суммарное количество экземпляров во всех текущих незавершённых покупках
+    участника — глобально по всем розыгрышам и каналам продажи (бот, подарочные
+    покупки, ручная регистрация оператором), см. DECISIONS.md №45 (отменяет
+    прежнее бинарное правило "не более одной активной покупки", №22). Незавершённая
+    покупка = PENDING онлайн-платёж ИЛИ PENDING ручная регистрация. Вызывается
+    внутри `db.immediate_session()` в `payment_service.create_payment` /
+    `manual_registration_service.create_manual_registration`, чтобы проверка и
+    последующая вставка были атомарны (тот же механизм сериализации писателей
+    SQLite, что и для пула номеров — см. CLAUDE.md)."""
+    payment_quantity = session.execute(
+        select(func.coalesce(func.sum(Payment.quantity), 0)).where(
+            Payment.participant_id == participant_id, Payment.status == PaymentStatus.PENDING
+        )
+    ).scalar_one()
+    manual_quantity = session.execute(
+        select(func.coalesce(func.sum(ManualRegistration.quantity), 0)).where(
             ManualRegistration.participant_id == participant_id,
             ManualRegistration.status == ManualRegistrationStatus.PENDING,
         )
-        .limit(1)
-    ).first()
-    return has_pending_manual is not None
+    ).scalar_one()
+    return payment_quantity + manual_quantity
 
 
 def _find_participant_by_phone(session: Session, phone: str) -> Participant | None:

@@ -21,6 +21,7 @@ from app.models.payment import Payment
 from app.models.ticket import Ticket
 from app.payments.requisites_qr import RequisitesQrProvider
 from app.services import manual_registration_service as manual_svc
+from app.services import participant_service
 from app.services import payment_service as svc
 from app.services import ticket_pool_service as pool_svc
 from sqlalchemy import select
@@ -57,6 +58,66 @@ def make_provider() -> RequisitesQrProvider:
         corresp_acc="30101810000000000225",
         vat_rate_percent=0,
     )
+
+
+def test_pending_ticket_quantity_zero_without_purchases(db: Database) -> None:
+    pid = make_participant(db)
+    with db.session() as session:
+        assert participant_service.pending_ticket_quantity(session, participant_id=pid) == 0
+
+
+def test_pending_ticket_quantity_sums_multiple_payments(db: Database) -> None:
+    gid_a = make_giveaway(db, max_tickets=10, prefix="AAA")
+    gid_b = make_giveaway(db, max_tickets=10, prefix="BBB")
+    pid = make_participant(db)
+    provider = make_provider()
+    svc.create_payment_safe(
+        db,
+        provider,
+        giveaway_id=gid_a,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=3,
+    )
+    svc.create_payment_safe(
+        db,
+        provider,
+        giveaway_id=gid_b,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=2,
+    )
+    with db.session() as session:
+        assert participant_service.pending_ticket_quantity(session, participant_id=pid) == 5
+
+
+def test_pending_ticket_quantity_sums_payments_and_manual_registrations(db: Database) -> None:
+    gid = make_giveaway(db, max_tickets=10)
+    pid = make_participant(db)
+    with db.session() as session:
+        operator = PanelUser(login="op-pending-qty", password_hash="x", role=PanelUserRole.OPERATOR)
+        session.add(operator)
+        session.flush()
+        operator_id = operator.id
+
+    svc.create_payment_safe(
+        db,
+        make_provider(),
+        giveaway_id=gid,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=3,
+    )
+    manual_svc.create_manual_registration_safe(
+        db,
+        giveaway_id=gid,
+        participant_id=pid,
+        quantity=4,
+        operator_id=operator_id,
+        ttl_seconds=3600,
+    )
+    with db.session() as session:
+        assert participant_service.pending_ticket_quantity(session, participant_id=pid) == 7
 
 
 def test_create_payment_persists_external_payment_id(db: Database) -> None:
@@ -165,7 +226,11 @@ def test_create_payment_insufficient_tickets_not_created(db: Database) -> None:
         assert count == 0  # платёж не создан вовсе
 
 
-def test_create_payment_blocked_by_existing_pending_payment(db: Database) -> None:
+def test_create_payment_blocked_when_pending_limit_exceeded(db: Database) -> None:
+    """Лимит суммарного количества экземпляров во всех PENDING-покупках участника
+    (DECISIONS.md №45, отменяет бинарное правило №22) — занижаем лимит для теста,
+    чтобы не гонять его на дефолтном значении (20)."""
+    db.settings.max_pending_tickets_per_participant = 1
     gid = make_giveaway(db, max_tickets=10)
     pid = make_participant(db)
     provider = make_provider()
@@ -188,10 +253,44 @@ def test_create_payment_blocked_by_existing_pending_payment(db: Database) -> Non
         quantity=1,
     )
     assert not second.ok
-    assert second.has_active_purchase
+    assert second.pending_limit_exceeded
+    assert second.pending_quantity == 1
+    assert second.pending_limit == 1
     with db.session() as session:
         count = len(list(session.execute(select(Payment)).scalars()))
         assert count == 1  # второй платёж не создан
+
+
+def test_create_payment_allowed_for_other_giveaway_under_limit(db: Database) -> None:
+    """По прямому запросу заказчика (DECISIONS.md №45): участник с незавершённой
+    покупкой на одном розыгрыше может купить и на другом, пока суммарное
+    количество не превышает лимит."""
+    gid_a = make_giveaway(db, max_tickets=10, prefix="AAA")
+    gid_b = make_giveaway(db, max_tickets=10, prefix="BBB")
+    pid = make_participant(db)
+    provider = make_provider()
+    first = svc.create_payment_safe(
+        db,
+        provider,
+        giveaway_id=gid_a,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=3,
+    )
+    assert first.ok
+
+    second = svc.create_payment_safe(
+        db,
+        provider,
+        giveaway_id=gid_b,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=3,
+    )
+    assert second.ok
+    with db.session() as session:
+        count = len(list(session.execute(select(Payment)).scalars()))
+        assert count == 2
 
 
 def test_create_payment_rejects_blocked_participant(db: Database) -> None:
@@ -220,6 +319,7 @@ def test_create_payment_rejects_blocked_participant(db: Database) -> None:
 
 
 def test_create_payment_blocked_by_existing_pending_manual_registration(db: Database) -> None:
+    db.settings.max_pending_tickets_per_participant = 1
     gid = make_giveaway(db, max_tickets=10)
     pid = make_participant(db)
     with db.session() as session:
@@ -247,15 +347,17 @@ def test_create_payment_blocked_by_existing_pending_manual_registration(db: Data
         quantity=1,
     )
     assert not outcome.ok
-    assert outcome.has_active_purchase
+    assert outcome.pending_limit_exceeded
     with db.session() as session:
         count = len(list(session.execute(select(Payment)).scalars()))
         assert count == 0
 
 
 def test_create_payment_concurrent_same_participant_only_one_succeeds(db: Database) -> None:
-    """Гонка: участник одновременно пытается купить в двух разных розыгрышах —
-    ровно одна покупка должна стать активной (глобальное правило, см. DECISIONS.md)."""
+    """Гонка: участник одновременно пытается купить в двух разных розыгрышах, а
+    лимит ожидающих экземпляров позволяет только одну из двух покупок — ровно
+    одна должна пройти (атомарность проверки лимита, см. DECISIONS.md №45)."""
+    db.settings.max_pending_tickets_per_participant = 1
     gid_a = make_giveaway(db, max_tickets=10, prefix="AAA")
     gid_b = make_giveaway(db, max_tickets=10, prefix="BBB")
     pid = make_participant(db)
@@ -283,7 +385,7 @@ def test_create_payment_concurrent_same_participant_only_one_succeeds(db: Databa
     t2.join(timeout=10)
 
     successes = [o for o in outcomes.values() if o.ok]
-    blocked = [o for o in outcomes.values() if not o.ok and o.has_active_purchase]
+    blocked = [o for o in outcomes.values() if not o.ok and o.pending_limit_exceeded]
     assert len(successes) == 1
     assert len(blocked) == 1
     with db.session() as session:

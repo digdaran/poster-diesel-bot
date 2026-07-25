@@ -44,6 +44,17 @@ class Settings(BaseSettings):
     requisites_vat_rate_percent: int = Field(default=20, alias="REQUISITES_VAT_RATE_PERCENT")
     requisites_invoice_ttl_days: int = Field(default=14, alias="REQUISITES_INVOICE_TTL_DAYS")
 
+    # Лимит суммарного количества экземпляров во всех текущих PENDING-покупках
+    # участника (платежи + ручные регистрации, глобально по всем розыгрышам) —
+    # по прямому запросу заказчика заменяет прежнее бинарное правило "не более
+    # одной активной покупки" (см. DECISIONS.md). 20 по умолчанию — вдвое больше
+    # максимального варианта количества за одну покупку (QUANTITY_OPTIONS в
+    # channels/*/state.py), оставляет запас для второй покупки, защищая при этом
+    # от накопления номерков через много параллельных неоплаченных счетов.
+    max_pending_tickets_per_participant: int = Field(
+        default=20, alias="MAX_PENDING_TICKETS_PER_PARTICIPANT"
+    )
+
     # ---- Сверка платежей через выписку Т-Банк (T-API) — по документации, без
     # реального прогона (нет тестовых доступов Т-Бизнес), см. DECISIONS.md.
     tbank_statement_api_base: str = Field(
