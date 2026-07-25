@@ -1,8 +1,9 @@
 """Тесты проактивных уведомлений об исходе платежа (см. app/services/notification_service.py,
-DECISIONS.md #33): успех доставляет постер+коды через привязку участника,
+DECISIONS.md №43): успех доставляет постер+коды через привязку участника,
 отказ шлёт короткое уведомление, отсутствие привязки — тихий no-op. Отдельно —
-выбор канала при нескольких привязках (Telegram в приоритете, VK — только при
-разрешении messages_allowed)."""
+выбор каналов при нескольких привязках (VK участвует только при разрешении
+messages_allowed; при наличии обеих подходящих привязок уведомление уходит в
+ОБЕ одновременно, не выбирает одну)."""
 
 from __future__ import annotations
 
@@ -240,7 +241,10 @@ async def test_notify_skips_vk_when_messages_not_allowed(db: Database) -> None:
     assert not vk_channel.send_message_calls
 
 
-async def test_notify_prefers_telegram_over_vk_when_both_bound(db: Database) -> None:
+async def test_notify_sends_to_both_telegram_and_vk_when_both_bound(db: Database) -> None:
+    """По прямому запросу заказчика (DECISIONS.md №43): участник с обеими
+    подходящими привязками получает уведомление в оба канала одновременно,
+    а не только в Telegram."""
     with db.session() as session:
         p = Participant(phone="79995559900", phone_verified=True)
         session.add(p)
@@ -276,4 +280,52 @@ async def test_notify_prefers_telegram_over_vk_when_both_bound(db: Database) -> 
     assert telegram_channel.send_message_calls == [
         ("tg-1", notification_service._LATE_SUCCESS_NO_TICKETS_TEXT)
     ]
-    assert not vk_channel.send_message_calls
+    assert vk_channel.send_message_calls == [
+        ("vk-1", notification_service._LATE_SUCCESS_NO_TICKETS_TEXT)
+    ]
+
+
+async def test_notify_channel_failure_does_not_block_other_channel(db: Database) -> None:
+    """Если отправка в один канал падает (напр. VK вернул ошибку запрета,
+    см. DECISIONS.md №43), доставка в уже подтверждённый другой канал всё
+    равно должна пройти."""
+    with db.session() as session:
+        p = Participant(phone="79995559911", phone_verified=True)
+        session.add(p)
+        session.flush()
+        session.add(
+            ChannelBinding(
+                participant_id=p.id,
+                channel=ChannelType.TELEGRAM,
+                external_user_id="tg-2",
+                phone_verified=True,
+            )
+        )
+        session.add(
+            ChannelBinding(
+                participant_id=p.id,
+                channel=ChannelType.VK,
+                external_user_id="vk-2",
+                phone_verified=False,
+                messages_allowed=True,
+            )
+        )
+        session.flush()
+        pid = p.id
+
+    outcome = svc.FinalizeOutcome(applied=False, participant_id=pid, late_success_no_tickets=True)
+    telegram_channel = FakeChannel()
+
+    class FailingChannel(FakeChannel):
+        async def send_message(self, external_user_id: str, text: str, **kwargs: object) -> None:
+            raise RuntimeError("messages.send forbidden")
+
+    vk_channel = FailingChannel()
+
+    await notification_service.notify_late_success_no_tickets(
+        db, outcome, telegram_channel=telegram_channel, vk_channel=vk_channel
+    )
+
+    assert telegram_channel.send_message_calls == [
+        ("tg-2", notification_service._LATE_SUCCESS_NO_TICKETS_TEXT)
+    ]

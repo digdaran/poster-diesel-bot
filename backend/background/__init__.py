@@ -117,8 +117,8 @@ async def run_background_loop(
     и не задерживать обработку конкурентных HTTP-запросов. Уведомления о
     финализированных платежах (`notification_service`) отправляются уже после
     возврата на event loop, т.к. отправка сообщений в мессенджер — асинхронный
-    сетевой вызов. `notification_service` сам выбирает канал получателя
-    (Telegram/VK) по привязкам — см. DECISIONS.md #33."""
+    сетевой вызов. `notification_service` сам выбирает каналы получателя
+    (Telegram И VK одновременно, по привязкам) — см. DECISIONS.md №43."""
     while True:
         try:
             outcomes = await asyncio.to_thread(_reconcile_pending_payments, db, settings)

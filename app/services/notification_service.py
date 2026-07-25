@@ -12,14 +12,16 @@
 получателя без привязки — это осознанное ограничение, а не регресс:
 реактивный путь остаётся рабочим fallback'ом для этого случая.
 
-Многоканально (Telegram, VK — см. DECISIONS.md #33): выбирается ОДИН канал на
-участника, не рассылается на все привязки сразу — см. `_resolve_notify_target`.
+Многоканально (Telegram, VK): по прямому запросу заказчика уведомление уходит
+**во все** каналы, где есть подходящая привязка, одновременно — см.
+`_resolve_notify_targets` (DECISIONS.md №43, отменяет "один канал" из №33).
 """
 
 from __future__ import annotations
 
 from typing import Any, Protocol
 
+import structlog
 from sqlalchemy import select
 
 from app.core.db import Database
@@ -28,6 +30,8 @@ from app.models.enums import ChannelType, PaymentStatus
 from app.models.giveaway import Giveaway
 from app.services import settings_service
 from app.services.payment_service import FinalizeOutcome
+
+logger = structlog.get_logger(__name__)
 
 
 class NotifiableChannel(Protocol):
@@ -62,15 +66,16 @@ def _format_support_contacts(contacts: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _resolve_notify_target(db: Database, participant_id: int) -> tuple[ChannelType, str] | None:
-    """Выбирает канал и внешний ID для проактивного уведомления получателя.
+def _resolve_notify_targets(db: Database, participant_id: int) -> list[tuple[ChannelType, str]]:
+    """Выбирает ВСЕ каналы, куда нужно доставить проактивное уведомление
+    получателя — по прямому запросу заказчика уведомление уходит в Telegram
+    И VK одновременно, если у участника есть обе подходящие привязки
+    (DECISIONS.md №43, отменяет "один канал" из №33).
 
-    Telegram — в приоритете: право писать первым там не отзывается пользователем
-    (см. DECISIONS.md #32). VK — только если участник явно разрешил сообщения от
-    сообщества (`ChannelBinding.messages_allowed is True`, отзываемо через
-    `message_allow`/`message_deny`) — иначе `messages.send` от имени сообщества
-    вернёт ошибку запрета отправки. Один канал на участника, не оба сразу — см.
-    DECISIONS.md #33."""
+    VK участвует только если участник явно разрешил сообщения от сообщества
+    (`ChannelBinding.messages_allowed is True`, отзываемо через
+    `message_allow`/`message_deny`, см. DECISIONS.md #32) — иначе
+    `messages.send` от имени сообщества вернёт ошибку запрета отправки."""
     with db.session() as session:
         bindings = list(
             session.execute(
@@ -79,15 +84,16 @@ def _resolve_notify_target(db: Database, participant_id: int) -> tuple[ChannelTy
         )
     by_channel = {b.channel: b for b in bindings}
 
+    targets: list[tuple[ChannelType, str]] = []
     telegram_binding = by_channel.get(ChannelType.TELEGRAM)
     if telegram_binding is not None:
-        return ChannelType.TELEGRAM, telegram_binding.external_user_id
+        targets.append((ChannelType.TELEGRAM, telegram_binding.external_user_id))
 
     vk_binding = by_channel.get(ChannelType.VK)
     if vk_binding is not None and vk_binding.messages_allowed:
-        return ChannelType.VK, vk_binding.external_user_id
+        targets.append((ChannelType.VK, vk_binding.external_user_id))
 
-    return None
+    return targets
 
 
 def _channel_for(
@@ -111,37 +117,50 @@ async def notify_payment_outcome(
     vk_channel: NotifiableChannel | None,
 ) -> None:
     """Отправляет участнику сообщение об исходе платежа: при успехе — постер и
-    купленные номерки, при отказе — короткое уведомление. Тихо ничего не
-    делает, если у участника нет подходящей привязки канала (напр. подарочная
-    покупка на неподтверждённый номер без доступа к аккаунту, п.7.1, 10.3 ТЗ,
-    либо процесс поднят без токена нужного канала) — уведомлять там некого."""
+    купленные номерки, при отказе — короткое уведомление. Уходит во ВСЕ каналы
+    с подходящей привязкой одновременно (см. `_resolve_notify_targets`). Тихо
+    ничего не делает, если у участника нет ни одной подходящей привязки канала
+    (напр. подарочная покупка на неподтверждённый номер без доступа к аккаунту,
+    п.7.1, 10.3 ТЗ, либо процесс поднят без токена нужного канала) — уведомлять
+    там некого."""
     if not outcome.applied or outcome.participant_id is None:
         return
 
-    target = _resolve_notify_target(db, outcome.participant_id)
-    if target is None:
-        return
-    channel_type, external_user_id = target
-    channel = _channel_for(channel_type, telegram_channel=telegram_channel, vk_channel=vk_channel)
-    if channel is None:
+    targets = _resolve_notify_targets(db, outcome.participant_id)
+    if not targets:
         return
 
-    if outcome.new_status == PaymentStatus.SUCCEEDED:
+    giveaway: Giveaway | None = None
+    if outcome.new_status == PaymentStatus.SUCCEEDED and outcome.giveaway_id is not None:
         with db.session() as session:
-            giveaway = (
-                session.get(Giveaway, outcome.giveaway_id)
-                if outcome.giveaway_id is not None
-                else None
-            )
-        codes = [t.full_code for t in (outcome.tickets or [])]
-        await channel.deliver_purchase(
-            external_user_id,
-            poster_path=giveaway.digital_poster_path if giveaway else None,
-            codes=codes,
-            intro="Оплата прошла успешно! Ваши номера:",
+            giveaway = session.get(Giveaway, outcome.giveaway_id)
+    codes = [t.full_code for t in (outcome.tickets or [])]
+
+    for channel_type, external_user_id in targets:
+        channel = _channel_for(
+            channel_type, telegram_channel=telegram_channel, vk_channel=vk_channel
         )
-    else:
-        await channel.send_message(external_user_id, _FAILURE_TEXT)
+        if channel is None:
+            continue
+        try:
+            if outcome.new_status == PaymentStatus.SUCCEEDED:
+                await channel.deliver_purchase(
+                    external_user_id,
+                    poster_path=giveaway.digital_poster_path if giveaway else None,
+                    codes=codes,
+                    intro="Оплата прошла успешно! Ваши номера:",
+                )
+            else:
+                await channel.send_message(external_user_id, _FAILURE_TEXT)
+        except Exception:
+            # Один канал не должен блокировать доставку в другой — напр. VK
+            # может вернуть ошибку запрета отправки, если участник отозвал
+            # разрешение прямо между сверкой привязок и отправкой.
+            logger.exception(
+                "notify_payment_outcome_channel_failed",
+                channel=channel_type.value,
+                participant_id=outcome.participant_id,
+            )
 
 
 async def notify_late_success_no_tickets(
@@ -156,18 +175,29 @@ async def notify_late_success_no_tickets(
     повторно захватить номерки не удалось (см.
     `payment_service._recover_late_success`, DECISIONS.md). Автоматический
     возврат не делается (ТЗ §21) — сообщаем участнику, чтобы он не остался в
-    неведении, что деньги списаны."""
+    неведении, что деньги списаны. Уходит во ВСЕ каналы с подходящей
+    привязкой одновременно (см. `_resolve_notify_targets`)."""
     if outcome.participant_id is None:
         return
-    target = _resolve_notify_target(db, outcome.participant_id)
-    if target is None:
-        return
-    channel_type, external_user_id = target
-    channel = _channel_for(channel_type, telegram_channel=telegram_channel, vk_channel=vk_channel)
-    if channel is None:
+    targets = _resolve_notify_targets(db, outcome.participant_id)
+    if not targets:
         return
     with db.session() as session:
         platform_settings = settings_service.get_or_create_settings(session)
         contacts = platform_settings.support_contacts or {}
     text = _LATE_SUCCESS_NO_TICKETS_TEXT + _format_support_contacts(contacts)
-    await channel.send_message(external_user_id, text)
+
+    for channel_type, external_user_id in targets:
+        channel = _channel_for(
+            channel_type, telegram_channel=telegram_channel, vk_channel=vk_channel
+        )
+        if channel is None:
+            continue
+        try:
+            await channel.send_message(external_user_id, text)
+        except Exception:
+            logger.exception(
+                "notify_late_success_no_tickets_channel_failed",
+                channel=channel_type.value,
+                participant_id=outcome.participant_id,
+            )
