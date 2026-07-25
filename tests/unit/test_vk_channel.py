@@ -41,7 +41,35 @@ async def test_request_contact_explains_impossibility(channel: VkChannel) -> Non
     await channel.request_contact("123")
     channel.bot.api.request.assert_awaited_once()
     _, data = channel.bot.api.request.call_args.args[:2]
-    assert "не даёт" in data["message"]
+    assert "номер телефона" in data["message"]
+
+
+async def test_send_qr_code_uploads_photo_and_sends_with_caption(channel: VkChannel) -> None:
+    """Покрывает upload-флоу `send_qr_code` (getMessagesUploadServer ->
+    загрузка -> saveMessagesPhoto -> messages.send), ранее не тестировавшийся
+    отдельно от Telegram (см. tests/unit/test_telegram_channel.py)."""
+
+    async def fake_request(method: str, params: dict | None = None) -> dict:
+        if method == "photos.getMessagesUploadServer":
+            return {"response": {"upload_url": "https://upload.vk.example/upload"}}
+        if method == "photos.saveMessagesPhoto":
+            return {"response": [{"owner_id": 1, "id": 2, "access_key": "abc"}]}
+        if method == "messages.send":
+            return {"response": 1}
+        raise AssertionError(f"unexpected VK API method: {method}")
+
+    channel.bot.api.request = AsyncMock(side_effect=fake_request)  # type: ignore[method-assign]
+    channel.bot.api.http_client.request_text = AsyncMock(  # type: ignore[method-assign]
+        return_value=json.dumps({"file": "upload-token"})
+    )
+
+    await channel.send_qr_code("123", "mock-sbp-qr:order-1:1000", caption="Инструкция по оплате")
+
+    calls = {call.args[0]: call.args[1] for call in channel.bot.api.request.call_args_list}
+    assert calls["photos.saveMessagesPhoto"]["file"] == "upload-token"
+    assert calls["messages.send"]["peer_id"] == 123
+    assert calls["messages.send"]["message"] == "Инструкция по оплате"
+    assert calls["messages.send"]["attachment"] == "photo1_2_abc"
 
 
 def test_vk_active_in_prod() -> None:
