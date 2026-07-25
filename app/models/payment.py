@@ -84,6 +84,17 @@ class Payment(Base):
     # в поддержку вручную. Только для видимости в админ-панели (см. DECISIONS.md).
     oversold: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    # Банковская сверка (requisites_qr) нашла операцию с совпавшим номером счёта в
+    # назначении платежа, но с другой суммой (см. app/services/bank_reconciliation_service.py) —
+    # счёт НЕ закрывается автоматически (см. DECISIONS.md №39), только помечается
+    # для ручного разбора оператором в панели. `amount_mismatch_bank_amount` —
+    # фактическая сумма из последней такой операции (копейки), для сравнения с
+    # `amount` в UI. Не сбрасывается автоматически при последующей успешной
+    # финализации по другой операции — служит историческим следом ("по этому
+    # счёту также приходил платёж на другую сумму").
+    amount_mismatch: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    amount_mismatch_bank_amount: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     participant: Mapped[Participant] = relationship(back_populates="payments")
     giveaway: Mapped[Giveaway] = relationship(back_populates="payments")
     pool_rows: Mapped[list[TicketPool]] = relationship(back_populates="payment")

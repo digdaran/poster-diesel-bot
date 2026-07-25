@@ -221,7 +221,7 @@ export function SalesPage() {
           <tbody>
             {payments.length === 0 && <EmptyStateRow colSpan={12} />}
             {payments.map((p) => (
-              <tr key={p.id}>
+              <tr key={p.id} className={p.amount_mismatch ? "row-amount-mismatch" : undefined}>
                 <td>{p.order_id}</td>
                 <td>{p.invoice_no ?? "—"}</td>
                 <td>{p.giveaway_name}</td>
@@ -230,7 +230,17 @@ export function SalesPage() {
                 <td>
                   <ChannelBadges channel={p.channel} />
                 </td>
-                <td>{formatMoney(p.amount)}</td>
+                <td>
+                  {formatMoney(p.amount)}
+                  {p.amount_mismatch && (
+                    <>
+                      {" "}
+                      <Badge tone="danger">
+                        не совпадает: пришло {formatMoney(p.amount_mismatch_bank_amount ?? 0)}
+                      </Badge>
+                    </>
+                  )}
+                </td>
                 <td>{p.quantity}</td>
                 <td>
                   <Badge tone={STATUS_TONE[p.status] ?? "muted"}>{p.status}</Badge>

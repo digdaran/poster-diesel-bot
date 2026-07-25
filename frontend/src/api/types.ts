@@ -66,6 +66,8 @@ export interface Payment {
   confirmed_at: string | null;
   invoice_no: string | null;
   oversold: boolean;
+  amount_mismatch: boolean;
+  amount_mismatch_bank_amount: number | null;
   receipt_count: number;
 }
 
