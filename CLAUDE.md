@@ -22,6 +22,14 @@ judgment call. `DECISIONS_LOG.md` is the full chronological history behind it (i
 superseded/reversed entries and incident writeups) — consult it only when you need the reasoning
 behind a specific decision; it is not required reading before routine changes.
 
+**Never edit `docs/ТЗ_Raffle_Platform.md`** — not even to keep the §6.2 data model table in sync with
+a real schema change. It's a frozen historical record of what was originally commissioned; rewriting
+it to match current behavior destroys that record and recreates the two-sources-of-truth confusion
+this split was meant to fix. When the data model or business rules change, record it in
+`DECISIONS_LOG.md` (with a `DECISIONS.md` summary bullet if it's still active) instead — see LOG №46
+for the pattern. (A prior commit briefly broke this rule by rewriting the §6.2 `Giveaway` row for the
+multi-poster feature; it was reverted — see LOG №47.)
+
 VK is active in production alongside Telegram (`DECISIONS.md`, `ARCHITECTURE.md` §7.1). MAX is still
 just a stub (`channels/max/`, raises `NotImplementedError`) — do not implement it without explicit
 sign-off from the project owner.
