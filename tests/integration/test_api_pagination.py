@@ -42,6 +42,7 @@ def _seed_payments(giveaway_id: int, participant_id: int) -> None:
                 status=PaymentStatus.SUCCEEDED,
             )
         )
+    db.engine.dispose()
 
 
 def _create_open_giveaway(api_client: TestClient, headers: dict[str, str], **kwargs: object) -> int:

@@ -4,11 +4,26 @@ from __future__ import annotations
 
 import os
 import tempfile
+import time
 from collections.abc import Iterator
 
 import pytest
 from app.core.config import get_settings
 from fastapi.testclient import TestClient
+
+
+def _remove_with_retry(path: str, attempts: int = 5, delay_s: float = 0.1) -> None:
+    """На Windows файловый хендл может освобождаться ОС не мгновенно после
+    `engine.dispose()` — короткий ретрай устраняет эту гонку без маскировки
+    реальных ошибок (после `attempts` неудач исключение всё равно всплывает)."""
+    for attempt in range(attempts):
+        try:
+            os.remove(path)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(delay_s)
 
 
 @pytest.fixture
@@ -43,7 +58,7 @@ def api_client() -> Iterator[TestClient]:
     for suffix in ("", "-wal", "-shm", "-journal"):
         p = db_path + suffix
         if os.path.exists(p):
-            os.remove(p)
+            _remove_with_retry(p)
 
 
 def login(client: TestClient, login_: str, password: str) -> str:

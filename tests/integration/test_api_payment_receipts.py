@@ -58,6 +58,7 @@ def _seed_payment_with_receipt(
             session.add(receipt)
             session.flush()
             receipt_id = receipt.id
+    db.engine.dispose()
     return payment_id, receipt_id
 
 

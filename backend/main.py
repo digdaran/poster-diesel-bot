@@ -90,6 +90,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await telegram_channel.bot.session.close()
     if vk_channel is not None:
         await vk_channel.bot.api.http_client.close()
+    db.engine.dispose()
 
 
 def create_app() -> FastAPI:

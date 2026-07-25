@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import time
 from collections.abc import Iterator
 
 import pytest
@@ -19,6 +20,20 @@ from app.core.config import Settings
 from app.core.db import Database
 from app.models import Base
 from sqlalchemy.orm import Session
+
+
+def _remove_with_retry(path: str, attempts: int = 5, delay_s: float = 0.1) -> None:
+    """На Windows файловый хендл может освобождаться ОС не мгновенно после
+    `engine.dispose()` — короткий ретрай устраняет эту гонку без маскировки
+    реальных ошибок (после `attempts` неудач исключение всё равно всплывает)."""
+    for attempt in range(attempts):
+        try:
+            os.remove(path)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(delay_s)
 
 
 @pytest.fixture
@@ -30,7 +45,7 @@ def tmp_db_path() -> Iterator[str]:
     for suffix in ("", "-wal", "-shm", "-journal"):
         p = path + suffix
         if os.path.exists(p):
-            os.remove(p)
+            _remove_with_retry(p)
 
 
 @pytest.fixture
@@ -43,10 +58,13 @@ def settings(tmp_db_path: str) -> Settings:
 
 
 @pytest.fixture
-def db(settings: Settings, tmp_db_path: str) -> Database:
+def db(settings: Settings, tmp_db_path: str) -> Iterator[Database]:
     database = Database(settings, database_url=f"sqlite:///{tmp_db_path}")
     Base.metadata.create_all(database.engine)
-    return database
+    yield database
+    # На Windows пул соединений держит файловый хендл открытым до dispose() —
+    # без этого teardown tmp_db_path падает с PermissionError при удалении файла.
+    database.engine.dispose()
 
 
 @pytest.fixture
