@@ -547,26 +547,38 @@ async def _create_and_offer_payment(
     )
     invoice_line = f" Счёт № {outcome.invoice_no}." if outcome.invoice_no else ""
     qr_payload = outcome.created.qr_code_payload
+    qr_sent = False
     if qr_payload:
         # Присылаем QR сразу же, не дожидаясь нажатия «Показать QR» — кнопка
-        # остаётся только как способ повторно запросить QR (см. render_payment_prompt).
-        await channel.send_qr_code(
-            _uid(peer_id),
-            qr_payload,
-            caption=(
-                "Отсканируйте QR-код в банковском приложении и оплатите по реквизитам.\n"
-                "После оплаты пришлите сюда квитанцию — номера придут после зачисления "
-                "денег на расчётный счёт (может занять несколько дней)."
-            ),
-        )
+        # остаётся способом повторно запросить QR, в т.ч. если проактивная
+        # отправка здесь не удастся (не должна ломать оформление заказа целиком).
+        try:
+            await channel.send_qr_code(
+                _uid(peer_id),
+                qr_payload,
+                caption=(
+                    "Отсканируйте QR-код в банковском приложении и оплатите по реквизитам.\n"
+                    "После оплаты пришлите сюда квитанцию — номера придут после зачисления "
+                    "денег на расчётный счёт (может занять несколько дней)."
+                ),
+            )
+            qr_sent = True
+        except Exception:
+            logger.exception("vk_proactive_qr_send_failed", order_id=outcome.order_id)
     if outcome.created.payment_url:
         instruction = (
             "Оплатите по ссылке ниже, либо QR-кодом выше (СБП)."
-            if qr_payload
-            else "Оплатите по ссылке ниже."
+            if qr_sent
+            else "Оплатите по ссылке ниже, либо нажмите «Показать QR» для оплаты по QR-коду (СБП)."
         )
-    else:
+    elif qr_sent:
         instruction = "Оплатите QR-код выше в банковском приложении по реквизитам."
+    else:
+        instruction = (
+            "Нажмите «Показать QR» и оплатите по QR-коду в банковском приложении по "
+            "реквизитам. После оплаты пришлите сюда квитанцию — номера придут после "
+            "зачисления денег на расчётный счёт (может занять несколько дней)."
+        )
     await channel.send_message(
         _uid(peer_id),
         f"Счёт создан на {quantity} экз. на сумму {outcome.amount / 100:.2f} ₽."
