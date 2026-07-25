@@ -21,8 +21,8 @@ def get_channel_db() -> Database:
 
 def get_active_provider(db: Database) -> BasePaymentProvider:
     """См. `channels.telegram.state.get_active_provider` — та же единая точка
-    резолва провайдера (с учётом `PlatformSettings.payment_provider_override`),
-    переиспользуемая всеми каналами и фоновыми задачами backend."""
+    резолва активного провайдера, переиспользуемая всеми каналами и фоновыми
+    задачами backend."""
     return payment_factory.get_active_provider(db, get_settings())
 
 

@@ -195,7 +195,6 @@ class PanelUserUpdateRequest(BaseModel):
 
 
 class PlatformSettingsOut(BaseModel):
-    payment_provider_override: str | None
     ignore_phone_verification: bool
     online_status_poll_interval_sec: int
     online_status_poll_max_attempts: int
@@ -208,10 +207,6 @@ class PlatformSettingsOut(BaseModel):
 
 class SupportContactsUpdateRequest(BaseModel):
     support_contacts: dict[str, Any]
-
-
-class PaymentProviderUpdateRequest(BaseModel):
-    payment_provider_override: str | None
 
 
 class IgnorePhoneVerificationUpdateRequest(BaseModel):

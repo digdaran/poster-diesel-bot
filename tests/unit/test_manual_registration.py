@@ -11,11 +11,24 @@ from app.models.giveaway import Giveaway
 from app.models.manual_registration import ManualRegistration
 from app.models.panel_user import PanelUser
 from app.models.participant import Participant
-from app.payments.mock import MockProvider
+from app.payments.requisites_qr import RequisitesQrProvider
 from app.services import manual_registration_service as svc
 from app.services import payment_service as payment_svc
 from app.services import ticket_pool_service as pool_svc
 from sqlalchemy import select
+
+
+def make_provider() -> RequisitesQrProvider:
+    return RequisitesQrProvider(
+        recipient_name="ИП Тест",
+        recipient_inn="770101001770",
+        recipient_kpp="",
+        personal_acc="40802810000000000001",
+        bank_name="Тестбанк",
+        bic="044525225",
+        corresp_acc="30101810000000000225",
+        vat_rate_percent=0,
+    )
 
 
 def make_giveaway(db: Database, *, max_tickets: int = 10, prefix: str = "AUG") -> int:
@@ -132,7 +145,7 @@ def test_create_blocked_by_existing_pending_payment(db: Database) -> None:
     oid = make_operator(db)
     payment_outcome = payment_svc.create_payment_safe(
         db,
-        MockProvider(),
+        make_provider(),
         giveaway_id=gid,
         participant_id=pid,
         participant_phone="79991234567",

@@ -28,21 +28,6 @@ def update_support_contacts(
     return settings
 
 
-def update_payment_provider_override(
-    session: Session, *, payment_provider_override: str | None, updated_by: int
-) -> PlatformSettings:
-    from app.models.enums import PaymentProviderType
-
-    settings = get_or_create_settings(session)
-    settings.payment_provider_override = (
-        PaymentProviderType(payment_provider_override) if payment_provider_override else None
-    )
-    settings.updated_at = utcnow()
-    settings.updated_by = updated_by
-    session.flush()
-    return settings
-
-
 def update_ignore_phone_verification(
     session: Session, *, ignore_phone_verification: bool, updated_by: int
 ) -> PlatformSettings:

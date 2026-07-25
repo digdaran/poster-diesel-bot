@@ -13,7 +13,6 @@ from sqlalchemy.orm import Session
 from backend.api.deps import get_session, require_permission
 from backend.api.schemas import (
     IgnorePhoneVerificationUpdateRequest,
-    PaymentProviderUpdateRequest,
     PlatformSettingsOut,
     SupportContactsUpdateRequest,
 )
@@ -28,9 +27,6 @@ def get_settings(
 ) -> PlatformSettingsOut:
     settings = svc.get_or_create_settings(session)
     return PlatformSettingsOut(
-        payment_provider_override=(
-            settings.payment_provider_override.value if settings.payment_provider_override else None
-        ),
         ignore_phone_verification=settings.ignore_phone_verification,
         online_status_poll_interval_sec=settings.online_status_poll_interval_sec,
         online_status_poll_max_attempts=settings.online_status_poll_max_attempts,
@@ -56,30 +52,6 @@ def update_support_contacts(
         actor_type=AuditActorType.PANEL_USER,
         actor_id=user.id,
         actor_label=user.login,
-        ip_address=request.client.host if request.client else None,
-    )
-    return get_settings(session=session, _user=user)
-
-
-@router.patch("/payment-provider", response_model=PlatformSettingsOut)
-def update_payment_provider(
-    payload: PaymentProviderUpdateRequest,
-    request: Request,
-    session: Session = Depends(get_session),
-    user: PanelUser = Depends(require_permission(Permission.PAYMENT_PROVIDER_SWITCH)),
-) -> PlatformSettingsOut:
-    """Переключение активного банка — только Super Admin, без переразвёртывания
-    (п.9.3, 12 ТЗ). Изменение фиксируется в аудите."""
-    svc.update_payment_provider_override(
-        session, payment_provider_override=payload.payment_provider_override, updated_by=user.id
-    )
-    audit_service.log(
-        session,
-        action="settings_switch_payment_provider",
-        actor_type=AuditActorType.PANEL_USER,
-        actor_id=user.id,
-        actor_label=user.login,
-        details={"payment_provider_override": payload.payment_provider_override},
         ip_address=request.client.host if request.client else None,
     )
     return get_settings(session=session, _user=user)

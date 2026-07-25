@@ -46,7 +46,6 @@ class Permission(str, Enum):
 
     # Только Super Admin
     PANEL_USERS_MANAGE = "panel_users_manage"
-    PAYMENT_PROVIDER_SWITCH = "payment_provider_switch"
     IGNORE_PHONE_VERIFICATION_TOGGLE = "ignore_phone_verification_toggle"
 
 
@@ -78,7 +77,6 @@ _ADMINISTRATOR_EXTRA = {
 
 _SUPER_ADMIN_EXTRA = {
     Permission.PANEL_USERS_MANAGE,
-    Permission.PAYMENT_PROVIDER_SWITCH,
     Permission.IGNORE_PHONE_VERIFICATION_TOGGLE,
 }
 

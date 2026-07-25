@@ -13,13 +13,26 @@ import pytest
 from app.core.db import Database
 from app.models.giveaway import Giveaway
 from app.models.participant import Participant
-from app.payments.mock import MockProvider
+from app.payments.requisites_qr import RequisitesQrProvider
 from app.services import payment_service as payment_svc
 from app.services import ticket_pool_service as pool_svc
 from sqlalchemy.orm import Session
 
 from channels.telegram import handlers as handlers_module
 from channels.telegram.handlers import _offer_active_purchase_cancellation, _open_giveaways
+
+
+def make_provider() -> RequisitesQrProvider:
+    return RequisitesQrProvider(
+        recipient_name="ИП Тест",
+        recipient_inn="770101001770",
+        recipient_kpp="",
+        personal_acc="40802810000000000001",
+        bank_name="Тестбанк",
+        bic="044525225",
+        corresp_acc="30101810000000000225",
+        vat_rate_percent=0,
+    )
 
 
 def make_giveaway(
@@ -51,25 +64,10 @@ def test_open_giveaways_returns_only_sellable_ones(db: Database) -> None:
 def test_open_giveaways_excludes_sold_out_giveaway(db: Database) -> None:
     gid = make_giveaway(db, max_tickets=1, prefix="SLD")
     with db.session() as session:
-        from app.models.participant import Participant
-
-        p = Participant(phone="79990001122")
-        session.add(p)
+        giveaway = session.get(Giveaway, gid)
+        assert giveaway is not None
+        giveaway.tickets_issued = 1  # весь тираж разобран
         session.flush()
-        pid = p.id
-
-    from app.payments.mock import MockProvider
-    from app.services import payment_service as payment_svc
-
-    outcome = payment_svc.create_payment_safe(
-        db,
-        MockProvider(),
-        giveaway_id=gid,
-        participant_id=pid,
-        participant_phone="79990001122",
-        quantity=1,
-    )
-    assert outcome.ok
 
     with db.session() as session:
         assert _open_giveaways(session) == []
@@ -107,7 +105,7 @@ async def test_offer_active_purchase_cancellation_shows_pending_payment_details_
 
     outcome = payment_svc.create_payment_safe(
         db,
-        MockProvider(),
+        make_provider(),
         giveaway_id=gid,
         participant_id=pid,
         participant_phone="79990002233",

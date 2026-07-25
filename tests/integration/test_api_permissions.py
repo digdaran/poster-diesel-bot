@@ -71,19 +71,14 @@ def test_operator_cannot_edit_giveaway_or_block_participant(api_client: TestClie
     assert resp.status_code == 403
 
 
-def test_administrator_cannot_manage_panel_users_or_switch_provider(api_client: TestClient) -> None:
+def test_administrator_cannot_manage_panel_users_or_toggle_phone_verification(
+    api_client: TestClient,
+) -> None:
     admin_token = login(api_client, "admin", "admin-strong-pass-123")
     create_panel_user(api_client, admin_token, "manager1", "manager-strong-pass", "administrator")
     manager_token = login(api_client, "manager1", "manager-strong-pass")
 
     resp = api_client.get("/api/panel-users", headers=auth_headers(manager_token))
-    assert resp.status_code == 403
-
-    resp = api_client.patch(
-        "/api/settings/payment-provider",
-        json={"payment_provider_override": "mock"},
-        headers=auth_headers(manager_token),
-    )
     assert resp.status_code == 403
 
     resp = api_client.patch(

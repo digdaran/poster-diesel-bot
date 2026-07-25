@@ -19,11 +19,11 @@ def get_channel_db() -> Database:
 
 
 def get_active_provider(db: Database) -> BasePaymentProvider:
-    """Провайдер с учётом приоритета PlatformSettings.payment_provider_override
-    над .env (п.9.3 ТЗ) — тонкая обёртка над app.payments.factory (единая точка
-    резолва для каналов и фоновых задач backend, см. DECISIONS.md). Использовать
-    ТОЛЬКО для создания НОВЫХ платежей — для проверки статуса существующего
-    платежа см. `get_provider_for_type`."""
+    """Активный провайдер (`.env` `PAYMENT_PROVIDER`) — тонкая обёртка над
+    app.payments.factory (единая точка резолва для каналов и фоновых задач
+    backend, см. DECISIONS.md). Использовать ТОЛЬКО для создания НОВЫХ
+    платежей — для проверки статуса существующего платежа см.
+    `get_provider_for_type`."""
     return payment_factory.get_active_provider(db, get_settings())
 
 

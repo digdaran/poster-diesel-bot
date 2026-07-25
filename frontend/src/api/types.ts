@@ -103,7 +103,6 @@ export interface PanelUser {
 }
 
 export interface PlatformSettings {
-  payment_provider_override: string | null;
   ignore_phone_verification: boolean;
   online_status_poll_interval_sec: number;
   online_status_poll_max_attempts: number;

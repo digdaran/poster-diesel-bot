@@ -151,11 +151,6 @@ export const SettingsApi = {
       method: "PATCH",
       body: { support_contacts },
     }),
-  updatePaymentProvider: (payment_provider_override: string | null) =>
-    apiRequest<PlatformSettings>("/api/settings/payment-provider", {
-      method: "PATCH",
-      body: { payment_provider_override },
-    }),
   updateIgnorePhoneVerification: (ignore_phone_verification: boolean) =>
     apiRequest<PlatformSettings>("/api/settings/ignore-phone-verification", {
       method: "PATCH",

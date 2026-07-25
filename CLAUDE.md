@@ -105,12 +105,14 @@ summary; don't violate them when changing code.
   turning the flag off must immediately revoke access for bindings relying only on it. See ТЗ §7.1/§10.3.
 - **Permissions are always enforced server-side** (`require_permission(...)`, matrix in
   `app/core/permissions.py`, see ARCHITECTURE.md §5) — frontend nav filtering is UX only.
-- **Broadcasts go out only via Telegram**; transactional notifications go through whatever channel the
-  participant used to transact.
+- **Broadcasts go out only via Telegram**; reactive transactional replies (`_deliver_tickets` in
+  `channels/*/handlers.py`) go through whatever channel the participant used to transact, but proactive
+  backend notifications (webhook/background reconciliation, `app/services/notification_service.py`) go
+  out to **every** bound channel simultaneously (Telegram + VK, if both) — see DECISIONS.md №43.
 - **Every mutating action gets an audit-log row** via `app/services/audit_service.py` — don't bypass it.
-- **Exactly one payment provider is active at a time**, switchable from Super Admin with no redeploy
-  (`PlatformSettings.payment_provider_override`, see ARCHITECTURE.md §2/§7) — never hardcode a provider
-  outside the factory.
+- **`RequisitesQrProvider` is the only payment provider** — interactive-acquiring (T-Bank/VTB/mock) was
+  removed by direct product decision (see DECISIONS.md №44); don't reintroduce a provider switcher or a
+  second live provider without explicit sign-off.
 
 ### Testing conventions
 

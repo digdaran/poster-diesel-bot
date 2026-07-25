@@ -42,16 +42,6 @@ export function SettingsPage() {
     }
   });
 
-  const updatePaymentProvider = async (value: string) => {
-    try {
-      await SettingsApi.updatePaymentProvider(value || null);
-      showToast("Платёжный провайдер обновлён");
-      load();
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : "Не удалось обновить провайдера", "error");
-    }
-  };
-
   const updateIgnorePhoneVerification = async (checked: boolean) => {
     try {
       await SettingsApi.updateIgnorePhoneVerification(checked);
@@ -82,21 +72,6 @@ export function SettingsPage() {
           </button>
         )}
       </section>
-
-      {hasPermission("payment_provider_switch") && (
-        <section>
-          <h2>Активный платёжный провайдер</h2>
-          <select
-            value={settings.payment_provider_override ?? ""}
-            onChange={(e) => void updatePaymentProvider(e.target.value)}
-          >
-            <option value="">По умолчанию из .env</option>
-            <option value="mock">Mock (тест)</option>
-            <option value="tbank">Т-Банк</option>
-            <option value="vtb">ВТБ</option>
-          </select>
-        </section>
-      )}
 
       {hasPermission("ignore_phone_verification_toggle") && (
         <section>

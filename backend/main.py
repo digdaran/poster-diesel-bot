@@ -1,5 +1,5 @@
-"""Точка входа FastAPI backend (п.5.1, 19 ТЗ): REST API панели, webhook банков,
-метрики Prometheus. Общий пакет app/ переиспользуется без изменений."""
+"""Точка входа FastAPI backend (п.5.1, 19 ТЗ): REST API панели, метрики Prometheus.
+Общий пакет app/ переиспользуется без изменений."""
 
 from __future__ import annotations
 
@@ -35,7 +35,6 @@ from backend.api import (
 from backend.api import (
     settings as settings_api,
 )
-from backend.webhooks import payments as payments_webhooks
 from channels.telegram.channel import TelegramChannel
 from channels.vk.channel import VkChannel
 
@@ -135,7 +134,6 @@ def create_app() -> FastAPI:
     app.include_router(audit.router, prefix=api_prefix)
     app.include_router(broadcasts.router, prefix=api_prefix)
     app.include_router(reports.router, prefix=api_prefix)
-    app.include_router(payments_webhooks.router)  # без /api — только для банков
 
     return app
 

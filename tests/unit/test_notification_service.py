@@ -14,10 +14,23 @@ from app.models.channel_binding import ChannelBinding
 from app.models.enums import ChannelType, PaymentStatus
 from app.models.giveaway import Giveaway
 from app.models.participant import Participant
-from app.payments.mock import MockProvider
+from app.payments.requisites_qr import RequisitesQrProvider
 from app.services import notification_service
 from app.services import payment_service as svc
 from app.services import ticket_pool_service as pool_svc
+
+
+def make_provider() -> RequisitesQrProvider:
+    return RequisitesQrProvider(
+        recipient_name="ИП Тест",
+        recipient_inn="770101001770",
+        recipient_kpp="",
+        personal_acc="40802810000000000001",
+        bank_name="Тестбанк",
+        bic="044525225",
+        corresp_acc="30101810000000000225",
+        vat_rate_percent=0,
+    )
 
 
 @dataclass
@@ -80,7 +93,7 @@ async def test_notify_success_delivers_purchase_via_binding(db: Database) -> Non
     pid = make_participant_with_binding(db)
     outcome = svc.create_payment_safe(
         db,
-        MockProvider(),
+        make_provider(),
         giveaway_id=gid,
         participant_id=pid,
         participant_phone="79991234567",
@@ -109,7 +122,7 @@ async def test_notify_failure_sends_short_message(db: Database) -> None:
     pid = make_participant_with_binding(db)
     outcome = svc.create_payment_safe(
         db,
-        MockProvider(),
+        make_provider(),
         giveaway_id=gid,
         participant_id=pid,
         participant_phone="79991234567",
@@ -134,7 +147,7 @@ async def test_notify_without_binding_is_noop(db: Database) -> None:
     pid = make_participant_without_binding(db)
     outcome = svc.create_payment_safe(
         db,
-        MockProvider(),
+        make_provider(),
         giveaway_id=gid,
         participant_id=pid,
         participant_phone="79997654321",
