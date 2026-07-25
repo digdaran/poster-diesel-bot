@@ -137,8 +137,7 @@ class VkChannel(BaseMessengerChannel):
         как того требует контракт `BaseMessengerChannel.request_contact`."""
         await self.send_message(
             external_user_id,
-            "ВКонтакте не даёт автоматически передать номер телефона боту. "
-            "Если оператор разрешил ручной ввод, просто напишите номер в чат.",
+            "Для продолжения напишите пожалуйста свой номер телефона.",
         )
 
     def render_keyboard(self, buttons: list[list[str]]) -> str:
