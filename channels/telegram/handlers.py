@@ -143,12 +143,12 @@ async def on_contact(message: Message, state: FSMContext) -> None:
         channel = _get_channel()
         keyboard = channel.render_keyboard(_MAIN_KEYBOARD_BUTTONS)
         await message.answer(
-            "Номер подтверждён! Теперь вам доступна история покупок.",
+            "Номер принят! Теперь вам доступна история покупок.",
             reply_markup=keyboard,
         )
         return
 
-    await message.answer("Номер подтверждён! Как вас зовут?")
+    await message.answer("Номер принят! Как вас зовут?")
     await state.set_state(RegistrationStates.awaiting_name)
 
 
@@ -326,7 +326,7 @@ async def _prompt_giveaway_choice(
     ]
     rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="nav:back:menu")])
     await message.answer(
-        "Выберите коллекцию:", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+        "Выберите постер:", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
     )
     await state.set_state(PurchaseStates.choosing_giveaway)
 
@@ -390,7 +390,7 @@ async def on_buy(message: Message, state: FSMContext) -> None:
         giveaways = _open_giveaways(session)
 
     if not giveaways:
-        await message.answer("Сейчас нет доступных для покупки коллекций.")
+        await message.answer("Сейчас нет постеров, доступных для покупки.")
         return
 
     if len(giveaways) == 1:
@@ -431,7 +431,7 @@ async def on_giveaway_chosen(callback: CallbackQuery, state: FSMContext) -> None
     with db.session() as session:
         giveaway = session.get(Giveaway, giveaway_id)
     if giveaway is None:
-        await callback.answer("Коллекция не найдена", show_alert=True)
+        await callback.answer("Постер не найден", show_alert=True)
         return
     await _prompt_quantity(_msg(callback), state, giveaway)
     await callback.answer()
@@ -453,7 +453,7 @@ async def on_back_to_giveaways(callback: CallbackQuery, state: FSMContext) -> No
         giveaways = _open_giveaways(session)
     if not giveaways:
         await state.clear()
-        await callback.answer("Сейчас нет доступных для покупки коллекций.", show_alert=True)
+        await callback.answer("Сейчас нет постеров, доступных для покупки.", show_alert=True)
         return
     await _prompt_giveaway_choice(_msg(callback), state, giveaways)
     await callback.answer()
@@ -468,7 +468,7 @@ async def on_back_to_quantity(callback: CallbackQuery, state: FSMContext) -> Non
         giveaway = session.get(Giveaway, giveaway_id)
     if giveaway is None:
         await state.clear()
-        await callback.answer("Коллекция недоступна.", show_alert=True)
+        await callback.answer("Постер недоступен.", show_alert=True)
         return
     await _prompt_quantity(_msg(callback), state, giveaway)
     await callback.answer()
@@ -574,7 +574,7 @@ async def _prompt_confirm_order(
         giveaway = session.get(Giveaway, giveaway_id)
     if giveaway is None:
         await state.clear()
-        await reply_target.answer("Коллекция недоступна. Начните заново — «🖼 Купить постер».")
+        await reply_target.answer("Этот постер недоступен. Начните заново — «🖼 Купить постер».")
         return
 
     total = giveaway.ticket_price * quantity / 100
@@ -612,7 +612,7 @@ async def on_confirm_order_back(callback: CallbackQuery, state: FSMContext) -> N
         giveaway = session.get(Giveaway, data["giveaway_id"])
     if giveaway is None:
         await state.clear()
-        await callback.answer("Коллекция недоступна.", show_alert=True)
+        await callback.answer("Постер недоступен.", show_alert=True)
         return
     await _prompt_quantity(_msg(callback), state, giveaway)
     await callback.answer()
@@ -900,10 +900,7 @@ async def on_my_tickets(message: Message) -> None:
         if binding is None or not participant_service.can_access_own_account(
             binding, ignore_phone_verification=platform_settings.ignore_phone_verification
         ):
-            await message.answer(
-                "Доступ к истории покупок есть только после подтверждения номера. "
-                "Поделитесь контактом, чтобы получить доступ."
-            )
+            await message.answer("Чтобы увидеть историю покупок, поделитесь контактом.")
             return
         tickets = list(
             session.execute(
@@ -927,8 +924,8 @@ async def on_help(message: Message) -> None:
     contacts = platform_settings.support_contacts or {}
     lines = [
         "Справка по боту:",
-        "— «Купить постер» — приобрести постер с уникальным номером в активной коллекции.",
-        "— «Мои покупки» — история покупок (после подтверждения номера).",
+        "— «Купить постер» — приобрести постер с уникальным номером.",
+        "— «Мои покупки» — история покупок (после того как вы поделитесь контактом).",
     ]
     if contacts:
         lines.append("\nПоддержка:")

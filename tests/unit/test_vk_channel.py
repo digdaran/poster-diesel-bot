@@ -41,7 +41,7 @@ async def test_request_contact_explains_impossibility(channel: VkChannel) -> Non
     await channel.request_contact("123")
     channel.bot.api.request.assert_awaited_once()
     _, data = channel.bot.api.request.call_args.args[:2]
-    assert "не позволяет" in data["message"]
+    assert "не даёт" in data["message"]
 
 
 def test_vk_active_in_prod() -> None:

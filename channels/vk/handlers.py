@@ -40,11 +40,11 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 labeler = BotLabeler()
 
-_MAIN_KEYBOARD_BUTTONS = [["🎟 Купить номерки", "📋 Мои номерки"], ["ℹ️ Помощь"]]
+_MAIN_KEYBOARD_BUTTONS = [["🖼 Купить постер", "📋 Мои покупки"], ["ℹ️ Помощь"]]
 _START_TEXTS = {"/start", "начать", "start"}
 _HELP_TEXTS = {"ℹ️ помощь", "/help", "помощь"}
-_BUY_TEXT = "🎟 Купить номерки"
-_MY_TICKETS_TEXT = "📋 Мои номерки"
+_BUY_TEXT = "🖼 Купить постер"
+_MY_TICKETS_TEXT = "📋 Мои покупки"
 
 _channel: VkChannel | None = None  # устанавливается через set_channel() в main.py
 
@@ -120,7 +120,7 @@ async def on_start(message: Message) -> None:
         ).ignore_phone_verification
 
     if participant is None:
-        await message.answer("Добро пожаловать в бот розыгрышей цифровых постеров!")
+        await message.answer("Добро пожаловать в бот продажи цифровых постеров!")
         await channel.request_contact(_uid(message.peer_id))
         if ignore_verification:
             # П.7.1 ТЗ: при включённом флаге ручной ввод номера открывает доступ —
@@ -130,13 +130,13 @@ async def on_start(message: Message) -> None:
         return
 
     if participant.full_name is None:
-        await message.answer("Добро пожаловать в бот розыгрышей цифровых постеров!")
+        await message.answer("Добро пожаловать в бот продажи цифровых постеров!")
         await message.answer("Как вас зовут?")
         await _set_state(message.peer_id, RegistrationStates.AWAITING_NAME)
         return
 
     keyboard = channel.render_keyboard(_MAIN_KEYBOARD_BUTTONS)
-    await message.answer("Добро пожаловать в бот розыгрышей цифровых постеров!", keyboard=keyboard)
+    await message.answer("Добро пожаловать в бот продажи цифровых постеров!", keyboard=keyboard)
 
 
 @labeler.message(func=_is_receipt_upload)
@@ -219,7 +219,7 @@ async def on_receipt_upload(message: Message) -> None:
         vk_attachment=vk_attachment,
     )
     await message.answer(
-        "Квитанция получена, спасибо! Номерки придут после зачисления денег на "
+        "Квитанция получена, спасибо! Номера придут после зачисления денег на "
         "расчётный счёт — это может занять несколько дней."
     )
 
@@ -258,7 +258,7 @@ async def on_phone_typed_for_registration(message: Message) -> None:
         keyboard = channel.render_keyboard(_MAIN_KEYBOARD_BUTTONS)
         await _clear_state(message.peer_id)
         await message.answer(
-            "Номер принят! Теперь вам доступна история покупок и номерков.", keyboard=keyboard
+            "Номер принят! Теперь вам доступна история покупок.", keyboard=keyboard
         )
         return
 
@@ -285,7 +285,7 @@ async def on_name_entered(message: Message) -> None:
     channel = _get_channel()
     keyboard = channel.render_keyboard(_MAIN_KEYBOARD_BUTTONS)
     await message.answer(
-        f"Приятно познакомиться, {name}! Теперь вам доступна история покупок и номерков.",
+        f"Приятно познакомиться, {name}! Теперь вам доступна история покупок.",
         keyboard=keyboard,
     )
 
@@ -316,7 +316,7 @@ async def _prompt_giveaway_choice(
         )
     keyboard.row()
     keyboard.add(Callback("◀️ Назад", payload={"a": "nav", "to": "menu"}))
-    text = "Выберите розыгрыш:"
+    text = "Выберите постер:"
     if answer_target is not None:
         await answer_target.answer(text, keyboard=keyboard.get_json())
     else:
@@ -362,7 +362,7 @@ async def _offer_active_purchase_cancellation(
     )
     text = (
         f"У вас уже есть незавершённая покупка: «{giveaway.name if giveaway else '—'}», "
-        f"{quantity} номерок(ов) на сумму {amount / 100:.2f} ₽.\n"
+        f"{quantity} экз. на сумму {amount / 100:.2f} ₽.\n"
         "Оплатите её, дождитесь автоматической отмены по таймауту, либо отмените сейчас."
     )
     if answer_target is not None:
@@ -388,7 +388,7 @@ async def on_buy(message: Message) -> None:
         giveaways = _open_giveaways(session)
 
     if not giveaways:
-        await message.answer("Сейчас нет доступных для покупки розыгрышей.")
+        await message.answer("Сейчас нет постеров, доступных для покупки.")
         return
 
     if len(giveaways) == 1:
@@ -416,8 +416,8 @@ async def _prompt_quantity(
     keyboard.add(Callback("◀️ Назад", payload={"a": "nav", "to": back_to}))
 
     text = (
-        f"«{giveaway.name}»: цена номерка {giveaway.ticket_price / 100:.2f} ₽. "
-        f"Сколько номерков хотите приобрести? (доступно {giveaway.free_tickets_count})\n"
+        f"«{giveaway.name}»: цена экземпляра {giveaway.ticket_price / 100:.2f} ₽. "
+        f"Сколько экземпляров хотите приобрести? (доступно {giveaway.free_tickets_count})\n"
         "Выберите вариант или введите число."
     )
     if answer_target is not None:
@@ -447,7 +447,7 @@ async def _handle_quantity_selected(
     keyboard = Keyboard(inline=True)
     keyboard.add(Callback("◀️ Назад", payload={"a": "nav", "to": "quantity", "id": giveaway_id}))
     text = (
-        "Введите номер телефона получателя номерков (формат: +7XXXXXXXXXX). "
+        "Введите номер телефона получателя постеров (формат: +7XXXXXXXXXX). "
         "Постер и коды придут в этот чат."
     )
     if answer_target is not None:
@@ -463,7 +463,7 @@ async def _handle_quantity_selected(
 async def on_quantity_typed(message: Message) -> None:
     text = (message.text or "").strip()
     if not text.isdigit() or int(text) == 0:
-        await message.answer("Введите количество номерков числом (больше нуля).")
+        await message.answer("Введите количество экземпляров числом (больше нуля).")
         return
 
     data = await _get_state_payload(message.peer_id)
@@ -518,7 +518,7 @@ async def _prompt_confirm_order(
         giveaway = session.get(Giveaway, giveaway_id)
     if giveaway is None:
         await _clear_state(peer_id)
-        text = "Розыгрыш недоступен. Начните заново — «🎟 Купить номерки»."
+        text = "Этот постер недоступен. Начните заново — «🖼 Купить постер»."
         if answer_target is not None:
             await answer_target.answer(text)
         else:
@@ -541,7 +541,7 @@ async def _prompt_confirm_order(
     keyboard.row()
     keyboard.add(Callback("◀️ Назад", payload={"a": "confirm_order", "v": "back"}))
     text = (
-        f"«{giveaway.name}»: {quantity} номерок(ов) × {giveaway.ticket_price / 100:.2f} ₽ "
+        f"«{giveaway.name}»: {quantity} экз. × {giveaway.ticket_price / 100:.2f} ₽ "
         f"= {total:.2f} ₽. Подтвердить покупку?"
     )
     if answer_target is not None:
@@ -584,7 +584,7 @@ async def _create_and_offer_payment(
         else:
             await channel.send_message(
                 _uid(peer_id),
-                "К сожалению, свободных номерков меньше, чем нужно "
+                "К сожалению, свободных экземпляров меньше, чем нужно "
                 f"(доступно {outcome.free_count}). Попробуйте выбрать количество заново.",
             )
         return
@@ -605,12 +605,12 @@ async def _create_and_offer_payment(
     else:
         instruction = (
             "Нажмите «Показать QR» и оплатите по QR-коду в банковском приложении по "
-            "реквизитам. После оплаты пришлите сюда квитанцию — номерки придут после "
+            "реквизитам. После оплаты пришлите сюда квитанцию — номера придут после "
             "зачисления денег на расчётный счёт (может занять несколько дней)."
         )
     await channel.send_message(
         _uid(peer_id),
-        f"Счёт создан на {quantity} номерок(ов) на сумму {outcome.amount / 100:.2f} ₽."
+        f"Счёт создан на {quantity} экз. на сумму {outcome.amount / 100:.2f} ₽."
         f"{invoice_line} {instruction}",
         keyboard=keyboard,
     )
@@ -626,7 +626,7 @@ async def _deliver_tickets(peer_id: int, outcome: payment_svc.FinalizeOutcome) -
         _uid(peer_id),
         poster_path=giveaway.digital_poster_path if giveaway else None,
         codes=codes,
-        intro="Оплата прошла успешно! Ваши номерки:",
+        intro="Оплата прошла успешно! Ваши номера:",
     )
 
 
@@ -642,8 +642,8 @@ async def on_my_tickets(message: Message) -> None:
             binding, ignore_phone_verification=platform_settings.ignore_phone_verification
         ):
             await message.answer(
-                "Доступ к истории номерков есть только после привязки номера. "
-                "Напишите /start, чтобы продолжить."
+                "Доступ к истории покупок открывается, когда вы укажете номер телефона. "
+                "Напишите «Начать», чтобы продолжить."
             )
             return
         tickets = list(
@@ -653,9 +653,9 @@ async def on_my_tickets(message: Message) -> None:
         )
 
     if not tickets:
-        await message.answer("У вас пока нет номерков.")
+        await message.answer("У вас пока нет покупок.")
         return
-    await message.answer(f"Ваши номерки ({len(tickets)}):")
+    await message.answer(f"Ваши номера ({len(tickets)}):")
     await _get_channel().send_ticket_codes(_uid(message.peer_id), [t.full_code for t in tickets])
 
 
@@ -667,8 +667,8 @@ async def on_help(message: Message) -> None:
     contacts = platform_settings.support_contacts or {}
     lines = [
         "Справка по боту:",
-        "— «Купить номерки» — приобрести номерки в активном розыгрыше.",
-        "— «Мои номерки» — история покупок (после подтверждения номера).",
+        "— «Купить постер» — приобрести постер с уникальным номером.",
+        "— «Мои покупки» — история покупок (после того как вы укажете номер телефона).",
     ]
     if contacts:
         lines.append("\nПоддержка:")
@@ -733,7 +733,7 @@ async def _dispatch_message_event(event: GroupTypes.MessageEvent) -> None:
         with db.session() as session:
             giveaway = session.get(Giveaway, giveaway_id)
         if giveaway is None:
-            await _answer_event(event, snackbar="Розыгрыш не найден")
+            await _answer_event(event, snackbar="Постер не найден")
             return
         await _prompt_quantity(peer_id, giveaway)
         await _answer_event(event)
@@ -753,7 +753,7 @@ async def _dispatch_message_event(event: GroupTypes.MessageEvent) -> None:
                 giveaways = _open_giveaways(session)
             if not giveaways:
                 await _clear_state(peer_id)
-                await _answer_event(event, snackbar="Сейчас нет доступных для покупки розыгрышей.")
+                await _answer_event(event, snackbar="Сейчас нет постеров, доступных для покупки.")
                 return
             await _prompt_giveaway_choice(peer_id, giveaways)
             await _answer_event(event)
@@ -764,7 +764,7 @@ async def _dispatch_message_event(event: GroupTypes.MessageEvent) -> None:
                 giveaway = session.get(Giveaway, giveaway_id)
             if giveaway is None:
                 await _clear_state(peer_id)
-                await _answer_event(event, snackbar="Розыгрыш недоступен.")
+                await _answer_event(event, snackbar="Постер недоступен.")
                 return
             await _prompt_quantity(peer_id, giveaway)
             await _answer_event(event)
@@ -793,7 +793,7 @@ async def _dispatch_message_event(event: GroupTypes.MessageEvent) -> None:
             giveaway = session.get(Giveaway, data["giveaway_id"])
         if giveaway is None:
             await _clear_state(peer_id)
-            await _answer_event(event, snackbar="Розыгрыш недоступен.")
+            await _answer_event(event, snackbar="Постер недоступен.")
             return
         await _prompt_quantity(peer_id, giveaway)
         await _answer_event(event)
@@ -917,7 +917,7 @@ async def _handle_cancel_payment_prompt(
     keyboard.add(Callback("◀️ Нет, оставить", payload={"a": "cancel_payment_abort"}))
     await _get_channel().send_message(
         _uid(peer_id),
-        f"Точно отменить платёж на {quantity} номерок(ов) на сумму {amount / 100:.2f} ₽?",
+        f"Точно отменить платёж на {quantity} экз. на сумму {amount / 100:.2f} ₽?",
         keyboard=keyboard.get_json(),
     )
     await _answer_event(event)
@@ -978,7 +978,7 @@ async def _handle_cancel_payment_confirm(
             await _answer_event(
                 event,
                 snackbar=(
-                    "Оплата прошла успешно, но свободные номерки закончились. "
+                    "Оплата прошла успешно, но свободные экземпляры закончились. "
                     "Обратитесь в поддержку — деньги не потеряны."
                 ),
             )
