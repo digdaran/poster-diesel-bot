@@ -1,15 +1,19 @@
 """TBankStatementProvider — выписка по расчётному счёту через Т-Банк T-API
 (`GET /api/v1/statement`, developer.tbank.ru/docs/api/get-api-v-1-statement).
 
-Реализовано по публичной документации, БЕЗ реального прогона против боевого/sandbox
-контура Т-Бизнес (нет тестовых доступов) — тот же принятый в проекте риск, что и
-для `TBankProvider`/`VTBProvider` интернет-эквайринга (см. DECISIONS.md №1).
-
-Точные имена полей ОДНОЙ операции в ответе (сумма/назначение платежа/дата/id) не
-подтверждены документацией без реального доступа к API — `_parse_entry` защищённо
-перебирает несколько правдоподобных вариантов ключей и пропускает (с предупреждением
-в лог) операции, которые не удалось разобрать, вместо падения. **Заказчик обязан
-сверить реальный JSON-ответ API и поправить маппинг перед продакшеном.**
+Поля ОДНОЙ операции подтверждены реальным прогоном против боевого счёта заказчика
+(2026-07-25) — см. DECISIONS.md. Ключевые находки по сравнению с исходной
+реализацией "по документации":
+- Сумма приходит НЕ в поле `amount` (такого поля нет), а в `rubleAmount` /
+  `operationAmount` / `accountAmount` — все три десятичное число в рублях
+  (напр. `9.91`, но также и `10`, `499` без дробной части для круглых сумм).
+  Эвристика "дробное → рубли, целое → уже копейки" неверна: банк ВСЕГДА отдаёт
+  рубли независимо от наличия дробной части, поэтому `_parse_amount` больше не
+  угадывает, а безусловно умножает на 100.
+- Направление операции — `typeOfOperation` (`"Credit"`/`"Debit"`), не
+  `operationType`.
+- `operations`/`operationId`/`operationDate`/`description`/`payPurpose` —
+  угадано верно с первого раза.
 """
 
 from __future__ import annotations
@@ -25,13 +29,15 @@ from app.payments.bank_statement import BankStatementEntry, BaseBankStatementPro
 
 logger = structlog.get_logger(__name__)
 
-# Правдоподобные варианты ключей в ответе T-API (не подтверждены документацией без
-# реального доступа — см. модуль docstring).
+# Порядок — по убыванию приоритета: первый ключ в каждом кортеже подтверждён
+# реальным ответом API (см. докстринг модуля), остальные — запасные варианты
+# на случай отличий по типам операций/версиям API.
 _OPERATIONS_LIST_KEYS = ("operations", "items", "data", "payload")
 _ID_KEYS = ("operationId", "id", "documentNumber")
-_PURPOSE_KEYS = ("paymentPurpose", "purpose", "description", "narrative")
+_PURPOSE_KEYS = ("payPurpose", "description", "paymentPurpose", "purpose", "narrative")
 _DATE_KEYS = ("operationDate", "valueDate", "date", "createdAt")
-_DIRECTION_KEYS = ("operationType", "direction", "type")
+_DIRECTION_KEYS = ("typeOfOperation", "operationType", "direction", "type")
+_AMOUNT_KEYS = ("rubleAmount", "operationAmount", "accountAmount", "amount")
 _CREDIT_MARKERS = {"credit", "incoming", "in", "receipt"}
 _NEXT_CURSOR_KEYS = ("nextCursor", "cursor", "next_cursor")
 
@@ -114,8 +120,9 @@ def _first_present(operation: dict[str, Any], keys: tuple[str, ...]) -> Any:
 
 
 def _parse_amount(raw_amount: Any) -> int | None:
-    """Возвращает сумму в копейках. Т-API может отдавать сумму как число (рубли
-    или копейки — не подтверждено) либо как объект `{"value": ..., "currency": ...}`."""
+    """Возвращает сумму в копейках. Т-API всегда отдаёт сумму в рублях (десятичное
+    число, целое или дробное — подтверждено реальным ответом, см. докстринг модуля),
+    поэтому здесь без эвристик: безусловно переводим в копейки."""
     if isinstance(raw_amount, dict):
         raw_amount = raw_amount.get("value")
     if raw_amount is None:
@@ -124,11 +131,7 @@ def _parse_amount(raw_amount: Any) -> int | None:
         value = float(raw_amount)
     except (TypeError, ValueError):
         return None
-    # Эвристика: дробное значение — рубли (нужно перевести в копейки), целое без
-    # дробной части лечится как уже копейки. Требует проверки на реальном ответе API.
-    if value != int(value):
-        return round(value * 100)
-    return int(value)
+    return round(value * 100)
 
 
 def _parse_entry(operation: dict[str, Any]) -> BankStatementEntry | None:
@@ -139,7 +142,7 @@ def _parse_entry(operation: dict[str, Any]) -> BankStatementEntry | None:
     external_id = _first_present(operation, _ID_KEYS)
     purpose = _first_present(operation, _PURPOSE_KEYS)
     raw_date = _first_present(operation, _DATE_KEYS)
-    amount = _parse_amount(operation.get("amount"))
+    amount = _parse_amount(_first_present(operation, _AMOUNT_KEYS))
 
     if external_id is None or purpose is None or raw_date is None or amount is None:
         return None
