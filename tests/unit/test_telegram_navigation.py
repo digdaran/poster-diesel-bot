@@ -91,12 +91,12 @@ def _fake_message() -> object:
     return message
 
 
-async def test_offer_active_purchase_cancellation_shows_cancel_button_for_pending_payment(
+async def test_offer_active_purchase_cancellation_shows_pending_payment_details_without_button(
     db: Database, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """По запросу заказчика (см. DECISIONS.md): участник должен видеть кнопку
-    отмены активного платежа сразу при попытке начать новую покупку, а не
-    искать старое сообщение со счётом в истории чата."""
+    """По запросу заказчика (см. DECISIONS.md №42): участник видит сведения о
+    незавершённой покупке сразу при попытке начать новую, но не может отменить
+    её из бота — только дождаться оплаты или TTL."""
     monkeypatch.setattr(handlers_module, "get_channel_db", lambda: db)
     gid = make_giveaway(db, prefix="ACT")
     with db.session() as session:
@@ -119,10 +119,9 @@ async def test_offer_active_purchase_cancellation_shows_cancel_button_for_pendin
     await _offer_active_purchase_cancellation(message, pid)
 
     message.answer.assert_awaited_once()  # type: ignore[attr-defined]
-    _, kwargs = message.answer.call_args  # type: ignore[attr-defined]
-    keyboard = kwargs["reply_markup"]
-    button = keyboard.inline_keyboard[0][0]
-    assert button.callback_data == f"cancel_payment:{outcome.order_id}"
+    args, kwargs = message.answer.call_args  # type: ignore[attr-defined]
+    assert "reply_markup" not in kwargs
+    assert "незавершённая покупка" in args[0]
 
 
 async def test_offer_active_purchase_cancellation_no_button_for_manual_registration(

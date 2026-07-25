@@ -169,11 +169,6 @@ class VkChannel(BaseMessengerChannel):
             Callback("🔄 Проверить статус оплаты", payload={"a": "check_payment"}),
             color=KeyboardButtonColor.PRIMARY,
         )
-        keyboard.row()
-        keyboard.add(
-            Callback("❌ Отменить платёж", payload={"a": "cancel_payment", "order_id": order_id}),
-            color=KeyboardButtonColor.NEGATIVE,
-        )
         return keyboard.get_json()
 
     def typing_action(self, peer_id: str) -> _TypingAction:

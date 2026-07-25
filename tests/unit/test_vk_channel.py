@@ -80,7 +80,6 @@ def test_render_payment_prompt_includes_pay_link_and_qr_button() -> None:
     assert any(a.get("link") == "https://pay.example/1" for a in actions)
     assert any(a.get("payload") == {"a": "show_qr", "order_id": "ORD1"} for a in actions)
     assert any(a.get("payload") == {"a": "check_payment"} for a in actions)
-    assert any(a.get("payload") == {"a": "cancel_payment", "order_id": "ORD1"} for a in actions)
 
 
 def test_render_payment_prompt_omits_qr_button_when_unavailable() -> None:

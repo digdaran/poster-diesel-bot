@@ -137,13 +137,6 @@ class TelegramChannel(BaseMessengerChannel):
         rows.append(
             [InlineKeyboardButton(text="🔄 Проверить статус оплаты", callback_data="check_payment")]
         )
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text="❌ Отменить платёж", callback_data=f"cancel_payment:{order_id}"
-                )
-            ]
-        )
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
     async def send_qr_code(

@@ -64,9 +64,8 @@ def test_render_payment_prompt_has_pay_and_check_buttons(channel: TelegramChanne
     flat = [btn for row in markup.inline_keyboard for btn in row]
     assert any(btn.url == "https://pay.example/1" for btn in flat)
     assert any(btn.callback_data == "check_payment" for btn in flat)
-    assert any(btn.callback_data == "cancel_payment:order-1" for btn in flat)
     assert not any((btn.callback_data or "").startswith("show_qr:") for btn in flat)
-    assert len(markup.inline_keyboard) == 3
+    assert len(markup.inline_keyboard) == 2
 
 
 def test_render_payment_prompt_adds_qr_button_when_available(channel: TelegramChannel) -> None:
@@ -75,8 +74,7 @@ def test_render_payment_prompt_adds_qr_button_when_available(channel: TelegramCh
     )
     flat = [btn for row in markup.inline_keyboard for btn in row]
     assert any(btn.callback_data == "show_qr:order-1" for btn in flat)
-    assert any(btn.callback_data == "cancel_payment:order-1" for btn in flat)
-    assert len(markup.inline_keyboard) == 4
+    assert len(markup.inline_keyboard) == 3
 
 
 async def test_send_ticket_codes_sends_short_list_as_single_message(

@@ -15,10 +15,10 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 from app.core.phone import InvalidPhoneError
-from app.models.enums import AuditActorType, ChannelType, PaymentStatus
+from app.models.enums import ChannelType, PaymentStatus
 from app.models.giveaway import Giveaway
 from app.models.ticket import Ticket
-from app.services import audit_service, participant_service, settings_service
+from app.services import participant_service, settings_service
 from app.services import payment_service as payment_svc
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -328,10 +328,10 @@ async def _offer_active_purchase_cancellation(
     peer_id: int, participant_id: int, *, answer_target: Message | None = None
 ) -> None:
     """Участник уже имеет активную покупку (см. DECISIONS.md, "одна активная
-    покупка") — показывает её и предлагает отменить (с подтверждением, защита
-    от случайных нажатий — см. `_dispatch_message_event`). Если активная
-    покупка — ручная регистрация у оператора (не Payment), отменить её из бота
-    нельзя (только оператор в панели)."""
+    покупка") — показывает её и просит дождаться оплаты либо автоматической
+    отмены по таймауту (самостоятельная отмена из бота недоступна, см.
+    DECISIONS.md №42). Если активная покупка — ручная регистрация у оператора
+    (не Payment), отменить её из бота нельзя (только оператор в панели)."""
     from app.models.payment import Payment
 
     db = get_channel_db()
@@ -352,23 +352,17 @@ async def _offer_active_purchase_cancellation(
                 await _get_channel().send_message(_uid(peer_id), text)
             return
         giveaway = session.get(Giveaway, payment.giveaway_id)
-        order_id = payment.order_id
         quantity, amount = payment.quantity, payment.amount
 
-    keyboard = Keyboard(inline=True)
-    keyboard.add(
-        Callback("❌ Отменить платёж", payload={"a": "cancel_payment", "order_id": order_id}),
-        color=KeyboardButtonColor.NEGATIVE,
-    )
     text = (
         f"У вас уже есть незавершённая покупка: «{giveaway.name if giveaway else '—'}», "
         f"{quantity} экз. на сумму {amount / 100:.2f} ₽.\n"
-        "Оплатите её, дождитесь автоматической отмены по таймауту, либо отмените сейчас."
+        "Оплатите её или дождитесь автоматической отмены по таймауту."
     )
     if answer_target is not None:
-        await answer_target.answer(text, keyboard=keyboard.get_json())
+        await answer_target.answer(text)
     else:
-        await _get_channel().send_message(_uid(peer_id), text, keyboard=keyboard.get_json())
+        await _get_channel().send_message(_uid(peer_id), text)
 
 
 @labeler.message(text=_BUY_TEXT)
@@ -819,18 +813,6 @@ async def _dispatch_message_event(event: GroupTypes.MessageEvent) -> None:
         await _handle_check_payment(event, peer_id)
         return
 
-    if action == "cancel_payment":
-        await _handle_cancel_payment_prompt(event, peer_id, payload["order_id"])
-        return
-
-    if action == "cancel_payment_abort":
-        await _answer_event(event, snackbar="Платёж остаётся активным.")
-        return
-
-    if action == "cancel_payment_confirm":
-        await _handle_cancel_payment_confirm(event, peer_id, payload["order_id"])
-        return
-
     await _answer_event(event, snackbar="Это действие больше недоступно. Напишите «Начать».")
 
 
@@ -888,106 +870,6 @@ async def _handle_check_payment(event: GroupTypes.MessageEvent, peer_id: int) ->
         await _answer_event(event, snackbar="Платёж не прошёл.")
     else:
         await _answer_event(event, snackbar="Статус пока без изменений.")
-
-
-async def _handle_cancel_payment_prompt(
-    event: GroupTypes.MessageEvent, peer_id: int, order_id: str
-) -> None:
-    """Подтверждение перед отменой — защита от случайных нажатий (по запросу
-    заказчика, см. DECISIONS.md). Сама отмена выполняется только после явного
-    "Да" — см. `_handle_cancel_payment_confirm`."""
-    from app.models.payment import Payment
-
-    db = get_channel_db()
-    with db.session() as session:
-        payment = session.execute(
-            select(Payment).where(Payment.order_id == order_id)
-        ).scalar_one_or_none()
-        if payment is None or payment.status != PaymentStatus.PENDING:
-            await _answer_event(event, snackbar="Платёж уже недоступен для отмены.")
-            return
-        quantity, amount = payment.quantity, payment.amount
-
-    keyboard = Keyboard(inline=True)
-    keyboard.add(
-        Callback("✅ Да, отменить", payload={"a": "cancel_payment_confirm", "order_id": order_id}),
-        color=KeyboardButtonColor.NEGATIVE,
-    )
-    keyboard.row()
-    keyboard.add(Callback("◀️ Нет, оставить", payload={"a": "cancel_payment_abort"}))
-    await _get_channel().send_message(
-        _uid(peer_id),
-        f"Точно отменить платёж на {quantity} экз. на сумму {amount / 100:.2f} ₽?",
-        keyboard=keyboard.get_json(),
-    )
-    await _answer_event(event)
-
-
-async def _handle_cancel_payment_confirm(
-    event: GroupTypes.MessageEvent, peer_id: int, order_id: str
-) -> None:
-    """Отмена НЕОПЛАЧЕННОГО платежа (п.7.5 ТЗ, DECISIONS.md) — снимает резерв
-    номерков и закрывает сессию у банка. Не возврат уже оплаченного платежа
-    (ТЗ §21) — работает только пока платёж ещё в статусе PENDING."""
-    from app.models.payment import Payment
-
-    db = get_channel_db()
-    with db.session() as session:
-        payment = session.execute(
-            select(Payment).where(Payment.order_id == order_id)
-        ).scalar_one_or_none()
-        if payment is None:
-            await _answer_event(event, snackbar="Платёж не найден.")
-            return
-        payment_id = payment.id
-        provider_type = payment.provider
-        actor_label = payment.participant.phone
-
-    provider = get_provider_for_type(provider_type)
-    try:
-        outcome = payment_svc.cancel_payment(db, provider, payment_id=payment_id)
-    except Exception:
-        logger.exception("cancel_payment_failed", payment_id=payment_id)
-        await _answer_event(event, snackbar="Не удалось отменить платёж. Попробуйте чуть позже.")
-        return
-
-    if outcome.applied:
-        with db.session() as session:
-            audit_service.log(
-                session,
-                action="payment_cancel",
-                actor_type=AuditActorType.PARTICIPANT,
-                actor_label=actor_label,
-                entity_type="payment",
-                entity_id=payment_id,
-            )
-        await _answer_event(event, snackbar="Платёж отменён.")
-        await _get_channel().send_message(
-            _uid(peer_id), "Платёж отменён. Можете оформить новую покупку."
-        )
-        return
-
-    late = outcome.late_success_outcome
-    if late is not None:
-        if late.applied and late.new_status == PaymentStatus.SUCCEEDED:
-            # Гонка: банк подтвердил оплату прямо в момент отмены — деньги
-            # реально списаны, выдаём номерки как при обычном успехе.
-            await _deliver_tickets(peer_id, late)
-            await _answer_event(event, snackbar="Оплата прошла успешно!")
-        elif late.late_success_no_tickets:
-            await _answer_event(
-                event,
-                snackbar=(
-                    "Оплата прошла успешно, но свободные экземпляры закончились. "
-                    "Обратитесь в поддержку — деньги не потеряны."
-                ),
-            )
-        else:
-            await _answer_event(event, snackbar="Статус платежа уже изменился.")
-        return
-
-    status_label = outcome.current_status.value if outcome.current_status else "—"
-    await _answer_event(event, snackbar=f"Платёж уже в статусе {status_label}.")
 
 
 @labeler.raw_event(GroupEventType.MESSAGE_EVENT, dataclass=GroupTypes.MessageEvent)

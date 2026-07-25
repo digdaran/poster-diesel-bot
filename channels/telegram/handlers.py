@@ -16,10 +16,10 @@ from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from app.core.phone import InvalidPhoneError
-from app.models.enums import AuditActorType, ChannelType, PaymentStatus
+from app.models.enums import ChannelType, PaymentStatus
 from app.models.giveaway import Giveaway
 from app.models.ticket import Ticket
-from app.services import audit_service, participant_service, settings_service
+from app.services import participant_service, settings_service
 from app.services import payment_service as payment_svc
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -333,11 +333,10 @@ async def _prompt_giveaway_choice(
 
 async def _offer_active_purchase_cancellation(message: Message, participant_id: int) -> None:
     """Участник уже имеет активную покупку (п. "одна активная покупка",
-    DECISIONS.md) — показывает её и предлагает отменить (с подтверждением,
-    защита от случайных нажатий — см. `on_cancel_payment_prompt`), не заставляя
-    искать старое сообщение со счётом. Если активная покупка — ручная
-    регистрация у оператора (не Payment), отменить её из бота нельзя (только
-    оператор в панели) — просто просим подождать."""
+    DECISIONS.md) — показывает её и просит дождаться оплаты либо автоматической
+    отмены по таймауту (самостоятельная отмена из бота недоступна, см.
+    DECISIONS.md №42). Если активная покупка — ручная регистрация у оператора
+    (не Payment), отменить её из бота нельзя (только оператор в панели)."""
     from app.models.payment import Payment
 
     db = get_channel_db()
@@ -354,24 +353,12 @@ async def _offer_active_purchase_cancellation(message: Message, participant_id: 
             )
             return
         giveaway = session.get(Giveaway, payment.giveaway_id)
-        order_id = payment.order_id
         quantity, amount = payment.quantity, payment.amount
-
-    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
     await message.answer(
         f"У вас уже есть незавершённая покупка: «{giveaway.name if giveaway else '—'}», "
         f"{quantity} экз. на сумму {amount / 100:.2f} ₽.\n"
-        "Оплатите её, дождитесь автоматической отмены по таймауту, либо отмените сейчас.",
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="❌ Отменить платёж", callback_data=f"cancel_payment:{order_id}"
-                    )
-                ]
-            ]
-        ),
+        "Оплатите её или дождитесь автоматической отмены по таймауту."
     )
 
 
@@ -759,120 +746,6 @@ async def on_check_payment(callback: CallbackQuery) -> None:
         await callback.answer("Платёж не прошёл.", show_alert=True)
     else:
         await callback.answer("Статус пока без изменений.", show_alert=True)
-
-
-@router.callback_query(F.data.startswith("cancel_payment:"))
-async def on_cancel_payment_prompt(callback: CallbackQuery) -> None:
-    """Подтверждение перед отменой — защита от случайных нажатий (по запросу
-    заказчика, см. DECISIONS.md). Сама отмена выполняется только после явного
-    "Да" — см. `on_cancel_payment_confirm`."""
-    assert callback.data is not None
-    order_id = callback.data.split(":", 1)[1]
-
-    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-    from app.models.payment import Payment
-
-    db = get_channel_db()
-    with db.session() as session:
-        payment = session.execute(
-            select(Payment).where(Payment.order_id == order_id)
-        ).scalar_one_or_none()
-        if payment is None or payment.status != PaymentStatus.PENDING:
-            await callback.answer("Платёж уже недоступен для отмены.", show_alert=True)
-            return
-        quantity, amount = payment.quantity, payment.amount
-
-    await _msg(callback).answer(
-        f"Точно отменить платёж на {quantity} экз. на сумму {amount / 100:.2f} ₽?",
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="✅ Да, отменить", callback_data=f"cancel_payment_confirm:{order_id}"
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        text="◀️ Нет, оставить", callback_data="cancel_payment_abort"
-                    )
-                ],
-            ]
-        ),
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data == "cancel_payment_abort")
-async def on_cancel_payment_abort(callback: CallbackQuery) -> None:
-    await callback.answer("Платёж остаётся активным.")
-
-
-@router.callback_query(F.data.startswith("cancel_payment_confirm:"))
-async def on_cancel_payment_confirm(callback: CallbackQuery) -> None:
-    """Отмена НЕОПЛАЧЕННОГО платежа (п.7.5 ТЗ, DECISIONS.md) — снимает резерв
-    номерков и закрывает сессию у банка. Не возврат уже оплаченного платежа
-    (ТЗ §21) — работает только пока платёж ещё в статусе PENDING. Вызывается
-    только после подтверждения — см. `on_cancel_payment_prompt`."""
-    assert callback.data is not None
-    order_id = callback.data.split(":", 1)[1]
-
-    from app.models.payment import Payment
-
-    db = get_channel_db()
-    with db.session() as session:
-        payment = session.execute(
-            select(Payment).where(Payment.order_id == order_id)
-        ).scalar_one_or_none()
-        if payment is None:
-            await callback.answer("Платёж не найден.", show_alert=True)
-            return
-        payment_id = payment.id
-        provider_type = payment.provider
-        actor_label = payment.participant.phone
-
-    provider = get_provider_for_type(provider_type)
-    try:
-        outcome = payment_svc.cancel_payment(db, provider, payment_id=payment_id)
-    except Exception:
-        logger.exception("cancel_payment_failed", payment_id=payment_id)
-        await callback.answer("Не удалось отменить платёж. Попробуйте чуть позже.", show_alert=True)
-        return
-
-    if outcome.applied:
-        with db.session() as session:
-            audit_service.log(
-                session,
-                action="payment_cancel",
-                actor_type=AuditActorType.PARTICIPANT,
-                actor_label=actor_label,
-                entity_type="payment",
-                entity_id=payment_id,
-            )
-        await callback.answer("Платёж отменён.")
-        await _msg(callback).answer("Платёж отменён. Можете оформить новую покупку.")
-        return
-
-    late = outcome.late_success_outcome
-    if late is not None:
-        if late.applied and late.new_status == PaymentStatus.SUCCEEDED:
-            # Гонка: банк подтвердил оплату прямо в момент отмены — деньги
-            # реально списаны, выдаём номерки как при обычном успехе.
-            await _deliver_tickets(_msg(callback), late)
-            await callback.answer("Оплата прошла успешно!")
-        elif late.late_success_no_tickets:
-            await callback.answer(
-                "Оплата прошла успешно, но свободные экземпляры закончились. "
-                "Обратитесь в поддержку — деньги не потеряны.",
-                show_alert=True,
-            )
-        else:
-            await callback.answer("Статус платежа уже изменился.", show_alert=True)
-        return
-
-    await callback.answer(
-        f"Платёж уже в статусе {outcome.current_status.value if outcome.current_status else '—'}.",
-        show_alert=True,
-    )
 
 
 async def _deliver_tickets(message: Message, outcome: payment_svc.FinalizeOutcome) -> None:
