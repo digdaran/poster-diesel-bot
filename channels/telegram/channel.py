@@ -109,7 +109,7 @@ class TelegramChannel(BaseMessengerChannel):
         )
         await self.bot.send_message(
             chat_id=external_user_id,
-            text="Чтобы подтвердить номер и получить доступ к своим покупкам, поделитесь контактом.",  # noqa: E501
+            text="Поделитесь контактом, чтобы получить доступ к своим покупкам.",
             reply_markup=keyboard,
         )
 
