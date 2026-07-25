@@ -1,7 +1,7 @@
 """Обработчики диалога VK-бота (п.8.1, 10.2-10.6 ТЗ) — структура и бизнес-сценарий
 идентичны `channels/telegram/handlers.py`, отличается только транспорт (vkbottle,
 Long Poll) и способ показа инлайн-кнопок (VK message_event вместо
-callback_query, см. ARCHITECTURE.md §7.1, DECISIONS.md #32).
+callback_query, см. ARCHITECTURE.md §7.1, DECISIONS_LOG.md #32).
 
 Вся бизнес-логика — вызовы app/services/*; здесь только приём событий и
 отрисовка ответов средствами vkbottle. Канал создаётся один раз в main.py и
@@ -90,9 +90,9 @@ def _is_start(message: Message) -> bool:
     if text in _START_TEXTS:
         return True
     payload = message.get_payload_json()
-    # Payload кнопки "Начать" из настроек сообщества — см. DECISIONS.md #32
+    # Payload кнопки "Начать" из настроек сообщества — см. DECISIONS_LOG.md #32
     # (требует сверки с реальным сообществом перед вводом в эксплуатацию,
-    # как и остальные внешние допущения по VK API — см. DECISIONS.md #1).
+    # как и остальные внешние допущения по VK API — см. DECISIONS_LOG.md #1).
     return isinstance(payload, dict) and payload.get("command") == "start"
 
 
@@ -863,7 +863,7 @@ async def on_message_event(event: GroupTypes.MessageEvent) -> None:
 @labeler.raw_event(GroupEventType.MESSAGE_ALLOW, dataclass=GroupTypes.MessageAllow)
 async def on_message_allow(event: GroupTypes.MessageAllow) -> None:
     """Пользователь разрешил сообществу писать первым (после написанного им
-    самим сообщения либо через виджет) — см. DECISIONS.md #32."""
+    самим сообщения либо через виджет) — см. DECISIONS_LOG.md #32."""
     await _set_messages_allowed(event.object.user_id, allowed=True)
 
 
@@ -871,7 +871,7 @@ async def on_message_allow(event: GroupTypes.MessageAllow) -> None:
 async def on_message_deny(event: GroupTypes.MessageDeny) -> None:
     """Пользователь отозвал разрешение — проактивная отправка (см.
     `app/services/notification_service.py`) должна деградировать до
-    реактивной доставки для этой привязки (см. DECISIONS.md #32)."""
+    реактивной доставки для этой привязки (см. DECISIONS_LOG.md #32)."""
     await _set_messages_allowed(event.object.user_id, allowed=False)
 
 

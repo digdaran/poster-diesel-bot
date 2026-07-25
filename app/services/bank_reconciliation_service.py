@@ -1,5 +1,5 @@
 """Сверка входящих платежей по выписке расчётного счёта с неоплаченными счетами
-`requisites_qr` (см. DECISIONS.md №38/39, ARCHITECTURE.md §3/§4).
+`requisites_qr` (см. DECISIONS_LOG.md №38/39, ARCHITECTURE.md §3/§4).
 
 Сопоставление — по назначению платежа (префикс розыгрыша + номер счёта,
 `Giveaway.format_invoice_number` — `Giveaway.prefix` уникален по всей системе, см.
@@ -149,7 +149,7 @@ def reconcile(
             _mark_amount_mismatch(db, payment_id=payment.id, bank_amount=result.mismatched.amount)
             # Деньги по этому счёту фактически идут (просто не той суммой) — не
             # даём TTL молча похоронить его как FAILED, пока расхождение не
-            # разобрано оператором вручную в панели (см. DECISIONS.md №39).
+            # разобрано оператором вручную в панели (см. DECISIONS_LOG.md №39).
             continue
 
         if payment.status == PaymentStatus.PENDING and payment.created_at < ttl_cutoff:

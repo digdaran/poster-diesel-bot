@@ -18,7 +18,7 @@ docker compose up --build
 ```
 
 - Панель: https://localhost (или домен из `PANEL_DOMAIN`), доступ только с IP из `PANEL_IP_WHITELIST`.
-- Backend API: за reverse-proxy, наружу — только webhook-эндпоинты банков.
+- Backend API: за reverse-proxy, доступ только с IP из `PANEL_IP_WHITELIST` (банковских webhook-эндпоинтов нет — оплата подтверждается сверкой выписки, см. `DECISIONS.md`).
 - Первый вход — `SUPERADMIN_LOGIN` / `SUPERADMIN_PASSWORD` из `.env` (бутстрап при пустой таблице `PanelUser`).
 
 ## Локальная разработка без Docker
@@ -46,9 +46,11 @@ black --check .
 mypy app backend channels
 ```
 
-Тесты используют изолированную in-memory SQLite, без Docker и сети. Обязательные группы (п.20.1 ТЗ):
+Тесты используют изолированную временную файловую SQLite (никогда `:memory:` — под
+`SingletonThreadPool` in-memory даёт каждому соединению свою БД и скрывает гонки писателей
+в конкурентных тестах пула номеров, см. `ARCHITECTURE.md` §9), без Docker и сети. Обязательные группы (п.20.1 ТЗ):
 
-- идемпотентность финализации платежа (повторный webhook, неверная подпись, неизвестный заказ, отказ);
+- идемпотентность финализации платежа (повторная сверка выписки, расхождение суммы, неизвестный заказ, отказ);
 - пул и резервирование (атомарный захват, гонка «на хвосте» тиража, TTL, остановка/возобновление продаж);
 - матрица прав ролей (403 на недоступных эндпоинтах);
 - ручные регистрации (подтверждение, запрет повторного подтверждения, отмена только до подтверждения);
@@ -64,13 +66,15 @@ mypy app backend channels
 ```bash
 cp .env.example .env
 # заполните: PANEL_DOMAIN, ACME_EMAIL, PANEL_IP_WHITELIST, JWT_SECRET,
-# SUPERADMIN_LOGIN/PASSWORD, TELEGRAM_BOT_TOKEN, PAYMENT_PROVIDER + ключи банка
+# SUPERADMIN_LOGIN/PASSWORD, TELEGRAM_BOT_TOKEN/VK_GROUP_TOKEN, REQUISITES_*
+# (реквизиты для QR), TBANK_STATEMENT_* (сверка выписки)
 docker compose -f docker-compose.yml up -d --build
 ```
 
-Caddy сам получит сертификат Let's Encrypt для `PANEL_DOMAIN`. Наружу публикуются
-только `/webhooks/*` (без IP-ограничения — банк должен достучаться) и панель
-(`/`, `/api/*`) за `PANEL_IP_WHITELIST`. `/metrics` не проксируется вообще.
+Caddy сам получит сертификат Let's Encrypt для `PANEL_DOMAIN`. Наружу без IP-ограничения
+ничего не публикуется — панель (`/`, `/api/*`) доступна только с IP из
+`PANEL_IP_WHITELIST`, банковских webhook-эндпоинтов нет (оплата подтверждается
+сверкой выписки, не входящим запросом от банка). `/metrics` не проксируется вообще.
 
 ### Локальная разработка (self-signed, без домена)
 

@@ -1,5 +1,5 @@
 """Тесты проактивных уведомлений об исходе платежа (см. app/services/notification_service.py,
-DECISIONS.md №43): успех доставляет постер+коды через привязку участника,
+DECISIONS_LOG.md №43): успех доставляет постер+коды через привязку участника,
 отказ шлёт короткое уведомление, отсутствие привязки — тихий no-op. Отдельно —
 выбор каналов при нескольких привязках (VK участвует только при разрешении
 messages_allowed; при наличии обеих подходящих привязок уведомление уходит в
@@ -272,7 +272,7 @@ async def test_notify_uses_vk_when_only_vk_binding_allowed(db: Database) -> None
 
 
 async def test_notify_skips_vk_when_messages_not_allowed(db: Database) -> None:
-    """VK-разрешение отозвано (`message_deny`, см. DECISIONS.md #32/#33) —
+    """VK-разрешение отозвано (`message_deny`, см. DECISIONS_LOG.md #32/#33) —
     проактивно писать нельзя, участник остаётся без уведомления (реактивный
     путь через "Проверить статус оплаты" в боте остаётся рабочим fallback'ом)."""
     pid = make_participant_with_vk_binding(db, messages_allowed=False)
@@ -287,7 +287,7 @@ async def test_notify_skips_vk_when_messages_not_allowed(db: Database) -> None:
 
 
 async def test_notify_sends_to_both_telegram_and_vk_when_both_bound(db: Database) -> None:
-    """По прямому запросу заказчика (DECISIONS.md №43): участник с обеими
+    """По прямому запросу заказчика (DECISIONS_LOG.md №43): участник с обеими
     подходящими привязками получает уведомление в оба канала одновременно,
     а не только в Telegram."""
     with db.session() as session:
@@ -332,7 +332,7 @@ async def test_notify_sends_to_both_telegram_and_vk_when_both_bound(db: Database
 
 async def test_notify_channel_failure_does_not_block_other_channel(db: Database) -> None:
     """Если отправка в один канал падает (напр. VK вернул ошибку запрета,
-    см. DECISIONS.md №43), доставка в уже подтверждённый другой канал всё
+    см. DECISIONS_LOG.md №43), доставка в уже подтверждённый другой канал всё
     равно должна пройти."""
     with db.session() as session:
         p = Participant(phone="79995559911", phone_verified=True)

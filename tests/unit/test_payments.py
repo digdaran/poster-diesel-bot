@@ -3,7 +3,7 @@
 оплата после отмены/просрочки, резервирование номеров.
 
 Единственный провайдер — `RequisitesQrProvider` (интернет-эквайринг удалён,
-см. DECISIONS.md №44): резервирования "на лету" при создании платежа нет
+см. DECISIONS_LOG.md №44): резервирования "на лету" при создании платежа нет
 (`reserves_tickets_on_create=False`), номерки выдаются по факту подтверждения
 через `_reserve_and_issue_now` — см. `app/services/payment_service.py`."""
 
@@ -228,7 +228,7 @@ def test_create_payment_insufficient_tickets_not_created(db: Database) -> None:
 
 def test_create_payment_blocked_when_pending_limit_exceeded(db: Database) -> None:
     """Лимит суммарного количества экземпляров во всех PENDING-покупках участника
-    (DECISIONS.md №45, отменяет бинарное правило №22) — занижаем лимит для теста,
+    (DECISIONS_LOG.md №45, отменяет бинарное правило №22) — занижаем лимит для теста,
     чтобы не гонять его на дефолтном значении (20)."""
     db.settings.max_pending_tickets_per_participant = 1
     gid = make_giveaway(db, max_tickets=10)
@@ -262,7 +262,7 @@ def test_create_payment_blocked_when_pending_limit_exceeded(db: Database) -> Non
 
 
 def test_create_payment_allowed_for_other_giveaway_under_limit(db: Database) -> None:
-    """По прямому запросу заказчика (DECISIONS.md №45): участник с незавершённой
+    """По прямому запросу заказчика (DECISIONS_LOG.md №45): участник с незавершённой
     покупкой на одном розыгрыше может купить и на другом, пока суммарное
     количество не превышает лимит."""
     gid_a = make_giveaway(db, max_tickets=10, prefix="AAA")
@@ -356,7 +356,7 @@ def test_create_payment_blocked_by_existing_pending_manual_registration(db: Data
 def test_create_payment_concurrent_same_participant_only_one_succeeds(db: Database) -> None:
     """Гонка: участник одновременно пытается купить в двух разных розыгрышах, а
     лимит ожидающих экземпляров позволяет только одну из двух покупок — ровно
-    одна должна пройти (атомарность проверки лимита, см. DECISIONS.md №45)."""
+    одна должна пройти (атомарность проверки лимита, см. DECISIONS_LOG.md №45)."""
     db.settings.max_pending_tickets_per_participant = 1
     gid_a = make_giveaway(db, max_tickets=10, prefix="AAA")
     gid_b = make_giveaway(db, max_tickets=10, prefix="BBB")

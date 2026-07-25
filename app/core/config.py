@@ -69,10 +69,10 @@ class Settings(BaseSettings):
 
     # Квитанции, присланные участниками (не распознаются, только хранятся для
     # просмотра в панели) — тот же паттерн bind-mount в ./data/, что и для БД
-    # (см. DECISIONS.md №28).
+    # (см. DECISIONS_LOG.md №28).
     receipts_dir: str = Field(default="./data/receipts", alias="RECEIPTS_DIR")
 
-    # Цифровые постеры розыгрышей, загружаемые через веб-админку (см. DECISIONS.md
+    # Цифровые постеры розыгрышей, загружаемые через веб-админку (см. DECISIONS_LOG.md
     # №46) — тот же паттерн bind-mount в ./data/, что и для квитанций выше.
     poster_dir: str = Field(default="./data/posters", alias="POSTER_DIR")
 

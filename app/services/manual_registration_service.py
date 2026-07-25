@@ -57,7 +57,7 @@ class CreateManualRegistrationOutcome:
     pending_limit_exceeded: bool = False
     """True — отказ из-за превышения лимита суммарного количества экземпляров во
     всех текущих незавершённых покупках участника (продуктовое правило, см.
-    DECISIONS.md №45), а не нехватки номеров."""
+    DECISIONS_LOG.md №45), а не нехватки номеров."""
     pending_quantity: int = 0
     """Сколько экземпляров уже "висит" в незавершённых покупках участника —
     заполняется только при pending_limit_exceeded=True."""

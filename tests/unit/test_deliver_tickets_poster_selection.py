@@ -1,6 +1,6 @@
 """_deliver_tickets (channels/telegram/handlers.py, channels/vk/handlers.py)
 выбирает один случайный постер из нескольких загруженных через веб-админку
-(см. DECISIONS.md №46), а не единственный digital_poster_path, как раньше."""
+(см. DECISIONS_LOG.md №46), а не единственный digital_poster_path, как раньше."""
 
 from __future__ import annotations
 

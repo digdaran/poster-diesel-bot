@@ -1,5 +1,5 @@
 """Тесты app/services/poster_service.py — сохранение/удаление цифровых
-постеров розыгрыша, загружаемых через веб-админку (см. DECISIONS.md №46)."""
+постеров розыгрыша, загружаемых через веб-админку (см. DECISIONS_LOG.md №46)."""
 
 from __future__ import annotations
 

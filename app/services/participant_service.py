@@ -81,7 +81,7 @@ def is_participant_blocked(session: Session, *, participant_id: int) -> bool:
 def pending_ticket_quantity(session: Session, *, participant_id: int) -> int:
     """Суммарное количество экземпляров во всех текущих незавершённых покупках
     участника — глобально по всем розыгрышам и каналам продажи (бот, подарочные
-    покупки, ручная регистрация оператором), см. DECISIONS.md №45 (отменяет
+    покупки, ручная регистрация оператором), см. DECISIONS_LOG.md №45 (отменяет
     прежнее бинарное правило "не более одной активной покупки", №22). Незавершённая
     покупка = PENDING онлайн-платёж ИЛИ PENDING ручная регистрация. Вызывается
     внутри `db.immediate_session()` в `payment_service.create_payment` /

@@ -1,12 +1,12 @@
 """Фабрика платёжных провайдеров (п.9.3, 9.4, 5.4.2 ТЗ).
 
 Единственный активный провайдер — `RequisitesQrProvider` (`.env`
-`PAYMENT_PROVIDER`, см. DECISIONS.md №37). Переключатель провайдера в панели
+`PAYMENT_PROVIDER`, см. DECISIONS_LOG.md №37). Переключатель провайдера в панели
 Super Admin (`PlatformSettings.payment_provider_override`) удалён вместе с
-интернет-эквайрингом (DECISIONS.md №44) — переключать больше не между чем.
+интернет-эквайрингом (DECISIONS_LOG.md №44) — переключать больше не между чем.
 
 `MOCK`/`TBANK`/`VTB` остаются в `PaymentProviderType` только ради уже
-существующих исторических строк `Payment.provider` в БД (см. DECISIONS.md
+существующих исторических строк `Payment.provider` в БД (см. DECISIONS_LOG.md
 №44) — `create_provider` для них поднимает `ValueError`, конструировать эти
 провайдеры больше нельзя.
 """

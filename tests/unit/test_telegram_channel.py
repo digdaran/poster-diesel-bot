@@ -1,7 +1,7 @@
 """Тесты TelegramChannel и фабрики каналов (п.5.4.1, 10.4, 20.1 ТЗ):
 UI-примитивы, отправка сообщений/медиа/QR через мокнутый aiogram Bot,
 заглушка MAX поднимает NotImplementedError. Telegram и VK активны в проде
-(см. tests/unit/test_vk_channel.py, DECISIONS.md #32/#33)."""
+(см. tests/unit/test_vk_channel.py, DECISIONS_LOG.md #32/#33)."""
 
 from __future__ import annotations
 
@@ -122,7 +122,7 @@ async def test_deliver_purchase_without_poster_sends_intro_and_codes(
 
 
 def test_telegram_and_vk_active_max_stub_in_production() -> None:
-    """Telegram и VK активны (DECISIONS.md #33); MAX остаётся заготовкой (п.21 ТЗ)."""
+    """Telegram и VK активны (DECISIONS_LOG.md #33); MAX остаётся заготовкой (п.21 ТЗ)."""
     assert frozenset({ChannelType.TELEGRAM, ChannelType.VK}) == ACTIVE_CHANNELS
     assert is_channel_active(ChannelType.TELEGRAM) is True
     assert is_channel_active(ChannelType.VK) is True

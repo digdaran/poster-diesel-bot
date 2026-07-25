@@ -19,6 +19,6 @@ def test_get_provider_for_type_returns_requested_type() -> None:
 def test_get_provider_for_type_raises_for_removed_acquiring_provider() -> None:
     """`MOCK`/`TBANK`/`VTB` остаются в `PaymentProviderType` только ради уже
     существующих исторических строк `Payment.provider` в БД (интернет-эквайринг
-    удалён, см. DECISIONS.md №44) — конструировать эти провайдеры больше нельзя."""
+    удалён, см. DECISIONS_LOG.md №44) — конструировать эти провайдеры больше нельзя."""
     with pytest.raises(ValueError):
         get_provider_for_type(PaymentProviderType.MOCK)

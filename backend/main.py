@@ -61,7 +61,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Outbound-only инстансы — этот процесс не запускает polling ни для одного
     # канала, они нужны только для проактивных уведомлений об исходе платежа
     # (webhook, фоновая сверка) через app/services/notification_service.py,
-    # см. DECISIONS.md #24, #33.
+    # см. DECISIONS_LOG.md #24, #33.
     telegram_channel = (
         TelegramChannel(
             token=settings.telegram_bot_token, proxy_url=settings.telegram_proxy_url or None

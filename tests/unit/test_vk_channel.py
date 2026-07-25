@@ -1,6 +1,6 @@
 """Тесты VkChannel (п.5.4.1, 10.6, 20.1 ТЗ): UI-примитивы, отправка сообщений
 через мокнутый vkbottle API. VK активна в проде наравне с Telegram — см.
-DECISIONS.md #32/#33."""
+DECISIONS_LOG.md #32/#33."""
 
 from __future__ import annotations
 
@@ -73,8 +73,8 @@ async def test_send_qr_code_uploads_photo_and_sends_with_caption(channel: VkChan
 
 
 def test_vk_active_in_prod() -> None:
-    """Включено по прямому запросу заказчика (DECISIONS.md #33), после того как
-    адаптер реализован и покрыт тестами (DECISIONS.md #32)."""
+    """Включено по прямому запросу заказчика (DECISIONS_LOG.md #33), после того как
+    адаптер реализован и покрыт тестами (DECISIONS_LOG.md #32)."""
     assert is_channel_active(ChannelType.VK)
     assert ChannelType.VK in ACTIVE_CHANNELS
     assert get_channel_class(ChannelType.VK) is VkChannel

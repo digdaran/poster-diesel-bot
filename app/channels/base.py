@@ -3,7 +3,7 @@
 Вся бизнес-логика (идентификация, покупка, резервирование, выдача, история)
 находится в app/services/*, канал отвечает ТОЛЬКО за приём событий платформы
 и отрисовку/отправку сообщений её средствами. Реализованы TelegramChannel
-(channels/telegram/) и VkChannel (channels/vk/, DECISIONS.md #32/#33) — оба
+(channels/telegram/) и VkChannel (channels/vk/, DECISIONS_LOG.md #32/#33) — оба
 активны в проде; MaxChannel (channels/max/) — заготовка интерфейса без
 бизнес-логики, не регистрируется в проде (см. app/channels/factory.py).
 """

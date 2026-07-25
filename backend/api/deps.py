@@ -33,7 +33,7 @@ def get_telegram_channel(request: Request) -> TelegramChannel | None:
 def get_vk_channel(request: Request) -> VkChannel | None:
     """Outbound-only инстанс для проактивных уведомлений (см. backend/main.py
     lifespan) — `None`, если `VK_GROUP_TOKEN` не задан (dev/тесты, см.
-    DECISIONS.md #33)."""
+    DECISIONS_LOG.md #33)."""
     return request.app.state.vk_channel
 
 

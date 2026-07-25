@@ -1,7 +1,7 @@
 # channel-vk — vkbottle, VK Bots Long Poll API. Отдельный образ/процесс со своими
 # зависимостями (extras [vk]); общий пакет app/ — без изменений (п.5.1, 5.3, 10.6
-# ТЗ). Не активен в проде, пока не зарегистрирован в app/channels/factory.py
-# (см. DECISIONS.md #32).
+# ТЗ). Активен в проде наравне с channel-telegram, зарегистрирован в
+# app/channels/factory.py::ACTIVE_CHANNELS (см. DECISIONS_LOG.md #32, #33).
 FROM python:3.11-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \

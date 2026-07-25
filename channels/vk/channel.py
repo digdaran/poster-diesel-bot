@@ -1,5 +1,5 @@
 """VkChannel — первая реализация `BaseMessengerChannel` для ВКонтакте (бот
-сообщества, п.5.4.1, 10.6 ТЗ; план реализации — DECISIONS.md #32).
+сообщества, п.5.4.1, 10.6 ТЗ; план реализации — DECISIONS_LOG.md #32).
 
 vkbottle, VK Bots Long Poll API (без Callback API/вебхука — тот же процесс-
 топология, что и у Telegram-канала, см. ARCHITECTURE.md §7.1). Как и
@@ -89,7 +89,7 @@ class VkChannel(BaseMessengerChannel):
     channel_type = ChannelType.VK
     capabilities = ChannelCapabilities(
         supports_verified_phone=False,
-        can_initiate_dialog=True,  # после разрешения "Сообщения сообщества", см. DECISIONS.md #32
+        can_initiate_dialog=True,  # после разрешения "Сообщения сообщества" (DECISIONS_LOG.md #32)
         supports_inline_buttons=True,
         supports_qr=True,
         media_send_mode="upload",

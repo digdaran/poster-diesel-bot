@@ -7,10 +7,6 @@
 localhost, 127.0.0.1 {
 	tls internal
 
-	handle /webhooks/* {
-		reverse_proxy backend:8000
-	}
-
 	@blocked not remote_ip {$PANEL_IP_WHITELIST}
 	respond @blocked 403
 

@@ -121,7 +121,7 @@ def test_create_rejects_blocked_participant(db: Database) -> None:
 
 
 def test_create_blocked_by_existing_pending_manual_registration(db: Database) -> None:
-    """Лимит суммарного количества экземпляров (DECISIONS.md №45, отменяет
+    """Лимит суммарного количества экземпляров (DECISIONS_LOG.md №45, отменяет
     бинарное правило №22) — занижаем лимит для теста."""
     db.settings.max_pending_tickets_per_participant = 1
     gid = make_giveaway(db, max_tickets=10)

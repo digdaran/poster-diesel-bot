@@ -2,8 +2,8 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 // Панель — SPA, раздаётся статикой за Caddy (см. ARCHITECTURE.md, docker-compose.yml).
-// API backend проксируется тем же Caddy на /api и /webhooks; для dev-сервера
-// прокидываем /api на локальный backend (см. README.md).
+// API backend проксируется тем же Caddy на /api (банковских webhook-путей нет,
+// см. DECISIONS.md); для dev-сервера прокидываем /api на локальный backend (см. README.md).
 export default defineConfig({
   plugins: [react()],
   server: {

@@ -1,6 +1,6 @@
 """Точка входа процесса `channel-vk` (п.5.1, 10.6, 19 ТЗ): vkbottle, VK Bots
 Long Poll API, отдельный процесс/образ со своими зависимостями — см.
-ARCHITECTURE.md §7.1, DECISIONS.md #32."""
+ARCHITECTURE.md §7.1, DECISIONS_LOG.md #32."""
 
 from __future__ import annotations
 

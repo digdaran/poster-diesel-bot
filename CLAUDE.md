@@ -4,21 +4,31 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Source of truth
 
-`docs/ТЗ_Raffle_Platform.md` (v2.4) is the **only** requirements source. Before changing
-architecture or business logic, check it. Section 21 of the ТЗ lists features that must **not** be
-implemented in this version (ready VK/MAX adapters, VK Mini App, payment refunds, cancellation of
-confirmed manual registrations, automatic winner selection, million-scale ticket pools) — do not add
-them without explicit sign-off from the project owner. **The VK adapter is the one exception**: the
-project owner signed off on it and it has since been built and is active in production alongside
-Telegram (see DECISIONS.md #32/#33, ARCHITECTURE.md §7.1) — the ТЗ text itself wasn't updated to
-reflect that. MAX is still just a stub (`channels/max/`, raises `NotImplementedError`) — do not
-implement it without sign-off.
+Отвечай всегда на русском языке
 
-Decisions and defaults not explicitly covered by the ТЗ are recorded in `DECISIONS.md` — check it before
-introducing a new convention, and add an entry there when you make a similar judgment call.
-`ARCHITECTURE.md` documents how the ТЗ requirements map onto the actual implementation (process
-topology, ticket-pool/payment algorithms, permissions, extensibility points) — read it before making
-structural changes.
+`docs/ТЗ_Raffle_Platform.md` (v2.4) documents the original data model and business rules for
+ticket pools/payments (§1–§7.6) — the checked-in copy stops there; later sections (permissions detail,
+scope exclusions, etc.) referenced by early comments/decisions were never checked into this repo.
+Treat it as a historical baseline for terminology and the core data model, **not** as the current
+source of truth for scope — the product has since moved substantially past it via direct owner
+sign-off (interactive acquiring removed, requisites-QR payment added, VK channel built and activated,
+terminology fully reworked, purchase-limit rules replaced) and those changes were never folded back
+into the ТЗ text.
+
+`DECISIONS.md` is the actual current-state reference — a short, active-only summary of what's
+implemented and why, superseding the ТЗ wherever the two disagree. Check it before introducing a new
+convention or assuming an old ТЗ restriction still holds, and add an entry when you make a similar
+judgment call. `DECISIONS_LOG.md` is the full chronological history behind it (including
+superseded/reversed entries and incident writeups) — consult it only when you need the reasoning
+behind a specific decision; it is not required reading before routine changes.
+
+VK is active in production alongside Telegram (`DECISIONS.md`, `ARCHITECTURE.md` §7.1). MAX is still
+just a stub (`channels/max/`, raises `NotImplementedError`) — do not implement it without explicit
+sign-off from the project owner.
+
+`ARCHITECTURE.md` documents how the current implementation actually works (process topology,
+ticket-pool/payment algorithms, permissions, extensibility points) — read it before making structural
+changes; it's kept in sync with the code and is the primary technical reference.
 
 **No CI.** By product decision there is no GitHub Actions (or other CI) pipeline. Work happens directly
 on `main` (no feature branches / PRs by default) but every push must be preceded by a fully green local
@@ -61,7 +71,7 @@ python -m channels.vk.main
 
 Note: `pyproject.toml` declares `requires-python = ">=3.11"` (and Docker images use
 `python:3.11-slim`), but the code intentionally avoids 3.11-only syntax (e.g. `datetime.UTC`,
-hence `ruff` ignoring `UP017`) so it also runs under 3.10 — see DECISIONS.md #15. Don't "fix" this by
+hence `ruff` ignoring `UP017`) so it also runs under 3.10 — see DECISIONS_LOG.md #15. Don't "fix" this by
 introducing 3.11-only constructs.
 
 Frontend (run from `frontend/`):
@@ -108,10 +118,10 @@ summary; don't violate them when changing code.
 - **Broadcasts go out only via Telegram**; reactive transactional replies (`_deliver_tickets` in
   `channels/*/handlers.py`) go through whatever channel the participant used to transact, but proactive
   backend notifications (webhook/background reconciliation, `app/services/notification_service.py`) go
-  out to **every** bound channel simultaneously (Telegram + VK, if both) — see DECISIONS.md №43.
+  out to **every** bound channel simultaneously (Telegram + VK, if both) — see DECISIONS_LOG.md №43.
 - **Every mutating action gets an audit-log row** via `app/services/audit_service.py` — don't bypass it.
 - **`RequisitesQrProvider` is the only payment provider** — interactive-acquiring (T-Bank/VTB/mock) was
-  removed by direct product decision (see DECISIONS.md №44); don't reintroduce a provider switcher or a
+  removed by direct product decision (see DECISIONS_LOG.md №44); don't reintroduce a provider switcher or a
   second live provider without explicit sign-off.
 
 ### Testing conventions

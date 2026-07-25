@@ -21,7 +21,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # Несколько постеров на розыгрыш вместо одного файла, загрузка через
-    # веб-админку вместо ручной правки БД (DECISIONS.md №46). Данные не
+    # веб-админку вместо ручной правки БД (DECISIONS_LOG.md №46). Данные не
     # переносятся: digital_poster_path/poster_media_cache были NULL у всех
     # существующих розыгрышей на момент миграции (загрузки не было в принципе).
     op.create_table('giveaway_posters',
