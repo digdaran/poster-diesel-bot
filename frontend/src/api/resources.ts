@@ -67,8 +67,10 @@ export const GiveawaysApi = {
     max_tickets: number;
     digital_poster_caption?: string;
   }) => apiRequest<Giveaway>("/api/giveaways", { method: "POST", body: payload }),
-  update: (id: number, payload: { name?: string; digital_poster_caption?: string }) =>
-    apiRequest<Giveaway>(`/api/giveaways/${id}`, { method: "PATCH", body: payload }),
+  update: (
+    id: number,
+    payload: { name?: string; digital_poster_caption?: string; google_sheet_id?: string },
+  ) => apiRequest<Giveaway>(`/api/giveaways/${id}`, { method: "PATCH", body: payload }),
   open: (id: number) => apiRequest<Giveaway>(`/api/giveaways/${id}/open`, { method: "POST" }),
   lock: (id: number) => apiRequest<Giveaway>(`/api/giveaways/${id}/lock`, { method: "POST" }),
   unlock: (id: number) => apiRequest<Giveaway>(`/api/giveaways/${id}/unlock`, { method: "POST" }),

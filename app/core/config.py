@@ -101,6 +101,21 @@ class Settings(BaseSettings):
     backup_dir: str = Field(default="./backups", alias="BACKUP_DIR")
     backup_retention_days: int = Field(default=14, alias="BACKUP_RETENTION_DAYS")
 
+    # ---- Экспорт выданных номерков в Google Sheets (по розыгрышу, см. DECISIONS.md).
+    # Пусто по умолчанию = функция выключена целиком, независимо от того, указан
+    # ли Giveaway.google_sheet_id — сервисный аккаунт создаётся и файл ключа
+    # монтируется заказчиком при развёртывании, как и остальные секреты (TBANK_*).
+    google_sheets_credentials_file: str = Field(default="", alias="GOOGLE_SHEETS_CREDENTIALS_FILE")
+    google_sheets_sync_interval_sec: int = Field(
+        default=60, alias="GOOGLE_SHEETS_SYNC_INTERVAL_SEC"
+    )
+
+    @property
+    def google_sheets_credentials_path(self) -> Path | None:
+        if not self.google_sheets_credentials_file:
+            return None
+        return Path(self.google_sheets_credentials_file)
+
     @property
     def database_url(self) -> str:
         """SQLAlchemy URL для файловой БД. Используйте отдельный in-memory URL в тестах."""

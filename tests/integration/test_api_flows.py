@@ -115,6 +115,39 @@ def test_giveaway_immutable_fields_not_editable_after_open(api_client: TestClien
     assert resp.json()["prefix"] == "IMM"
 
 
+def test_giveaway_google_sheet_id_set_and_clear(api_client: TestClient) -> None:
+    """`google_sheet_id` (см. DECISIONS.md №44) редактируется тем же эндпоинтом,
+    что и остальные изменяемые поля; пустая строка явно отвязывает таблицу
+    (не трактуется как "не менять")."""
+    token = login(api_client, "admin", "admin-strong-pass-123")
+    headers = auth_headers(token)
+    resp = api_client.post(
+        "/api/giveaways",
+        json={"name": "Sheets", "prefix": "SHT", "ticket_price": 1000, "max_tickets": 5},
+        headers=headers,
+    )
+    giveaway_id = resp.json()["id"]
+    assert resp.json()["google_sheet_id"] is None
+
+    resp = api_client.patch(
+        f"/api/giveaways/{giveaway_id}",
+        json={"google_sheet_id": "1AbCdEf-example-sheet-id"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["google_sheet_id"] == "1AbCdEf-example-sheet-id"
+
+    resp = api_client.patch(
+        f"/api/giveaways/{giveaway_id}", json={"google_sheet_id": ""}, headers=headers
+    )
+    assert resp.status_code == 200
+    assert resp.json()["google_sheet_id"] is None
+
+    resp = api_client.get("/api/audit", headers=headers)
+    actions = [row["action"] for row in resp.json()]
+    assert actions.count("giveaway_update") == 2
+
+
 def test_manual_registration_insufficient_tickets_returns_409(api_client: TestClient) -> None:
     token = login(api_client, "admin", "admin-strong-pass-123")
     headers = auth_headers(token)

@@ -42,6 +42,12 @@ class Giveaway(Base):
     digital_poster_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     digital_poster_caption: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     poster_media_cache: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # ID Google-таблицы для автовыгрузки выданных номерков участникам (см.
+    # DECISIONS.md) — своя таблица на розыгрыш, а не общий лист на всех, т.к.
+    # ссылка на неё публично раздаётся участникам именно этого розыгрыша.
+    # Администратор должен заранее выдать сервисному аккаунту доступ
+    # редактора к этой таблице в Google — платформа сама доступ не запрашивает.
+    google_sheet_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
     created_at: Mapped[dt.datetime] = created_at_column()
 
     ticket_pool_rows: Mapped[list[TicketPool]] = relationship(back_populates="giveaway")

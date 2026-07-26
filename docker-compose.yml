@@ -7,10 +7,15 @@ services:
     environment:
       DATABASE_PATH: /data/raffle.db
       RECEIPTS_DIR: /data/receipts
+      # Пусто по умолчанию (GOOGLE_SHEETS_CREDENTIALS_FILE в .env), если задан —
+      # см. DECISIONS.md №44. Только backend читает этот файл (фоновый цикл),
+      # каналам он не нужен.
+      GOOGLE_SHEETS_CREDENTIALS_FILE: /data/secrets/google-sheets-credentials.json
     volumes:
       - ./data/db:/data
       - ./data/receipts:/data/receipts
       - ./data/backups:/backups
+      - ./data/secrets:/data/secrets:ro
     networks: [internal]
     healthcheck:
       test: ["CMD", "curl", "-fs", "http://localhost:8000/health"]

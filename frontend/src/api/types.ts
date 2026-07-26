@@ -27,6 +27,7 @@ export interface Giveaway {
   is_locked: boolean;
   opened_at: string | null;
   digital_poster_caption: string | null;
+  google_sheet_id: string | null;
   created_at: string;
 }
 

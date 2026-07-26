@@ -55,3 +55,13 @@ def is_valid_phone(raw: str, *, default_region: str = DEFAULT_REGION) -> bool:
         return True
     except InvalidPhoneError:
         return False
+
+
+def mask_phone(phone: str, *, visible_digits: int = 5) -> str:
+    """Маскирует нормализованный телефон для показа в местах, не защищённых
+    правами панели (напр. Google Sheets-выгрузка номерков, открытая участникам
+    по ссылке — см. DECISIONS.md) — видны только последние `visible_digits`
+    цифр, остальное скрыто символом «•»."""
+    if len(phone) <= visible_digits:
+        return "•" * len(phone)
+    return "•" * (len(phone) - visible_digits) + phone[-visible_digits:]

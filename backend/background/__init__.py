@@ -20,7 +20,7 @@ from app.models.enums import PaymentProviderType, PaymentStatus
 from app.models.payment import Payment
 from app.payments.factory import create_provider
 from app.repositories import ticket_pool_repo as pool_repo
-from app.services import bank_reconciliation_service, notification_service
+from app.services import bank_reconciliation_service, notification_service, sheets_export_service
 from app.services import manual_registration_service as manual_svc
 from app.services import payment_service as payment_svc
 from app.services.payment_service import FinalizeOutcome
@@ -118,12 +118,23 @@ async def run_background_loop(
     финализированных платежах (`notification_service`) отправляются уже после
     возврата на event loop, т.к. отправка сообщений в мессенджер — асинхронный
     сетевой вызов. `notification_service` сам выбирает каналы получателя
-    (Telegram И VK одновременно, по привязкам) — см. DECISIONS.md №43."""
+    (Telegram И VK одновременно, по привязкам) — см. DECISIONS.md №43.
+
+    Выгрузка номерков в Google Sheets (`sheets_export_service`, DECISIONS.md №44)
+    живёт на собственном интервале (`GOOGLE_SHEETS_SYNC_INTERVAL_SEC`), отдельном
+    от `ONLINE_STATUS_POLL_INTERVAL_SEC` — накопленное время считаем тиками
+    основного цикла, а не отдельным `asyncio`-таском, чтобы не плодить ещё один
+    независимый цикл ради редкой операции."""
+    since_last_sheets_sync = settings.google_sheets_sync_interval_sec
     while True:
         try:
             outcomes = await asyncio.to_thread(_reconcile_pending_payments, db, settings)
             outcomes += await asyncio.to_thread(bank_reconciliation_service.reconcile, db, settings)
             await asyncio.to_thread(_release_expired_manual_registrations, db, settings)
+            since_last_sheets_sync += settings.online_status_poll_interval_sec
+            if since_last_sheets_sync >= settings.google_sheets_sync_interval_sec:
+                await asyncio.to_thread(sheets_export_service.sync_all_giveaways, db, settings)
+                since_last_sheets_sync = 0
             if telegram_channel is not None or vk_channel is not None:
                 for outcome in outcomes:
                     if outcome.late_success_no_tickets:

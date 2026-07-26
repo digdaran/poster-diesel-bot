@@ -63,6 +63,7 @@ class GiveawayOut(BaseModel):
     is_locked: bool
     opened_at: dt.datetime | None
     digital_poster_caption: str | None
+    google_sheet_id: str | None
     created_at: dt.datetime
 
     model_config = {"from_attributes": True}
@@ -77,11 +78,12 @@ class GiveawayCreateRequest(BaseModel):
 
 
 class GiveawayUpdateRequest(BaseModel):
-    """Разрешено менять ТОЛЬКО название/постер/подпись после открытия регистрации
-    (п.7.2 ТЗ) — prefix/ticket_price/max_tickets неизменяемы."""
+    """Разрешено менять ТОЛЬКО название/постер/подпись/Google Sheet ID после
+    открытия регистрации (п.7.2 ТЗ) — prefix/ticket_price/max_tickets неизменяемы."""
 
     name: str | None = None
     digital_poster_caption: str | None = None
+    google_sheet_id: str | None = None
 
 
 class ManualRegistrationOut(BaseModel):

@@ -21,6 +21,7 @@ export function GiveawaysPage() {
   const [form, setForm] = useState({ name: "", prefix: "", ticket_price: "", max_tickets: "" });
   const [error, setError] = useState<string | null>(null);
   const [pendingId, setPendingId] = useState<number | null>(null);
+  const [sheetIdDrafts, setSheetIdDrafts] = useState<Record<number, string>>({});
 
   const load = () => void GiveawaysApi.list().then(setGiveaways);
   useEffect(load, []);
@@ -77,7 +78,16 @@ export function GiveawaysPage() {
     void runRowAction(g.id, () => GiveawaysApi.closeRegistration(g.id), "Регистрация закрыта");
   };
 
-  const columnCount = canEdit || canLock ? 9 : 8;
+  const onSaveSheetId = (g: Giveaway) => {
+    const value = (sheetIdDrafts[g.id] ?? g.google_sheet_id ?? "").trim();
+    void runRowAction(
+      g.id,
+      () => GiveawaysApi.update(g.id, { google_sheet_id: value }),
+      "Google Sheet ID сохранён",
+    );
+  };
+
+  const columnCount = canEdit || canLock ? 10 : 9;
 
   return (
     <div>
@@ -134,6 +144,7 @@ export function GiveawaysPage() {
               <th>Резерв</th>
               <th>Регистрация</th>
               <th>Блок</th>
+              <th>Google Sheet ID</th>
               {(canEdit || canLock) && <th>Действия</th>}
             </tr>
           </thead>
@@ -156,6 +167,24 @@ export function GiveawaysPage() {
                   <Badge tone={g.is_locked ? "danger" : "muted"}>
                     {g.is_locked ? "Да" : "Нет"}
                   </Badge>
+                </td>
+                <td>
+                  {canEdit ? (
+                    <div className="inline-form">
+                      <input
+                        placeholder="ID таблицы"
+                        value={sheetIdDrafts[g.id] ?? g.google_sheet_id ?? ""}
+                        onChange={(e) =>
+                          setSheetIdDrafts({ ...sheetIdDrafts, [g.id]: e.target.value })
+                        }
+                      />
+                      <button disabled={pendingId === g.id} onClick={() => onSaveSheetId(g)}>
+                        Сохранить
+                      </button>
+                    </div>
+                  ) : (
+                    g.google_sheet_id ?? "—"
+                  )}
                 </td>
                 {(canEdit || canLock) && (
                   <td className="actions">

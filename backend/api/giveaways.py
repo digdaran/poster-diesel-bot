@@ -84,6 +84,11 @@ def update_giveaway(
         giveaway.name = payload.name
     if payload.digital_poster_caption is not None:
         giveaway.digital_poster_caption = payload.digital_poster_caption
+    if payload.google_sheet_id is not None:
+        # Пустая строка = явная отвязка таблицы (останавливает синхронизацию для
+        # этого розыгрыша), а не "не менять" — иначе через панель нельзя было бы
+        # отключить экспорт, только сменить ID на другой.
+        giveaway.google_sheet_id = payload.google_sheet_id or None
     session.flush()
     audit_service.log(
         session,
