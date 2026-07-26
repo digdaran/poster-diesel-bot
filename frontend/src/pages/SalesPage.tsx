@@ -6,6 +6,7 @@ import { usePagination } from "../hooks/usePagination";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { PaginationControls } from "../components/PaginationControls";
 import { Badge } from "../components/Badge";
+import { BankReconciliationStatusPanel } from "../components/BankReconciliationStatusPanel";
 import { ChannelBadges } from "../components/ChannelBadges";
 import { EmptyStateRow } from "../components/EmptyState";
 import { formatMoney, formatDateTime } from "../utils/format";
@@ -102,6 +103,8 @@ export function SalesPage() {
   return (
     <div>
       <h1>Продажи (онлайн-платежи)</h1>
+
+      {hasPermission("view_bank_reconciliation") && <BankReconciliationStatusPanel />}
 
       <div className="filters">
         <input

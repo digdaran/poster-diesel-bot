@@ -1,5 +1,8 @@
 """Тесты сверки платежей requisites_qr по выписке расчётного счёта
-(app/services/bank_reconciliation_service.py, см. DECISIONS.md, ARCHITECTURE.md §7.2)."""
+(app/services/bank_reconciliation_service.py, см. DECISIONS.md, ARCHITECTURE.md §7.2).
+
+Отдельный блок тестов внизу файла покрывает `BankReconciliationRun`/`get_reconciliation_status`
+(панель статуса «Сверка выписок» в «Продажи», см. DECISIONS_LOG.md №48)."""
 
 from __future__ import annotations
 
@@ -7,8 +10,9 @@ import datetime as dt
 
 from app.core.config import Settings
 from app.core.db import Database
+from app.models.bank_reconciliation_run import BankReconciliationRun
 from app.models.base import utcnow
-from app.models.enums import PaymentStatus
+from app.models.enums import BankReconciliationRunStatus, PaymentStatus
 from app.models.giveaway import Giveaway
 from app.models.participant import Participant
 from app.models.payment import Payment
@@ -255,3 +259,200 @@ def test_reconcile_expires_stale_unmatched_invoice_past_ttl(
             select(Payment).where(Payment.id == outcome.payment_id)
         ).scalar_one()
         assert payment.status == PaymentStatus.FAILED
+
+
+def _all_runs(db: Database) -> list[BankReconciliationRun]:
+    with db.session() as session:
+        return list(
+            session.execute(select(BankReconciliationRun).order_by(BankReconciliationRun.id))
+            .scalars()
+            .all()
+        )
+
+
+def test_reconcile_with_no_candidates_records_success_run_with_zero_counts(
+    db: Database, settings: Settings
+) -> None:
+    outcomes = svc.reconcile(db, settings)
+
+    assert outcomes == []
+    runs = _all_runs(db)
+    assert len(runs) == 1
+    run = runs[0]
+    assert run.status == BankReconciliationRunStatus.SUCCESS
+    assert run.candidates_checked == 0
+    assert run.entries_fetched is None
+    assert run.matched_count == 0
+    assert run.mismatch_count == 0
+    assert run.ttl_expired_count == 0
+    assert run.finalize_error_count == 0
+    assert run.error_message is None
+    assert run.finished_at is not None
+
+
+def test_reconcile_records_counts_for_matched_and_mismatched_payments(
+    db: Database, settings: Settings, monkeypatch
+) -> None:
+    gid = make_giveaway(db)
+    pid = make_participant(db)
+    matched_outcome = make_pending_payment(db, giveaway_id=gid, participant_id=pid, quantity=2)
+    mismatched_outcome = make_pending_payment(db, giveaway_id=gid, participant_id=pid, quantity=1)
+    assert matched_outcome.ok and matched_outcome.invoice_no is not None
+    assert mismatched_outcome.ok and mismatched_outcome.invoice_no is not None
+
+    entries = [
+        BankStatementEntry(
+            external_id="op-1",
+            amount=matched_outcome.amount or 0,
+            purpose=f"Оплата по счету № {matched_outcome.invoice_no} от 22.07.2026",
+            operation_date=utcnow(),
+        ),
+        BankStatementEntry(
+            external_id="op-2",
+            amount=(mismatched_outcome.amount or 0) - 1,
+            purpose=f"Оплата по счету № {mismatched_outcome.invoice_no} от 22.07.2026",
+            operation_date=utcnow(),
+        ),
+    ]
+    settings._fake_entries = entries  # type: ignore[attr-defined]
+    monkeypatch.setattr(svc, "TBankStatementProvider", _FakeStatementProvider)
+
+    svc.reconcile(db, settings)
+
+    runs = _all_runs(db)
+    assert len(runs) == 1
+    run = runs[0]
+    assert run.status == BankReconciliationRunStatus.SUCCESS
+    assert run.candidates_checked == 2
+    assert run.entries_fetched == 2
+    assert run.matched_count == 1
+    assert run.mismatch_count == 1
+    assert run.ttl_expired_count == 0
+    assert run.finalize_error_count == 0
+
+
+def test_reconcile_records_fetch_failed_run_with_error_message(
+    db: Database, settings: Settings, monkeypatch
+) -> None:
+    gid = make_giveaway(db)
+    pid = make_participant(db)
+    outcome = make_pending_payment(db, giveaway_id=gid, participant_id=pid, quantity=1)
+    assert outcome.ok
+
+    class _FailingStatementProvider:
+        @classmethod
+        def from_settings(cls, settings: Settings) -> _FailingStatementProvider:
+            return cls()
+
+        def fetch_operations(self, *, since: dt.datetime) -> list[BankStatementEntry]:
+            raise RuntimeError("T-Bank API недоступен")
+
+    monkeypatch.setattr(svc, "TBankStatementProvider", _FailingStatementProvider)
+
+    outcomes = svc.reconcile(db, settings)
+
+    assert outcomes == []
+    runs = _all_runs(db)
+    assert len(runs) == 1
+    run = runs[0]
+    assert run.status == BankReconciliationRunStatus.FETCH_FAILED
+    assert run.candidates_checked == 1
+    assert run.entries_fetched is None
+    assert run.error_message is not None
+    assert "T-Bank API недоступен" in run.error_message
+    with db.session() as session:
+        payment = session.execute(
+            select(Payment).where(Payment.id == outcome.payment_id)
+        ).scalar_one()
+        assert payment.status == PaymentStatus.PENDING
+
+
+def test_reconcile_run_retention_deletes_old_rows(db: Database, settings: Settings) -> None:
+    settings.bank_reconciliation_run_retention_days = 1
+    old_run = BankReconciliationRun(
+        started_at=utcnow() - dt.timedelta(days=2),
+        finished_at=utcnow() - dt.timedelta(days=2),
+        status=BankReconciliationRunStatus.SUCCESS,
+        candidates_checked=0,
+        entries_fetched=None,
+    )
+    with db.session() as session:
+        session.add(old_run)
+
+    svc.reconcile(db, settings)
+
+    runs = _all_runs(db)
+    assert len(runs) == 1
+    assert runs[0].candidates_checked == 0
+    assert (utcnow() - runs[0].started_at) < dt.timedelta(minutes=1)
+
+
+def test_get_reconciliation_status_is_stale_when_no_runs_exist(
+    db: Database, settings: Settings
+) -> None:
+    status = svc.get_reconciliation_status(db, settings)
+
+    assert status.runs == []
+    assert status.is_stale is True
+    assert status.last_success_at is None
+    assert status.total_runs_24h == 0
+    assert status.failed_runs_24h == 0
+
+
+def test_get_reconciliation_status_reports_recent_runs_and_aggregates(
+    db: Database, settings: Settings
+) -> None:
+    now = utcnow()
+    # Порог "устарело" — 2x интервал опроса (см. is_stale); поднимаем интервал,
+    # чтобы последний тик "5 минут назад" ниже не считался устаревшим.
+    settings.online_status_poll_interval_sec = 600
+    with db.session() as session:
+        session.add(
+            BankReconciliationRun(
+                started_at=now - dt.timedelta(minutes=10),
+                finished_at=now - dt.timedelta(minutes=10),
+                status=BankReconciliationRunStatus.FETCH_FAILED,
+                candidates_checked=1,
+                entries_fetched=None,
+                error_message="boom",
+            )
+        )
+        session.add(
+            BankReconciliationRun(
+                started_at=now - dt.timedelta(minutes=5),
+                finished_at=now - dt.timedelta(minutes=5),
+                status=BankReconciliationRunStatus.SUCCESS,
+                candidates_checked=0,
+                entries_fetched=0,
+            )
+        )
+
+    status = svc.get_reconciliation_status(db, settings, now=now)
+
+    assert len(status.runs) == 2
+    assert status.runs[0].status == BankReconciliationRunStatus.SUCCESS  # самый новый первым
+    assert status.total_runs_24h == 2
+    assert status.failed_runs_24h == 1
+    assert status.last_success_at == now - dt.timedelta(minutes=5)
+    assert status.is_stale is False
+
+
+def test_get_reconciliation_status_is_stale_when_last_run_too_old(
+    db: Database, settings: Settings
+) -> None:
+    now = utcnow()
+    settings.online_status_poll_interval_sec = 60
+    with db.session() as session:
+        session.add(
+            BankReconciliationRun(
+                started_at=now - dt.timedelta(minutes=10),
+                finished_at=now - dt.timedelta(minutes=10),
+                status=BankReconciliationRunStatus.SUCCESS,
+                candidates_checked=0,
+                entries_fetched=0,
+            )
+        )
+
+    status = svc.get_reconciliation_status(db, settings, now=now)
+
+    assert status.is_stale is True

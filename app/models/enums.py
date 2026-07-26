@@ -63,3 +63,8 @@ class BroadcastStatus(str, enum.Enum):
     SENDING = "SENDING"
     SENT = "SENT"
     FAILED = "FAILED"
+
+
+class BankReconciliationRunStatus(str, enum.Enum):
+    SUCCESS = "SUCCESS"
+    FETCH_FAILED = "FETCH_FAILED"

@@ -43,6 +43,7 @@ class Permission(str, Enum):
     REPORTS_EXPORT = "reports_export"
     AUDIT_VIEW = "audit_view"
     SALES_EXPORT = "sales_export"
+    VIEW_BANK_RECONCILIATION = "view_bank_reconciliation"
 
     # Только Super Admin
     PANEL_USERS_MANAGE = "panel_users_manage"
@@ -73,6 +74,7 @@ _ADMINISTRATOR_EXTRA = {
     Permission.REPORTS_EXPORT,
     Permission.AUDIT_VIEW,
     Permission.SALES_EXPORT,
+    Permission.VIEW_BANK_RECONCILIATION,
 }
 
 _SUPER_ADMIN_EXTRA = {

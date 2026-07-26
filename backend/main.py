@@ -22,6 +22,7 @@ from backend import background
 from backend.api import (
     audit,
     auth,
+    bank_reconciliation,
     broadcasts,
     dashboard,
     giveaways,
@@ -128,6 +129,7 @@ def create_app() -> FastAPI:
     app.include_router(giveaways.router, prefix=api_prefix)
     app.include_router(manual_registrations.router, prefix=api_prefix)
     app.include_router(sales.router, prefix=api_prefix)
+    app.include_router(bank_reconciliation.router, prefix=api_prefix)
     app.include_router(tickets.router, prefix=api_prefix)
     app.include_router(panel_users.router, prefix=api_prefix)
     app.include_router(settings_api.router, prefix=api_prefix)

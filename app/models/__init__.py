@@ -1,11 +1,13 @@
 """Экспорт всех моделей и enum'ов для удобного импорта и для Alembic autogenerate."""
 
 from app.models.audit_log import AuditLog
+from app.models.bank_reconciliation_run import BankReconciliationRun
 from app.models.base import Base
 from app.models.broadcast import Broadcast
 from app.models.channel_binding import ChannelBinding
 from app.models.enums import (
     AuditActorType,
+    BankReconciliationRunStatus,
     BroadcastStatus,
     ChannelType,
     ManualRegistrationStatus,
@@ -41,6 +43,7 @@ __all__ = [
     "AuditLog",
     "Broadcast",
     "PlatformSettings",
+    "BankReconciliationRun",
     "ChannelType",
     "TicketPoolStatus",
     "TicketSource",
@@ -50,4 +53,5 @@ __all__ = [
     "PanelUserRole",
     "AuditActorType",
     "BroadcastStatus",
+    "BankReconciliationRunStatus",
 ]

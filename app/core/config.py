@@ -67,6 +67,13 @@ class Settings(BaseSettings):
     # сопоставлен, даже если оплата фактически прошла (см. DECISIONS.md).
     bank_statement_lookback_days: int = Field(default=14, alias="BANK_STATEMENT_LOOKBACK_DAYS")
 
+    # Сколько хранить историю тиков bank_reconciliation_service.reconcile() для панели
+    # статуса сверки (см. DECISIONS.md) — тик короткий (ONLINE_STATUS_POLL_INTERVAL_SEC,
+    # по умолчанию 60 сек), без ретеншна таблица росла бы на ~1440 строк/день.
+    bank_reconciliation_run_retention_days: int = Field(
+        default=30, alias="BANK_RECONCILIATION_RUN_RETENTION_DAYS"
+    )
+
     # Квитанции, присланные участниками (не распознаются, только хранятся для
     # просмотра в панели) — тот же паттерн bind-mount в ./data/, что и для БД
     # (см. DECISIONS_LOG.md №28).

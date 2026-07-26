@@ -1,6 +1,7 @@
 import { apiDownload, apiRequest, apiUpload } from "./client";
 import type {
   AuditLogEntry,
+  BankReconciliationStatus,
   Broadcast,
   ChannelSalesRow,
   Dashboard,
@@ -177,6 +178,10 @@ export const BroadcastsApi = {
     audience_filter?: Record<string, unknown>;
   }) => apiRequest<Broadcast>("/api/broadcasts", { method: "POST", body: payload }),
   send: (id: number) => apiRequest<Broadcast>(`/api/broadcasts/${id}/send`, { method: "POST" }),
+};
+
+export const BankReconciliationApi = {
+  getStatus: () => apiRequest<BankReconciliationStatus>("/api/bank-reconciliation/status"),
 };
 
 export const ReportsApi = {

@@ -28,6 +28,7 @@ def test_superadmin_can_access_everything(api_client: TestClient) -> None:
         "/api/settings",
         "/api/audit",
         "/api/panel-users",
+        "/api/bank-reconciliation/status",
     ]:
         resp = api_client.get(path, headers=auth_headers(token))
         assert resp.status_code == 200, f"{path}: {resp.status_code} {resp.text}"
@@ -38,7 +39,12 @@ def test_operator_forbidden_from_admin_only_sections(api_client: TestClient) -> 
     create_panel_user(api_client, admin_token, "operator1", "operator-strong-pass", "operator")
     op_token = login(api_client, "operator1", "operator-strong-pass")
 
-    forbidden_paths = ["/api/settings", "/api/panel-users", "/api/audit"]
+    forbidden_paths = [
+        "/api/settings",
+        "/api/panel-users",
+        "/api/audit",
+        "/api/bank-reconciliation/status",
+    ]
     for path in forbidden_paths:
         resp = api_client.get(path, headers=auth_headers(op_token))
         assert resp.status_code == 403, f"{path}: expected 403, got {resp.status_code}"
@@ -108,6 +114,22 @@ def test_administrator_can_edit_giveaways_and_block_participants(api_client: Tes
         headers=auth_headers(manager_token),
     )
     assert resp.status_code == 201
+
+
+def test_administrator_can_view_bank_reconciliation_status(api_client: TestClient) -> None:
+    admin_token = login(api_client, "admin", "admin-strong-pass-123")
+    create_panel_user(api_client, admin_token, "manager3", "manager-strong-pass", "administrator")
+    manager_token = login(api_client, "manager3", "manager-strong-pass")
+
+    resp = api_client.get("/api/bank-reconciliation/status", headers=auth_headers(manager_token))
+    assert resp.status_code == 200
+    body = resp.json()
+    # Не полагаемся на конкретное число тиков — фоновый цикл (backend/background)
+    # уже стартовал в lifespan TestClient'а и мог успеть записать 0+ тиков.
+    assert "runs" in body
+    assert "is_stale" in body
+    assert "total_runs_24h" in body
+    assert "failed_runs_24h" in body
 
 
 def test_unauthenticated_request_is_401(api_client: TestClient) -> None:

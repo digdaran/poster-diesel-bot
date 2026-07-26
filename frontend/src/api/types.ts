@@ -87,6 +87,28 @@ export interface PaymentReceipt {
   uploaded_at: string;
 }
 
+export interface BankReconciliationRun {
+  id: number;
+  started_at: string;
+  finished_at: string | null;
+  status: "SUCCESS" | "FETCH_FAILED";
+  candidates_checked: number;
+  entries_fetched: number | null;
+  matched_count: number;
+  mismatch_count: number;
+  ttl_expired_count: number;
+  finalize_error_count: number;
+  error_message: string | null;
+}
+
+export interface BankReconciliationStatus {
+  runs: BankReconciliationRun[];
+  total_runs_24h: number;
+  failed_runs_24h: number;
+  last_success_at: string | null;
+  is_stale: boolean;
+}
+
 export interface Ticket {
   id: number;
   giveaway_id: number;

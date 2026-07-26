@@ -18,13 +18,14 @@ import re
 from dataclasses import dataclass
 
 import structlog
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.orm import joinedload
 
 from app.core.config import Settings
 from app.core.db import Database
+from app.models.bank_reconciliation_run import BankReconciliationRun
 from app.models.base import utcnow
-from app.models.enums import PaymentProviderType, PaymentStatus
+from app.models.enums import BankReconciliationRunStatus, PaymentProviderType, PaymentStatus
 from app.models.payment import Payment
 from app.payments.bank_statement import BankStatementEntry
 from app.payments.tbank_statement import TBankStatementProvider
@@ -32,6 +33,11 @@ from app.services import payment_service as payment_svc
 from app.services.payment_service import FinalizeOutcome
 
 logger = structlog.get_logger(__name__)
+
+# Обрезка error_message при сохранении BankReconciliationRun — сообщения исключений
+# сетевого клиента иногда включают тело HTTP-ответа целиком, панели статуса
+# достаточно превью.
+_ERROR_MESSAGE_MAX_LEN = 2000
 
 
 @dataclass(frozen=True)
@@ -74,8 +80,14 @@ def reconcile(
     db: Database, settings: Settings, *, now: dt.datetime | None = None
 ) -> list[FinalizeOutcome]:
     """Один тик фоновой сверки: находит совпадения по выписке и финализирует
-    оплаченные счета, а также помечает FAILED неоплаченные счета старше TTL."""
-    now = now or utcnow()
+    оплаченные счета, а также помечает FAILED неоплаченные счета старше TTL.
+
+    Каждый вызов пишет строку `BankReconciliationRun` (панель статуса «Сверка выписок»
+    в «Продажи», см. DECISIONS.md) — на ВСЕХ путях выхода, включая "нет кандидатов"
+    (см. `run_started_at`/`run_status` ниже), чтобы панель могла отличить "нечего
+    сверять" от "фоновый цикл не бежит"."""
+    run_started_at = utcnow()
+    now = now or run_started_at
     lookback_since = now - dt.timedelta(days=settings.bank_statement_lookback_days)
     ttl_cutoff = now - dt.timedelta(days=settings.requisites_invoice_ttl_days)
 
@@ -109,21 +121,43 @@ def reconcile(
         )
 
     if not candidates:
+        _record_run(
+            db,
+            settings,
+            started_at=run_started_at,
+            status=BankReconciliationRunStatus.SUCCESS,
+            candidates_checked=0,
+            entries_fetched=None,
+        )
         return []
 
     try:
         entries = TBankStatementProvider.from_settings(settings).fetch_operations(
             since=lookback_since
         )
-    except Exception:
+    except Exception as exc:
         logger.exception("bank_statement_fetch_failed")
+        _record_run(
+            db,
+            settings,
+            started_at=run_started_at,
+            status=BankReconciliationRunStatus.FETCH_FAILED,
+            candidates_checked=len(candidates),
+            entries_fetched=None,
+            error_message=str(exc),
+        )
         return []
 
     outcomes: list[FinalizeOutcome] = []
+    matched_count = 0
+    mismatch_count = 0
+    ttl_expired_count = 0
+    finalize_error_count = 0
     for payment in candidates:
         invoice_no = payment.giveaway.format_invoice_number(payment.payment_number)  # type: ignore[arg-type]
         result = find_matching_entry(entries, invoice_no, payment.amount)
         if result.matched is not None:
+            matched_count += 1
             try:
                 outcome = payment_svc.finalize_payment(
                     db,
@@ -143,9 +177,11 @@ def reconcile(
                     outcomes.append(outcome)
             except Exception:
                 logger.exception("bank_statement_finalize_failed", payment_id=payment.id)
+                finalize_error_count += 1
             continue
 
         if result.mismatched is not None:
+            mismatch_count += 1
             _mark_amount_mismatch(db, payment_id=payment.id, bank_amount=result.mismatched.amount)
             # Деньги по этому счёту фактически идут (просто не той суммой) — не
             # даём TTL молча похоронить его как FAILED, пока расхождение не
@@ -153,6 +189,7 @@ def reconcile(
             continue
 
         if payment.status == PaymentStatus.PENDING and payment.created_at < ttl_cutoff:
+            ttl_expired_count += 1
             try:
                 outcome = payment_svc.finalize_payment(
                     db, order_id=payment.order_id, new_status=PaymentStatus.FAILED, now=now
@@ -161,7 +198,20 @@ def reconcile(
                     outcomes.append(outcome)
             except Exception:
                 logger.exception("bank_statement_ttl_expire_failed", payment_id=payment.id)
+                finalize_error_count += 1
 
+    _record_run(
+        db,
+        settings,
+        started_at=run_started_at,
+        status=BankReconciliationRunStatus.SUCCESS,
+        candidates_checked=len(candidates),
+        entries_fetched=len(entries),
+        matched_count=matched_count,
+        mismatch_count=mismatch_count,
+        ttl_expired_count=ttl_expired_count,
+        finalize_error_count=finalize_error_count,
+    )
     return outcomes
 
 
@@ -175,3 +225,113 @@ def _mark_amount_mismatch(db: Database, *, payment_id: int, bank_amount: int) ->
             )
     except Exception:
         logger.exception("bank_statement_mismatch_persist_failed", payment_id=payment_id)
+
+
+def _record_run(
+    db: Database,
+    settings: Settings,
+    *,
+    started_at: dt.datetime,
+    status: BankReconciliationRunStatus,
+    candidates_checked: int,
+    entries_fetched: int | None,
+    matched_count: int = 0,
+    mismatch_count: int = 0,
+    ttl_expired_count: int = 0,
+    finalize_error_count: int = 0,
+    error_message: str | None = None,
+) -> None:
+    """Пишет строку статуса тика для панели «Сверка выписок» и заодно вычищает
+    строки старше `bank_reconciliation_run_retention_days` — инлайн, без отдельного
+    cron-а, т.к. тик короткий (по умолчанию раз в минуту) и без чистки таблица
+    росла бы неограниченно."""
+    finished_at = utcnow()
+    try:
+        with db.session() as session:
+            session.add(
+                BankReconciliationRun(
+                    started_at=started_at,
+                    finished_at=finished_at,
+                    status=status,
+                    candidates_checked=candidates_checked,
+                    entries_fetched=entries_fetched,
+                    matched_count=matched_count,
+                    mismatch_count=mismatch_count,
+                    ttl_expired_count=ttl_expired_count,
+                    finalize_error_count=finalize_error_count,
+                    error_message=(
+                        error_message[:_ERROR_MESSAGE_MAX_LEN] if error_message else None
+                    ),
+                )
+            )
+            retention_cutoff = finished_at - dt.timedelta(
+                days=settings.bank_reconciliation_run_retention_days
+            )
+            session.execute(
+                delete(BankReconciliationRun).where(
+                    BankReconciliationRun.started_at < retention_cutoff
+                )
+            )
+    except Exception:
+        logger.exception("bank_reconciliation_run_persist_failed")
+
+
+@dataclass(frozen=True)
+class BankReconciliationStatus:
+    runs: list[BankReconciliationRun]
+    """Последние тики, от новых к старым."""
+    total_runs_24h: int
+    failed_runs_24h: int
+    last_success_at: dt.datetime | None
+    is_stale: bool
+    """Последний тик старше удвоенного интервала опроса — фоновый цикл, похоже,
+    не бежит (а не просто "нечего сверять")."""
+
+
+def get_reconciliation_status(
+    db: Database, settings: Settings, *, now: dt.datetime | None = None, history_limit: int = 20
+) -> BankReconciliationStatus:
+    now = now or utcnow()
+    window_start = now - dt.timedelta(hours=24)
+
+    with db.session() as session:
+        runs = list(
+            session.execute(
+                select(BankReconciliationRun)
+                .order_by(BankReconciliationRun.started_at.desc())
+                .limit(history_limit)
+            )
+            .scalars()
+            .all()
+        )
+        total_runs_24h = session.execute(
+            select(func.count())
+            .select_from(BankReconciliationRun)
+            .where(BankReconciliationRun.started_at >= window_start)
+        ).scalar_one()
+        failed_runs_24h = session.execute(
+            select(func.count())
+            .select_from(BankReconciliationRun)
+            .where(
+                BankReconciliationRun.started_at >= window_start,
+                BankReconciliationRun.status == BankReconciliationRunStatus.FETCH_FAILED,
+            )
+        ).scalar_one()
+        last_success_at = session.execute(
+            select(func.max(BankReconciliationRun.started_at)).where(
+                BankReconciliationRun.status == BankReconciliationRunStatus.SUCCESS
+            )
+        ).scalar_one_or_none()
+
+    last_run = runs[0] if runs else None
+    is_stale = last_run is None or (now - last_run.started_at) > dt.timedelta(
+        seconds=2 * settings.online_status_poll_interval_sec
+    )
+
+    return BankReconciliationStatus(
+        runs=runs,
+        total_runs_24h=total_runs_24h,
+        failed_runs_24h=failed_runs_24h,
+        last_success_at=last_success_at,
+        is_stale=is_stale,
+    )

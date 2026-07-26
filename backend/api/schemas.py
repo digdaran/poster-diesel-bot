@@ -165,6 +165,30 @@ class PaymentReceiptOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class BankReconciliationRunOut(BaseModel):
+    id: int
+    started_at: dt.datetime
+    finished_at: dt.datetime | None
+    status: str
+    candidates_checked: int
+    entries_fetched: int | None
+    matched_count: int
+    mismatch_count: int
+    ttl_expired_count: int
+    finalize_error_count: int
+    error_message: str | None
+
+    model_config = {"from_attributes": True}
+
+
+class BankReconciliationStatusOut(BaseModel):
+    runs: list[BankReconciliationRunOut]
+    total_runs_24h: int
+    failed_runs_24h: int
+    last_success_at: dt.datetime | None
+    is_stale: bool
+
+
 class TicketOut(BaseModel):
     id: int
     giveaway_id: int
