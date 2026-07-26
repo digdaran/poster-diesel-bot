@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ssh autohype-bot-claude bash /opt/poster-diesel-bot/scripts/deploy.sh)",
+      "Bash(ssh autohype-bot-claude /opt/poster-diesel-bot/scripts/deploy.sh)",
+      "Bash(ssh autohype-bot-claude docker compose -f /opt/poster-diesel-bot/docker-compose.yml logs*)",
+      "Bash(ssh autohype-bot-claude docker compose -f /opt/poster-diesel-bot/docker-compose.yml ps*)",
+      "Bash(ssh autohype-bot-claude docker compose -f /opt/poster-diesel-bot/docker-compose.yml config*)",
+      "Bash(ssh autohype-bot-claude docker ps*)",
+      "Bash(ssh autohype-bot-claude docker logs*)",
+      "Bash(ssh autohype-bot-claude docker stats*)",
+      "Bash(ssh autohype-bot-claude journalctl*)",
+      "Bash(ssh autohype-bot-claude cat *)",
+      "Bash(ssh autohype-bot-claude tail *)",
+      "Bash(ssh autohype-bot-claude less *)",
+      "Bash(ssh autohype-bot-claude git -C /opt/poster-diesel-bot status*)",
+      "Bash(ssh autohype-bot-claude git -C /opt/poster-diesel-bot log*)",
+      "Bash(ssh autohype-bot-claude git -C /opt/poster-diesel-bot diff*)",
+      "Bash(ssh autohype-bot-claude df*)",
+      "Bash(ssh autohype-bot-claude free*)",
+      "Bash(ssh autohype-bot-claude uptime)"
+    ]
+  }
+}
