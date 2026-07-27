@@ -229,7 +229,10 @@ async def on_receipt_upload(message: Message) -> None:
     from app.core.config import get_settings
     from app.services import receipt_service
 
-    async with httpx.AsyncClient() as client:
+    # follow_redirects=True: VK-ссылки на документы (в отличие от фото) отдают
+    # 302 на реальный CDN-URL — без этого httpx не идёт по редиректу, а
+    # response.raise_for_status() падает на самом 302 как на ошибке.
+    async with httpx.AsyncClient(follow_redirects=True) as client:
         response = await client.get(url, timeout=30.0)
         response.raise_for_status()
         content = response.content
