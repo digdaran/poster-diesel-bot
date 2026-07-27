@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 import structlog
 from sqlalchemy import select, update
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.db import Database
 from app.models.base import utcnow
@@ -599,3 +599,64 @@ def poll_pending_payment(
             update(Payment).where(Payment.id == payment_id).values(poll_attempts=attempts)
         )
     return PollResult(order_id=order_id, outcome=None)
+
+
+@dataclass(frozen=True)
+class PendingPaymentInfo:
+    """Один неоплаченный (PENDING) платёж участника с признаком, прикреплена ли
+    уже квитанция — для раздела «Мои покупки» ботов (см. DECISIONS_LOG.md №49)."""
+
+    payment_id: int
+    giveaway_name: str
+    quantity: int
+    amount: int
+    invoice_no: str | None
+    has_receipt: bool
+
+
+def list_pending_payments(db: Database, *, participant_id: int) -> list[PendingPaymentInfo]:
+    """PENDING-платежи участника, самые новые первыми — для раздела «Мои покупки»."""
+    with db.session() as session:
+        payments = list(
+            session.execute(
+                select(Payment)
+                .options(selectinload(Payment.receipts), selectinload(Payment.giveaway))
+                .where(
+                    Payment.participant_id == participant_id,
+                    Payment.status == PaymentStatus.PENDING,
+                )
+                .order_by(Payment.id.desc())
+            ).scalars()
+        )
+        return [
+            PendingPaymentInfo(
+                payment_id=p.id,
+                giveaway_name=p.giveaway.name,
+                quantity=p.quantity,
+                amount=p.amount,
+                invoice_no=(
+                    p.giveaway.format_invoice_number(p.payment_number)
+                    if p.payment_number is not None
+                    else None
+                ),
+                has_receipt=bool(p.receipts),
+            )
+            for p in payments
+        ]
+
+
+def get_own_pending_payment(
+    db: Database, *, payment_id: int, participant_id: int
+) -> Payment | None:
+    """PENDING-платёж участника по id, с загруженным `giveaway` — используется при
+    выборе конкретного счёта для прикрепления квитанции (раздел «Мои покупки»)."""
+    with db.session() as session:
+        return session.execute(
+            select(Payment)
+            .options(selectinload(Payment.giveaway))
+            .where(
+                Payment.id == payment_id,
+                Payment.participant_id == participant_id,
+                Payment.status == PaymentStatus.PENDING,
+            )
+        ).scalar_one_or_none()
