@@ -165,6 +165,63 @@ def test_manual_registration_generate_qr_flow(api_client: TestClient) -> None:
     assert resp.status_code == 409
 
 
+def test_manual_registration_switch_to_cash_after_failed_qr_payment(api_client: TestClient) -> None:
+    """Покупатель сформировал QR, но не смог/не захотел оплатить по нему и
+    решил заплатить оператору наличными (см. DECISIONS.md)."""
+    token = login(api_client, "admin", "admin-strong-pass-123")
+    headers = auth_headers(token)
+
+    resp = api_client.post(
+        "/api/giveaways",
+        json={"name": "Cash Fallback", "prefix": "CSHF", "ticket_price": 3000, "max_tickets": 10},
+        headers=headers,
+    )
+    giveaway_id = resp.json()["id"]
+    api_client.post(f"/api/giveaways/{giveaway_id}/open", headers=headers)
+
+    resp = api_client.post(
+        "/api/manual-registrations",
+        json={
+            "giveaway_id": giveaway_id,
+            "participant_phone": "+7 999 333-44-55",
+            "participant_full_name": "Сидор Сидоров",
+            "quantity": 1,
+        },
+        headers=headers,
+    )
+    registration_id = resp.json()["id"]
+
+    resp = api_client.post(
+        f"/api/manual-registrations/{registration_id}/generate-qr", headers=headers
+    )
+    assert resp.json()["payment_method"] == "CASHLESS"
+    invoice_no = resp.json()["invoice_no"]
+
+    resp = api_client.post(
+        f"/api/manual-registrations/{registration_id}/switch-to-cash", headers=headers
+    )
+    assert resp.status_code == 200
+    assert resp.json()["payment_method"] == "CASH"
+    # Номер счёта не стирается — просто перестаёт быть актуальным способом оплаты.
+    assert resp.json()["invoice_no"] == invoice_no
+
+    resp = api_client.post(f"/api/manual-registrations/{registration_id}/confirm", headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "CONFIRMED"
+    assert resp.json()["payment_method"] == "CASH"
+
+    resp = api_client.get("/api/reports/online-vs-offline", headers=headers)
+    body = resp.json()
+    assert body["offline_cash"]["amount"] == 3000
+    assert body["offline_cashless"]["amount"] == 0
+
+    # Сменить способ оплаты после подтверждения уже нельзя.
+    resp = api_client.post(
+        f"/api/manual-registrations/{registration_id}/switch-to-cash", headers=headers
+    )
+    assert resp.status_code == 409
+
+
 def test_giveaway_immutable_fields_not_editable_after_open(api_client: TestClient) -> None:
     token = login(api_client, "admin", "admin-strong-pass-123")
     headers = auth_headers(token)

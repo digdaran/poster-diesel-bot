@@ -233,6 +233,36 @@ def generate_manual_registration_qr(
         return _to_out(session, registration)
 
 
+@router.post("/{registration_id}/switch-to-cash", response_model=ManualRegistrationOut)
+def switch_manual_registration_to_cash(
+    registration_id: int,
+    request: Request,
+    db: Database = Depends(get_database),
+    user: PanelUser = Depends(require_permission(Permission.MANUAL_REGISTRATION_CREATE)),
+) -> ManualRegistrationOut:
+    """Возврат к наличным, если покупатель не смог/не захотел оплатить по уже
+    сформированному QR (см. DECISIONS.md). Только для PENDING."""
+    try:
+        svc.switch_manual_registration_to_cash(db, manual_registration_id=registration_id)
+    except svc.ManualRegistrationStateError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    with db.session() as session:
+        registration = session.get(ManualRegistration, registration_id)
+        assert registration is not None
+        audit_service.log(
+            session,
+            action="manual_registration_switch_to_cash",
+            actor_type=AuditActorType.PANEL_USER,
+            actor_id=user.id,
+            actor_label=user.login,
+            entity_type="manual_registration",
+            entity_id=registration_id,
+            ip_address=request.client.host if request.client else None,
+        )
+        return _to_out(session, registration)
+
+
 @router.get("/{registration_id}/qr.png")
 def get_manual_registration_qr_png(
     registration_id: int,

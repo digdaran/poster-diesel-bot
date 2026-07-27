@@ -369,6 +369,20 @@ export function ManualRegistrationsPage() {
                       <button disabled={pendingId === r.id} onClick={() => void onGenerateQr(r)}>
                         Сформировать QR
                       </button>
+                      {r.payment_method === "CASHLESS" && (
+                        <button
+                          disabled={pendingId === r.id}
+                          onClick={() =>
+                            void runRowAction(
+                              r.id,
+                              () => ManualRegistrationsApi.switchToCash(r.id),
+                              "Способ оплаты изменён на наличные",
+                            )
+                          }
+                        >
+                          Наличные
+                        </button>
+                      )}
                       <button
                         disabled={pendingId === r.id}
                         onClick={() =>

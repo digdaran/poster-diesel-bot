@@ -265,6 +265,36 @@ def generate_manual_registration_qr(
         )
 
 
+def switch_manual_registration_to_cash(db: Database, *, manual_registration_id: int) -> None:
+    """Возврат к наличным после того, как для регистрации уже был сформирован
+    QR (`payment_method=CASHLESS`), но покупатель не смог/не захотел оплатить
+    по QR и решил заплатить оператору наличными (см. DECISIONS.md). Только для
+    `PENDING`. Не трогает уже присвоенный номер счёта/QR-payload — они просто
+    остаются неиспользованными (как и у отменённого онлайн-платежа); достаточно
+    сменить `payment_method`, из-за чего регистрация перестаёт быть кандидатом
+    фоновой сверки выписки (`bank_reconciliation_service.reconcile` матчит
+    только `CASHLESS`)."""
+    with db.immediate_session() as session:
+        result = session.execute(
+            update(ManualRegistration)
+            .where(
+                ManualRegistration.id == manual_registration_id,
+                ManualRegistration.status == ManualRegistrationStatus.PENDING,
+            )
+            .values(payment_method=ManualRegistrationPaymentMethod.CASH)
+        )
+        if result.rowcount == 0:  # type: ignore[attr-defined]
+            registration = session.get(ManualRegistration, manual_registration_id)
+            if registration is None:
+                raise ManualRegistrationStateError(
+                    f"Регистрация {manual_registration_id} не найдена"
+                )
+            raise ManualRegistrationStateError(
+                f"Регистрация {manual_registration_id} в статусе {registration.status} — "
+                "сменить способ оплаты можно только для PENDING"
+            )
+
+
 @dataclass(frozen=True)
 class ConfirmOutcome:
     manual_registration_id: int

@@ -112,6 +112,10 @@ export const ManualRegistrationsApi = {
       method: "POST",
     }),
   qrPngUrl: (id: number) => `/api/manual-registrations/${id}/qr.png`,
+  switchToCash: (id: number) =>
+    apiRequest<ManualRegistration>(`/api/manual-registrations/${id}/switch-to-cash`, {
+      method: "POST",
+    }),
 };
 
 export interface SalesFilter extends PageParams {

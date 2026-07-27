@@ -4,9 +4,12 @@
 
 from __future__ import annotations
 
+import datetime as dt
+
 import pytest
 from app.core.config import Settings
 from app.core.db import Database
+from app.models.base import utcnow
 from app.models.enums import (
     ManualRegistrationPaymentMethod,
     ManualRegistrationStatus,
@@ -16,11 +19,25 @@ from app.models.giveaway import Giveaway
 from app.models.manual_registration import ManualRegistration
 from app.models.panel_user import PanelUser
 from app.models.participant import Participant
+from app.payments.bank_statement import BankStatementEntry
 from app.payments.requisites_qr import RequisitesQrProvider
+from app.services import bank_reconciliation_service
 from app.services import manual_registration_service as svc
 from app.services import payment_service as payment_svc
 from app.services import ticket_pool_service as pool_svc
 from sqlalchemy import select
+
+
+class _FakeStatementProvider:
+    def __init__(self, entries: list[BankStatementEntry]) -> None:
+        self._entries = entries
+
+    def fetch_operations(self, *, since: dt.datetime) -> list[BankStatementEntry]:
+        return self._entries
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> _FakeStatementProvider:
+        return cls(getattr(settings, "_fake_entries", []))
 
 
 def make_provider() -> RequisitesQrProvider:
@@ -336,3 +353,105 @@ def test_generate_qr_forbidden_after_confirmation(db: Database, settings: Settin
 def test_generate_qr_missing_registration_raises(db: Database, settings: Settings) -> None:
     with pytest.raises(svc.ManualRegistrationStateError):
         svc.generate_manual_registration_qr(db, settings, manual_registration_id=999999)
+
+
+def test_switch_to_cash_after_qr_reverts_payment_method(db: Database, settings: Settings) -> None:
+    """Покупатель не смог/не захотел оплатить по уже сформированному QR и решил
+    заплатить оператору наличными (см. DECISIONS.md)."""
+    gid = make_giveaway(db, max_tickets=10, prefix="CSH")
+    pid = make_participant(db)
+    oid = make_operator(db)
+    outcome = svc.create_manual_registration_safe(
+        db, giveaway_id=gid, participant_id=pid, quantity=1, operator_id=oid, ttl_seconds=3600
+    )
+    qr_result = svc.generate_manual_registration_qr(
+        db, settings, manual_registration_id=outcome.manual_registration_id
+    )
+
+    svc.switch_manual_registration_to_cash(
+        db, manual_registration_id=outcome.manual_registration_id
+    )
+
+    with db.session() as session:
+        reg = session.execute(
+            select(ManualRegistration).where(
+                ManualRegistration.id == outcome.manual_registration_id
+            )
+        ).scalar_one()
+        assert reg.payment_method == ManualRegistrationPaymentMethod.CASH
+        assert reg.status == ManualRegistrationStatus.PENDING
+        # Номер счёта/QR не стираются — просто больше не используются.
+        assert reg.qr_code_payload is not None
+
+    # Подтверждение по-прежнему работает как обычное наличное.
+    confirm = svc.confirm_manual_registration(
+        db, manual_registration_id=outcome.manual_registration_id
+    )
+    assert len(confirm.tickets) == 1
+    assert qr_result.invoice_no  # sanity: QR действительно был сформирован до переключения
+
+
+def test_switch_to_cash_forbidden_after_confirmation(db: Database, settings: Settings) -> None:
+    gid = make_giveaway(db, max_tickets=10)
+    pid = make_participant(db)
+    oid = make_operator(db)
+    outcome = svc.create_manual_registration_safe(
+        db, giveaway_id=gid, participant_id=pid, quantity=1, operator_id=oid, ttl_seconds=3600
+    )
+    svc.generate_manual_registration_qr(
+        db, settings, manual_registration_id=outcome.manual_registration_id
+    )
+    svc.confirm_manual_registration(db, manual_registration_id=outcome.manual_registration_id)
+    with pytest.raises(svc.ManualRegistrationStateError):
+        svc.switch_manual_registration_to_cash(
+            db, manual_registration_id=outcome.manual_registration_id
+        )
+
+
+def test_switch_to_cash_missing_registration_raises(db: Database) -> None:
+    with pytest.raises(svc.ManualRegistrationStateError):
+        svc.switch_manual_registration_to_cash(db, manual_registration_id=999999)
+
+
+def test_switched_to_cash_registration_excluded_from_reconciliation_candidates(
+    db: Database, settings: Settings, monkeypatch
+) -> None:
+    """После возврата к наличным регистрация не должна больше подхватываться
+    фоновой сверкой выписки (та матчит только payment_method=CASHLESS)."""
+    gid = make_giveaway(db, max_tickets=10, prefix="SWC")
+    pid = make_participant(db)
+    oid = make_operator(db)
+    outcome = svc.create_manual_registration_safe(
+        db, giveaway_id=gid, participant_id=pid, quantity=1, operator_id=oid, ttl_seconds=3600
+    )
+    qr_result = svc.generate_manual_registration_qr(
+        db, settings, manual_registration_id=outcome.manual_registration_id
+    )
+    svc.switch_manual_registration_to_cash(
+        db, manual_registration_id=outcome.manual_registration_id
+    )
+
+    entries = [
+        BankStatementEntry(
+            external_id="op-1",
+            amount=qr_result.amount,
+            purpose=f"Оплата по счету № {qr_result.invoice_no} от 22.07.2026",
+            operation_date=utcnow(),
+        )
+    ]
+    settings._fake_entries = entries  # type: ignore[attr-defined]
+    monkeypatch.setattr(
+        bank_reconciliation_service, "TBankStatementProvider", _FakeStatementProvider
+    )
+
+    bank_reconciliation_service.reconcile(db, settings)
+
+    with db.session() as session:
+        reg = session.execute(
+            select(ManualRegistration).where(
+                ManualRegistration.id == outcome.manual_registration_id
+            )
+        ).scalar_one()
+        # Всё ещё PENDING/CASH — сверка не подтвердила её "за компанию".
+        assert reg.status == ManualRegistrationStatus.PENDING
+        assert reg.payment_method == ManualRegistrationPaymentMethod.CASH
