@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { BankReconciliationApi } from "../api/resources";
 import { Badge } from "./Badge";
 import { EmptyStateRow, LoadingState } from "./EmptyState";
-import { formatDateTime, formatMoney } from "../utils/format";
+import { formatDateTime, formatMoney, formatRelativeTime } from "../utils/format";
 import type {
   BankReconciliationRun,
   BankReconciliationStatus,
@@ -18,15 +18,6 @@ const RUN_STATUS_LABEL: Record<BankReconciliationRun["status"], string> = {
   SUCCESS: "OK",
   FETCH_FAILED: "Ошибка запроса к банку",
 };
-
-function formatRelativeTime(iso: string): string {
-  const diffMin = Math.round((Date.now() - new Date(iso).getTime()) / 60_000);
-  if (diffMin < 1) return "только что";
-  if (diffMin < 60) return `${diffMin} мин назад`;
-  const diffHours = Math.round(diffMin / 60);
-  if (diffHours < 24) return `${diffHours} ч назад`;
-  return formatDateTime(iso);
-}
 
 function CohortBrief({ label, brief }: { label: string; brief: PaymentsCohortBrief }) {
   return (
