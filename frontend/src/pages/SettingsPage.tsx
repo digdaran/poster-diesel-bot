@@ -60,6 +60,14 @@ export function SettingsPage() {
 
       <section>
         <h2>Контакты поддержки</h2>
+        <p className="settings-hint">
+          Ключи <code>telegram</code> и <code>vk</code> — зарезервированы: значение по ним
+          используется как ссылка на кнопку «Написать в поддержку» в соответствующем боте
+          (можно указать полную ссылку вида <code>https://t.me/username</code> /{" "}
+          <code>https://vk.com/id...</code>, либо просто юзернейм — ссылка достроится
+          автоматически). Остальные ключи (например, <code>email</code>, <code>phone</code>)
+          показываются участнику только текстом в разделе «Помощь».
+        </p>
         <textarea
           rows={6}
           value={contactsText}

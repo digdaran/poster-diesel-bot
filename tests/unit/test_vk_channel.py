@@ -119,3 +119,10 @@ def test_render_payment_prompt_omits_qr_button_when_unavailable() -> None:
     )
     actions = [btn["action"] for row in keyboard["buttons"] for btn in row]
     assert not any(a.get("payload", {}).get("a") == "show_qr" for a in actions)
+
+
+def test_render_support_prompt_has_open_link_button() -> None:
+    channel = VkChannel(token="x")
+    keyboard = json.loads(channel.render_support_prompt(url="https://vk.com/support_group"))
+    actions = [btn["action"] for row in keyboard["buttons"] for btn in row]
+    assert any(a.get("link") == "https://vk.com/support_group" for a in actions)

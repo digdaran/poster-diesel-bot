@@ -41,11 +41,15 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 labeler = BotLabeler()
 
-_MAIN_KEYBOARD_BUTTONS = [["🖼 Купить постер", "📋 Мои покупки"], ["ℹ️ Помощь"]]
+_MAIN_KEYBOARD_BUTTONS = [
+    ["🖼 Купить постер", "📋 Мои покупки"],
+    ["💬 Написать в поддержку", "ℹ️ Помощь"],
+]
 _START_TEXTS = {"/start", "начать", "start"}
 _HELP_TEXTS = {"ℹ️ помощь", "/help", "помощь"}
 _BUY_TEXT = "🖼 Купить постер"
 _MY_TICKETS_TEXT = "📋 Мои покупки"
+_SUPPORT_CONTACT_TEXT = "💬 Написать в поддержку"
 
 _channel: VkChannel | None = None  # устанавливается через set_channel() в main.py
 
@@ -634,6 +638,25 @@ async def on_my_tickets(message: Message) -> None:
         return
     await message.answer(f"Ваши номера ({len(tickets)}):")
     await _get_channel().send_ticket_codes(_uid(message.peer_id), [t.full_code for t in tickets])
+
+
+@labeler.message(text=_SUPPORT_CONTACT_TEXT)
+async def on_support_contact(message: Message) -> None:
+    channel = _get_channel()
+    db = get_channel_db()
+    with db.session() as session:
+        platform_settings = settings_service.get_or_create_settings(session)
+    contacts = platform_settings.support_contacts or {}
+    url = settings_service.support_contact_url(contacts, "vk")
+    if url is None:
+        await on_help(message)
+        return
+    keyboard = channel.render_support_prompt(url=url)
+    await channel.send_message(
+        _uid(message.peer_id),
+        "Нажмите кнопку ниже, чтобы открыть чат с поддержкой.",
+        keyboard=keyboard,
+    )
 
 
 @labeler.message(func=_is_help)
