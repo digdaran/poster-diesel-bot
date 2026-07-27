@@ -142,13 +142,18 @@ async def on_start(message: Message) -> None:
 
 @labeler.message(func=_is_receipt_upload)
 async def on_receipt_upload(message: Message) -> None:
-    """Квитанция об оплате, присланная участником — привязывается к его
-    текущему неоплаченному счёту (`Payment.status == PENDING`), сохраняется
-    как есть, БЕЗ распознавания (см. ТЗ, DECISIONS.md). См.
-    `channels.telegram.handlers.on_receipt_upload` — тот же сценарий,
-    зарегистрирован рано (как `on_start`), чтобы не оказаться в тени
-    состояний диалога регистрации/покупки."""
+    """Квитанция об оплате, присланная участником. Если перед этим участник выбрал
+    конкретный счёт в «Мои покупки» (payload `{"a": "select_payment_receipt"}` →
+    `_dispatch_message_event`, id счёта лежит в данных состояния под ключом
+    `receipt_payment_id`) — квитанция привязывается именно к нему. Иначе — к
+    последнему неоплаченному счёту участника (`Payment.status == PENDING`), как и
+    раньше. См. `channels.telegram.handlers.on_receipt_upload` — тот же сценарий,
+    зарегистрирован рано (как `on_start`), чтобы не оказаться в тени состояний
+    диалога регистрации/покупки."""
     from app.models.payment import Payment
+
+    state_data = await _get_state_payload(message.peer_id)
+    selected_payment_id = state_data.get("receipt_payment_id")
 
     db = get_channel_db()
     with db.session() as session:
@@ -157,20 +162,36 @@ async def on_receipt_upload(message: Message) -> None:
         )
         payment = None
         if participant is not None:
-            payment = (
-                session.execute(
-                    select(Payment)
-                    .where(
+            if selected_payment_id is not None:
+                payment = session.execute(
+                    select(Payment).where(
+                        Payment.id == selected_payment_id,
                         Payment.participant_id == participant.id,
                         Payment.status == PaymentStatus.PENDING,
                     )
-                    .order_by(Payment.id.desc())
+                ).scalar_one_or_none()
+            else:
+                payment = (
+                    session.execute(
+                        select(Payment)
+                        .where(
+                            Payment.participant_id == participant.id,
+                            Payment.status == PaymentStatus.PENDING,
+                        )
+                        .order_by(Payment.id.desc())
+                    )
+                    .scalars()
+                    .first()
                 )
-                .scalars()
-                .first()
-            )
 
     if payment is None:
+        if selected_payment_id is not None:
+            await _clear_state(message.peer_id)
+            await message.answer(
+                "Этот счёт уже недоступен для прикрепления квитанции (возможно, статус "
+                "изменился). Откройте «Мои покупки» и попробуйте снова."
+            )
+            return
         await message.answer(
             "Не нашёл неоплаченного счёта, к которому можно привязать квитанцию. "
             "Если вы уже оформили покупку и это не так — напишите в поддержку."
@@ -219,6 +240,8 @@ async def on_receipt_upload(message: Message) -> None:
         original_filename=original_filename,
         vk_attachment=vk_attachment,
     )
+    if selected_payment_id is not None:
+        await _clear_state(message.peer_id)
     await message.answer(
         "Квитанция получена, спасибо! Номера придут после зачисления денег на "
         "расчётный счёт — это может занять несколько дней."
@@ -623,17 +646,62 @@ async def on_my_tickets(message: Message) -> None:
                 "Напишите «Начать», чтобы продолжить."
             )
             return
+        participant_id = binding.participant_id
         tickets = list(
-            session.execute(
-                select(Ticket).where(Ticket.participant_id == binding.participant_id)
-            ).scalars()
+            session.execute(select(Ticket).where(Ticket.participant_id == participant_id)).scalars()
         )
 
-    if not tickets:
+    pending_payments = payment_svc.list_pending_payments(db, participant_id=participant_id)
+
+    if not tickets and not pending_payments:
         await message.answer("У вас пока нет покупок.")
         return
-    await message.answer(f"Ваши номера ({len(tickets)}):")
-    await _get_channel().send_ticket_codes(_uid(message.peer_id), [t.full_code for t in tickets])
+
+    if tickets:
+        await message.answer(f"Ваши номера ({len(tickets)}):")
+        await _get_channel().send_ticket_codes(
+            _uid(message.peer_id), [t.full_code for t in tickets]
+        )
+
+    if pending_payments:
+        await _send_pending_payments(message.peer_id, pending_payments, answer_target=message)
+
+
+async def _send_pending_payments(
+    peer_id: int,
+    payments: list[payment_svc.PendingPaymentInfo],
+    *,
+    answer_target: Message | None = None,
+) -> None:
+    """Список неоплаченных счетов участника (раздел «Мои покупки») — для тех, у
+    которых ещё нет квитанции, добавляется кнопка выбора счёта для её
+    прикрепления (см. `_dispatch_message_event`, action `select_payment_receipt`)."""
+    lines = ["Неоплаченные счета:"]
+    keyboard = Keyboard(inline=True)
+    has_buttons = False
+    for p in payments:
+        invoice_line = f", счёт № {p.invoice_no}" if p.invoice_no else ""
+        receipt_line = "квитанция получена ✅" if p.has_receipt else "квитанция не прислана ⏳"
+        lines.append(
+            f"«{p.giveaway_name}»: {p.quantity} экз. на {p.amount / 100:.2f} ₽{invoice_line} "
+            f"— {receipt_line}"
+        )
+        if not p.has_receipt:
+            if has_buttons:
+                keyboard.row()
+            keyboard.add(
+                Callback(
+                    f"📎 Прислать квитанцию — {p.amount / 100:.2f} ₽{invoice_line}",
+                    payload={"a": "select_payment_receipt", "id": p.payment_id},
+                )
+            )
+            has_buttons = True
+    text = "\n".join(lines)
+    keyboard_json = keyboard.get_json() if has_buttons else None
+    if answer_target is not None:
+        await answer_target.answer(text, keyboard=keyboard_json)
+    else:
+        await _get_channel().send_message(_uid(peer_id), text, keyboard=keyboard_json)
 
 
 @labeler.message(func=_is_help)
@@ -794,6 +862,34 @@ async def _dispatch_message_event(event: GroupTypes.MessageEvent) -> None:
 
     if action == "check_payment":
         await _handle_check_payment(event, peer_id)
+        return
+
+    if action == "select_payment_receipt":
+        payment_id = int(payload["id"])
+        with db.session() as session:
+            participant = participant_service.get_participant_by_channel(
+                session, channel=ChannelType.VK, external_user_id=_uid(peer_id)
+            )
+        payment = None
+        if participant is not None:
+            payment = payment_svc.get_own_pending_payment(
+                db, payment_id=payment_id, participant_id=participant.id
+            )
+        if payment is None:
+            await _answer_event(event, snackbar="Этот счёт больше недоступен.")
+            return
+        await _set_state(peer_id, PurchaseStates.AWAITING_RECEIPT, receipt_payment_id=payment.id)
+        invoice_line = (
+            f" (счёт № {payment.giveaway.format_invoice_number(payment.payment_number)})"
+            if payment.payment_number is not None
+            else ""
+        )
+        await _get_channel().send_message(
+            _uid(peer_id),
+            f"Пришлите фото или документ с квитанцией к счёту на {payment.amount / 100:.2f} ₽"
+            f"{invoice_line}.",
+        )
+        await _answer_event(event)
         return
 
     await _answer_event(event, snackbar="Это действие больше недоступно. Напишите «Начать».")
