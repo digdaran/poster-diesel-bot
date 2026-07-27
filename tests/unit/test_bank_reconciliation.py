@@ -96,7 +96,7 @@ def make_raw_payment(
         return payment.id
 
 
-def test_find_matching_entry_matches_by_prefix_number_and_amount() -> None:
+def test_find_matching_entries_matches_by_invoice_number_in_purpose() -> None:
     entries = [
         BankStatementEntry(
             external_id="op-1",
@@ -105,13 +105,12 @@ def test_find_matching_entry_matches_by_prefix_number_and_amount() -> None:
             operation_date=utcnow(),
         )
     ]
-    result = svc.find_matching_entry(entries, "REQ-00001", 16670)
-    assert result.matched is not None
-    assert result.matched.external_id == "op-1"
-    assert result.mismatched is None
+    result = svc.find_matching_entries(entries, "REQ-00001")
+    assert len(result) == 1
+    assert result[0].external_id == "op-1"
 
 
-def test_find_matching_entry_no_match_for_different_invoice() -> None:
+def test_find_matching_entries_no_match_for_different_invoice() -> None:
     entries = [
         BankStatementEntry(
             external_id="op-1",
@@ -120,25 +119,33 @@ def test_find_matching_entry_no_match_for_different_invoice() -> None:
             operation_date=utcnow(),
         )
     ]
-    result = svc.find_matching_entry(entries, "REQ-00001", 10000)
-    assert result.matched is None
-    assert result.mismatched is None
+    result = svc.find_matching_entries(entries, "REQ-00001")
+    assert result == []
 
 
-def test_find_matching_entry_reports_mismatch_when_amount_differs() -> None:
+def test_find_matching_entries_returns_all_operations_for_invoice() -> None:
     entries = [
         BankStatementEntry(
             external_id="op-1",
-            amount=9999,  # участник заплатил меньше/больше ожидаемого
+            amount=1000,
             purpose="Оплата по счету № REQ-00001 от 22.07.2026",
             operation_date=utcnow(),
-        )
+        ),
+        BankStatementEntry(
+            external_id="op-2",
+            amount=9000,
+            purpose="Оплата по счету № REQ-00001 от 23.07.2026",
+            operation_date=utcnow(),
+        ),
+        BankStatementEntry(
+            external_id="op-3",
+            amount=5000,
+            purpose="Оплата по счету № OTHER-00099 от 22.07.2026",
+            operation_date=utcnow(),
+        ),
     ]
-    result = svc.find_matching_entry(entries, "REQ-00001", 10000)
-    assert result.matched is None
-    assert result.mismatched is not None
-    assert result.mismatched.external_id == "op-1"
-    assert result.mismatched.amount == 9999
+    result = svc.find_matching_entries(entries, "REQ-00001")
+    assert [e.external_id for e in result] == ["op-1", "op-2"]
 
 
 class _FakeStatementProvider:
@@ -293,6 +300,171 @@ def test_reconcile_expires_stale_unmatched_invoice_past_ttl(
             select(Payment).where(Payment.id == outcome.payment_id)
         ).scalar_one()
         assert payment.status == PaymentStatus.FAILED
+
+
+def test_reconcile_sums_two_partial_payments_to_close_invoice(
+    db: Database, settings: Settings, monkeypatch
+) -> None:
+    """Участник доплатил недостающее отдельным переводом по тому же QR — сумма двух
+    операций точно закрывает счёт, без пометки расхождения (см. DECISIONS_LOG.md №51)."""
+    gid = make_giveaway(db)
+    pid = make_participant(db)
+    outcome = make_pending_payment(db, giveaway_id=gid, participant_id=pid, quantity=1)
+    assert outcome.ok
+    assert outcome.invoice_no is not None
+    total = outcome.amount or 0
+
+    entries = [
+        BankStatementEntry(
+            external_id="op-1",
+            amount=1000,
+            purpose=f"Оплата по счету № {outcome.invoice_no} от 22.07.2026",
+            operation_date=utcnow(),
+        ),
+        BankStatementEntry(
+            external_id="op-2",
+            amount=total - 1000,
+            purpose=f"Оплата по счету № {outcome.invoice_no} от 23.07.2026",
+            operation_date=utcnow(),
+        ),
+    ]
+    settings._fake_entries = entries  # type: ignore[attr-defined]
+    monkeypatch.setattr(svc, "TBankStatementProvider", _FakeStatementProvider)
+
+    outcomes = svc.reconcile(db, settings)
+
+    assert len(outcomes) == 1
+    assert outcomes[0].applied
+    with db.session() as session:
+        payment = session.execute(
+            select(Payment).where(Payment.id == outcome.payment_id)
+        ).scalar_one()
+        assert payment.status == PaymentStatus.SUCCEEDED
+        assert payment.amount_mismatch is False
+        assert payment.amount_mismatch_bank_amount is None
+
+
+def test_reconcile_reports_running_total_while_sum_still_short(
+    db: Database, settings: Settings, monkeypatch
+) -> None:
+    """Первая доплата ещё не покрывает счёт — `amount_mismatch_bank_amount` должен
+    отражать СУММУ обеих операций, а не только первую (регресс к старому поведению,
+    где вторая операция терялась из виду)."""
+    gid = make_giveaway(db)
+    pid = make_participant(db)
+    outcome = make_pending_payment(db, giveaway_id=gid, participant_id=pid, quantity=1)
+    assert outcome.ok
+    assert outcome.invoice_no is not None
+    total = outcome.amount or 0
+
+    entries = [
+        BankStatementEntry(
+            external_id="op-1",
+            amount=1000,
+            purpose=f"Оплата по счету № {outcome.invoice_no} от 22.07.2026",
+            operation_date=utcnow(),
+        ),
+        BankStatementEntry(
+            external_id="op-2",
+            amount=total - 2000,  # вместе всё ещё меньше total
+            purpose=f"Оплата по счету № {outcome.invoice_no} от 23.07.2026",
+            operation_date=utcnow(),
+        ),
+    ]
+    settings._fake_entries = entries  # type: ignore[attr-defined]
+    monkeypatch.setattr(svc, "TBankStatementProvider", _FakeStatementProvider)
+
+    outcomes = svc.reconcile(db, settings)
+
+    assert outcomes == []
+    with db.session() as session:
+        payment = session.execute(
+            select(Payment).where(Payment.id == outcome.payment_id)
+        ).scalar_one()
+        assert payment.status == PaymentStatus.PENDING
+        assert payment.amount_mismatch is True
+        assert payment.amount_mismatch_bank_amount == total - 1000
+
+
+def test_reconcile_closes_invoice_and_flags_overpayment_when_sum_exceeds(
+    db: Database, settings: Settings, monkeypatch
+) -> None:
+    gid = make_giveaway(db)
+    pid = make_participant(db)
+    outcome = make_pending_payment(db, giveaway_id=gid, participant_id=pid, quantity=1)
+    assert outcome.ok
+    assert outcome.invoice_no is not None
+    total = outcome.amount or 0
+
+    entries = [
+        BankStatementEntry(
+            external_id="op-1",
+            amount=total + 500,  # заплатили больше, чем нужно, одной операцией
+            purpose=f"Оплата по счету № {outcome.invoice_no} от 22.07.2026",
+            operation_date=utcnow(),
+        ),
+    ]
+    settings._fake_entries = entries  # type: ignore[attr-defined]
+    monkeypatch.setattr(svc, "TBankStatementProvider", _FakeStatementProvider)
+
+    outcomes = svc.reconcile(db, settings)
+
+    assert len(outcomes) == 1
+    assert outcomes[0].applied
+    with db.session() as session:
+        payment = session.execute(
+            select(Payment).where(Payment.id == outcome.payment_id)
+        ).scalar_one()
+        assert payment.status == PaymentStatus.SUCCEEDED
+        assert payment.amount_mismatch is True
+        assert payment.amount_mismatch_bank_amount == total + 500
+
+
+def test_check_status_sums_partial_payments(db: Database, monkeypatch) -> None:
+    """Разовая проверка по кнопке «Проверить статус оплаты» (RequisitesQrProvider.
+    check_status) должна закрывать счёт по той же логике суммирования, что и
+    фоновая сверка — см. DECISIONS_LOG.md №51."""
+    gid = make_giveaway(db)
+    pid = make_participant(db)
+    outcome = make_pending_payment(db, giveaway_id=gid, participant_id=pid, quantity=1)
+    assert outcome.ok
+    assert outcome.invoice_no is not None
+    assert outcome.order_id is not None
+    total = outcome.amount or 0
+
+    entries = [
+        BankStatementEntry(
+            external_id="op-1",
+            amount=1000,
+            purpose=f"Оплата по счету № {outcome.invoice_no} от 22.07.2026",
+            operation_date=utcnow(),
+        ),
+        BankStatementEntry(
+            external_id="op-2",
+            amount=total - 1000,
+            purpose=f"Оплата по счету № {outcome.invoice_no} от 23.07.2026",
+            operation_date=utcnow(),
+        ),
+    ]
+    monkeypatch.setattr(
+        "app.payments.tbank_statement.TBankStatementProvider",
+        _FakeStatementProvider,
+    )
+    db.settings._fake_entries = entries  # type: ignore[attr-defined]
+
+    provider = RequisitesQrProvider(
+        recipient_name="ООО Тест",
+        recipient_inn="7700000000",
+        recipient_kpp="",
+        personal_acc="40702810900000000000",
+        bank_name="Т-Банк",
+        bic="044525974",
+        corresp_acc="30101810145250000974",
+        vat_rate_percent=20,
+        db=db,
+    )
+    status = provider.check_status(outcome.order_id, external_payment_id=outcome.invoice_no)
+    assert status == PaymentStatus.SUCCEEDED
 
 
 def _all_runs(db: Database) -> list[BankReconciliationRun]:

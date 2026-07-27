@@ -6,7 +6,7 @@
 провайдера ОДНОГО платежа (создание/статус/отмена конкретной операции у банка-
 эквайера), тогда как эта — источник СПИСКА входящих операций по счёту за период,
 не привязанный к конкретному платежу нашей системы (сопоставление — отдельный шаг,
-см. bank_reconciliation_service.find_matching_entry).
+см. bank_reconciliation_service.find_matching_entries).
 """
 
 from __future__ import annotations

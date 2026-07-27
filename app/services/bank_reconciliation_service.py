@@ -1,14 +1,20 @@
 """Сверка входящих платежей по выписке расчётного счёта с неоплаченными счетами
-`requisites_qr` (см. DECISIONS_LOG.md №38/39, ARCHITECTURE.md §3/§4).
+`requisites_qr` (см. DECISIONS_LOG.md №38/39/51, ARCHITECTURE.md §3/§4).
 
 Сопоставление — по назначению платежа (префикс розыгрыша + номер счёта,
 `Giveaway.format_invoice_number` — `Giveaway.prefix` уникален по всей системе, см.
 app/models/giveaway.py, поэтому номер счёта `PREFIX-NNNNN` тоже уникален глобально
-и однозначно указывает на один `Payment`) И точному совпадению суммы операции с
-`Payment.amount`. Операция с совпавшим назначением, но другой суммой, счёт не
-закрывает (остаётся PENDING до ручной проверки/TTL) — вместо этого помечается на
-`Payment` (`amount_mismatch`/`amount_mismatch_bank_amount`) для подсветки в панели
-(«Продажи») и логируется (`bank_statement_amount_mismatch`).
+и однозначно указывает на один `Payment`). Все операции с таким назначением в окне
+выписки СУММИРУЮТСЯ (участник мог доплатить недостающее отдельным переводом по тому
+же QR) и сравниваются с `Payment.amount`:
+
+- сумма >= ожидаемой — счёт закрывается (`SUCCEEDED`); если пришло больше, чем нужно,
+  разница дополнительно помечается на `Payment` (`amount_mismatch`/
+  `amount_mismatch_bank_amount`) как переплата, для подсветки в панели «Продажи» —
+  заказ при этом уже выполнен, возврат вне объёма ТЗ §21;
+- сумма < ожидаемой — счёт остаётся `PENDING`, помечается тем же способом как
+  недоплата (та же пара полей, разница в отображении — см. `SalesPage.tsx`) и
+  логируется (`bank_statement_amount_mismatch`).
 """
 
 from __future__ import annotations
@@ -40,40 +46,15 @@ logger = structlog.get_logger(__name__)
 _ERROR_MESSAGE_MAX_LEN = 2000
 
 
-@dataclass(frozen=True)
-class InvoiceMatchResult:
-    matched: BankStatementEntry | None
-    """Точное совпадение — назначение платежа И сумма. Готово к финализации."""
-    mismatched: BankStatementEntry | None
-    """Назначение платежа совпало, сумма — нет (первая такая операция в выписке).
-    Не финализирует счёт — только повод подсветить его в панели оператору."""
-
-
-def find_matching_entry(
-    entries: list[BankStatementEntry], invoice_no: str, expected_amount: int
-) -> InvoiceMatchResult:
-    """Совпадение по номеру счёта в назначении платежа И точной сумме. Операция
-    с верным назначением, но другой суммой, не считается совпадением (не должна
-    закрывать счёт по неполной/избыточной оплате) — возвращается отдельно
-    (`mismatched`) для сохранения на `Payment`, чтобы оператор увидел расхождение
-    в панели."""
+def find_matching_entries(
+    entries: list[BankStatementEntry], invoice_no: str
+) -> list[BankStatementEntry]:
+    """Все операции в выписке, чьё назначение платежа указывает на этот счёт (по
+    номеру), в порядке появления в выписке. Сумма считается отдельно в `reconcile()`
+    — несколько частичных переводов по одному счёту суммируются, а не сопоставляются
+    по одной точно совпавшей операции (см. DECISIONS_LOG.md №51)."""
     pattern = re.compile(r"№?\s*" + re.escape(invoice_no) + r"\b")
-    mismatched: BankStatementEntry | None = None
-    for entry in entries:
-        if not pattern.search(entry.purpose):
-            continue
-        if entry.amount == expected_amount:
-            return InvoiceMatchResult(matched=entry, mismatched=None)
-        if mismatched is None:
-            mismatched = entry
-        logger.warning(
-            "bank_statement_amount_mismatch",
-            invoice_no=invoice_no,
-            expected_amount=expected_amount,
-            actual_amount=entry.amount,
-            external_id=entry.external_id,
-        )
-    return InvoiceMatchResult(matched=None, mismatched=mismatched)
+    return [entry for entry in entries if pattern.search(entry.purpose)]
 
 
 def reconcile(
@@ -155,37 +136,58 @@ def reconcile(
     finalize_error_count = 0
     for payment in candidates:
         invoice_no = payment.giveaway.format_invoice_number(payment.payment_number)  # type: ignore[arg-type]
-        result = find_matching_entry(entries, invoice_no, payment.amount)
-        if result.matched is not None:
-            matched_count += 1
-            try:
-                outcome = payment_svc.finalize_payment(
-                    db,
-                    order_id=payment.order_id,
-                    new_status=PaymentStatus.SUCCEEDED,
-                    raw_payload={
-                        "bank_entry": {
-                            "external_id": result.matched.external_id,
-                            "amount": result.matched.amount,
-                            "purpose": result.matched.purpose,
-                            "operation_date": result.matched.operation_date.isoformat(),
-                        }
-                    },
-                    now=now,
-                )
-                if outcome.applied or outcome.late_success_no_tickets:
-                    outcomes.append(outcome)
-            except Exception:
-                logger.exception("bank_statement_finalize_failed", payment_id=payment.id)
-                finalize_error_count += 1
-            continue
+        matching_entries = find_matching_entries(entries, invoice_no)
+        if matching_entries:
+            total_received = sum(entry.amount for entry in matching_entries)
+            if total_received >= payment.amount:
+                matched_count += 1
+                try:
+                    outcome = payment_svc.finalize_payment(
+                        db,
+                        order_id=payment.order_id,
+                        new_status=PaymentStatus.SUCCEEDED,
+                        raw_payload={
+                            "bank_entries": [
+                                {
+                                    "external_id": entry.external_id,
+                                    "amount": entry.amount,
+                                    "purpose": entry.purpose,
+                                    "operation_date": entry.operation_date.isoformat(),
+                                }
+                                for entry in matching_entries
+                            ],
+                            "total_received": total_received,
+                        },
+                        now=now,
+                    )
+                    if outcome.applied or outcome.late_success_no_tickets:
+                        outcomes.append(outcome)
+                        overpaid = total_received - payment.amount
+                        if overpaid > 0:
+                            # Заказ уже закрыт (номерки выданы) — переплата не
+                            # блокирует финализацию, только подсвечивается оператору
+                            # тем же полем, что и недоплата (см. DECISIONS_LOG.md
+                            # №51); возврат разницы — вне объёма ТЗ §21.
+                            _mark_amount_mismatch(
+                                db, payment_id=payment.id, bank_amount=total_received
+                            )
+                except Exception:
+                    logger.exception("bank_statement_finalize_failed", payment_id=payment.id)
+                    finalize_error_count += 1
+                continue
 
-        if result.mismatched is not None:
             mismatch_count += 1
-            _mark_amount_mismatch(db, payment_id=payment.id, bank_amount=result.mismatched.amount)
-            # Деньги по этому счёту фактически идут (просто не той суммой) — не
-            # даём TTL молча похоронить его как FAILED, пока расхождение не
-            # разобрано оператором вручную в панели (см. DECISIONS_LOG.md №39).
+            logger.warning(
+                "bank_statement_amount_mismatch",
+                invoice_no=invoice_no,
+                expected_amount=payment.amount,
+                actual_amount=total_received,
+                entries_count=len(matching_entries),
+            )
+            _mark_amount_mismatch(db, payment_id=payment.id, bank_amount=total_received)
+            # Деньги по этому счёту фактически идут (просто пока недостаточно) — не
+            # даём TTL молча похоронить его как FAILED, пока сумма не наберётся или
+            # расхождение не разберёт оператор вручную в панели (см. DECISIONS_LOG.md №39).
             continue
 
         if payment.status == PaymentStatus.PENDING and payment.created_at < ttl_cutoff:
