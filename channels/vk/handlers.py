@@ -691,9 +691,14 @@ async def _send_pending_payments(
         if not p.has_receipt:
             if has_buttons:
                 keyboard.row()
+            # Без номера счёта: VK жёстко ограничивает label кнопки 40 символами
+            # (VKAPIError_911), а `invoice_line` с длинным префиксом розыгрыша
+            # легко превышает лимит — сумма (в отличие от номера счёта) уже
+            # достаточно, чтобы отличить кнопки друг от друга, полная строка с
+            # номером счёта и так есть в тексте выше.
             keyboard.add(
                 Callback(
-                    f"📎 Прислать квитанцию — {p.amount / 100:.2f} ₽{invoice_line}",
+                    f"📎 Прислать квитанцию — {p.amount / 100:.2f} ₽",
                     payload={"a": "select_payment_receipt", "id": p.payment_id},
                 )
             )
