@@ -40,6 +40,7 @@ class PurchaseStates(BaseStateGroup):
     CHOOSING_QUANTITY = "purchase:choosing_quantity"
     AWAITING_PHONE_FOR_GIFT = "purchase:awaiting_phone_for_gift"
     CONFIRMING_ORDER = "purchase:confirming_order"
+    AWAITING_RECEIPT = "purchase:awaiting_receipt"
 
 
 class RegistrationStates(BaseStateGroup):
