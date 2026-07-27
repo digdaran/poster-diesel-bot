@@ -10,31 +10,26 @@ export function SettingsPage() {
   const { hasPermission } = useAuth();
   const { showToast } = useToast();
   const [settings, setSettings] = useState<PlatformSettings | null>(null);
-  const [contactsText, setContactsText] = useState("");
+  const [telegramContact, setTelegramContact] = useState("");
+  const [vkContact, setVkContact] = useState("");
 
   const load = () =>
     void SettingsApi.get().then((s) => {
       setSettings(s);
-      setContactsText(JSON.stringify(s.support_contacts, null, 2));
+      setTelegramContact(s.support_contacts.telegram ?? "");
+      setVkContact(s.support_contacts.vk ?? "");
     });
   useEffect(load, []);
 
-  const parseContacts = (): Record<string, string> | null => {
-    try {
-      return JSON.parse(contactsText);
-    } catch {
-      return null;
-    }
-  };
-
   const { run: saveContacts, pending: savingContacts } = useAsyncAction(async () => {
-    const parsed = parseContacts();
-    if (!parsed) {
-      showToast("Контакты поддержки должны быть валидным JSON-объектом", "error");
-      return;
-    }
+    const merged = {
+      ...settings?.support_contacts,
+      telegram: telegramContact.trim(),
+      vk: vkContact.trim(),
+    };
+    const contacts = Object.fromEntries(Object.entries(merged).filter(([, v]) => v !== ""));
     try {
-      await SettingsApi.updateSupportContacts(parsed);
+      await SettingsApi.updateSupportContacts(contacts);
       showToast("Контакты поддержки сохранены");
       load();
     } catch (err) {
@@ -61,19 +56,30 @@ export function SettingsPage() {
       <section>
         <h2>Контакты поддержки</h2>
         <p className="settings-hint">
-          Ключи <code>telegram</code> и <code>vk</code> — зарезервированы: значение по ним
-          используется как ссылка на кнопку «Написать в поддержку» в соответствующем боте
-          (можно указать полную ссылку вида <code>https://t.me/username</code> /{" "}
-          <code>https://vk.com/id...</code>, либо просто юзернейм — ссылка достроится
-          автоматически). Остальные ключи (например, <code>email</code>, <code>phone</code>)
-          показываются участнику только текстом в разделе «Помощь».
+          Кнопка «Написать в поддержку» в боте откроет чат по указанной ссылке. Можно ввести
+          юзернейм/ссылку — если оставить поле пустым, участнику покажется обычный текст помощи
+          без кнопки для этой платформы.
         </p>
-        <textarea
-          rows={6}
-          value={contactsText}
-          onChange={(e) => setContactsText(e.target.value)}
-          disabled={!hasPermission("settings_edit_support_contacts")}
-        />
+        <label className="settings-field">
+          Telegram
+          <input
+            type="text"
+            placeholder="username или https://t.me/username"
+            value={telegramContact}
+            onChange={(e) => setTelegramContact(e.target.value)}
+            disabled={!hasPermission("settings_edit_support_contacts")}
+          />
+        </label>
+        <label className="settings-field">
+          VK
+          <input
+            type="text"
+            placeholder="id/короткое имя или https://vk.com/..."
+            value={vkContact}
+            onChange={(e) => setVkContact(e.target.value)}
+            disabled={!hasPermission("settings_edit_support_contacts")}
+          />
+        </label>
         {hasPermission("settings_edit_support_contacts") && (
           <button onClick={saveContacts} disabled={savingContacts}>
             {savingContacts ? "Сохраняем…" : "Сохранить"}
