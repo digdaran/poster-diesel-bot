@@ -147,7 +147,7 @@ class RequisitesQrProvider(BasePaymentProvider):
             return PaymentStatus.PENDING
 
         # Та же логика суммирования, что и в фоновой сверке (см.
-        # bank_reconciliation_service.reconcile, DECISIONS_LOG.md №51) — несколько
+        # bank_reconciliation_service.reconcile, DECISIONS_LOG.md №53) — несколько
         # частичных переводов по одному счёту тоже должны закрывать его здесь, а не
         # только на следующем тике фонового цикла. Расхождение (в т.ч. переплата) эта
         # разовая проверка не помечает на Payment — этим по-прежнему занимается

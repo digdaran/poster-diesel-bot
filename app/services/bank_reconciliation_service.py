@@ -1,5 +1,5 @@
 """Сверка входящих платежей по выписке расчётного счёта с неоплаченными счетами
-`requisites_qr` (см. DECISIONS_LOG.md №38/39/51, ARCHITECTURE.md §3/§4).
+`requisites_qr` (см. DECISIONS_LOG.md №38/39/53/54, ARCHITECTURE.md §3/§4).
 
 Сопоставление — по назначению платежа (префикс розыгрыша + номер счёта,
 `Giveaway.format_invoice_number` — `Giveaway.prefix` уникален по всей системе, см.
@@ -52,7 +52,7 @@ def find_matching_entries(
     """Все операции в выписке, чьё назначение платежа указывает на этот счёт (по
     номеру), в порядке появления в выписке. Сумма считается отдельно в `reconcile()`
     — несколько частичных переводов по одному счёту суммируются, а не сопоставляются
-    по одной точно совпавшей операции (см. DECISIONS_LOG.md №51)."""
+    по одной точно совпавшей операции (см. DECISIONS_LOG.md №53)."""
     pattern = re.compile(r"№?\s*" + re.escape(invoice_no) + r"\b")
     return [entry for entry in entries if pattern.search(entry.purpose)]
 
@@ -167,10 +167,20 @@ def reconcile(
                             # Заказ уже закрыт (номерки выданы) — переплата не
                             # блокирует финализацию, только подсвечивается оператору
                             # тем же полем, что и недоплата (см. DECISIONS_LOG.md
-                            # №51); возврат разницы — вне объёма ТЗ §21.
+                            # №53); возврат разницы — вне объёма ТЗ §21.
                             _mark_amount_mismatch(
                                 db, payment_id=payment.id, bank_amount=total_received
                             )
+                        else:
+                            # Точная сумма — явно СБРАСЫВАЕМ флаг расхождения: на
+                            # более раннем тике (пока сумма ещё не набралась) он мог
+                            # быть выставлен с недостающей суммой, а finalize_payment
+                            # не трогает эти поля сам. `SUCCEEDED` больше никогда не
+                            # попадёт в кандидатов reconcile() снова — если не
+                            # стереть стало нечем здесь, панель навсегда покажет
+                            # закрытый заказ как "не хватает" (найдено на реальном
+                            # тесте в проде, см. DECISIONS_LOG.md №54).
+                            _clear_amount_mismatch(db, payment_id=payment.id)
                 except Exception:
                     logger.exception("bank_statement_finalize_failed", payment_id=payment.id)
                     finalize_error_count += 1
@@ -227,6 +237,18 @@ def _mark_amount_mismatch(db: Database, *, payment_id: int, bank_amount: int) ->
             )
     except Exception:
         logger.exception("bank_statement_mismatch_persist_failed", payment_id=payment_id)
+
+
+def _clear_amount_mismatch(db: Database, *, payment_id: int) -> None:
+    try:
+        with db.session() as session:
+            session.execute(
+                update(Payment)
+                .where(Payment.id == payment_id)
+                .values(amount_mismatch=False, amount_mismatch_bank_amount=None)
+            )
+    except Exception:
+        logger.exception("bank_statement_mismatch_clear_failed", payment_id=payment_id)
 
 
 def _record_run(

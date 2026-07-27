@@ -306,7 +306,7 @@ def test_reconcile_sums_two_partial_payments_to_close_invoice(
     db: Database, settings: Settings, monkeypatch
 ) -> None:
     """Участник доплатил недостающее отдельным переводом по тому же QR — сумма двух
-    операций точно закрывает счёт, без пометки расхождения (см. DECISIONS_LOG.md №51)."""
+    операций точно закрывает счёт, без пометки расхождения (см. DECISIONS_LOG.md №53)."""
     gid = make_giveaway(db)
     pid = make_participant(db)
     outcome = make_pending_payment(db, giveaway_id=gid, participant_id=pid, quantity=1)
@@ -335,6 +335,67 @@ def test_reconcile_sums_two_partial_payments_to_close_invoice(
 
     assert len(outcomes) == 1
     assert outcomes[0].applied
+    with db.session() as session:
+        payment = session.execute(
+            select(Payment).where(Payment.id == outcome.payment_id)
+        ).scalar_one()
+        assert payment.status == PaymentStatus.SUCCEEDED
+        assert payment.amount_mismatch is False
+        assert payment.amount_mismatch_bank_amount is None
+
+
+def test_reconcile_clears_stale_mismatch_flag_once_sum_matches_exactly(
+    db: Database, settings: Settings, monkeypatch
+) -> None:
+    """Регресс, найденный на реальном тесте в проде (см. DECISIONS_LOG.md №54): первый
+    тик видит только часть суммы и помечает счёт расхождением; второй тик — после
+    доплаты остатка — должен не только закрыть заказ, но и СБРОСИТЬ стухший флаг,
+    иначе он навсегда останется висеть на уже успешно закрытом заказе (`finalize_payment`
+    не трогает `amount_mismatch`, а `SUCCEEDED` больше никогда не попадёт в `reconcile()`
+    повторно — стереть стало нечем, кроме как явно в момент закрытия)."""
+    gid = make_giveaway(db)
+    pid = make_participant(db)
+    outcome = make_pending_payment(db, giveaway_id=gid, participant_id=pid, quantity=1)
+    assert outcome.ok
+    assert outcome.invoice_no is not None
+    total = outcome.amount or 0
+    monkeypatch.setattr(svc, "TBankStatementProvider", _FakeStatementProvider)
+
+    # Тик 1: пришла только часть суммы.
+    settings._fake_entries = [  # type: ignore[attr-defined]
+        BankStatementEntry(
+            external_id="op-1",
+            amount=1000,
+            purpose=f"Оплата по счету № {outcome.invoice_no} от 22.07.2026",
+            operation_date=utcnow(),
+        )
+    ]
+    svc.reconcile(db, settings)
+    with db.session() as session:
+        payment = session.execute(
+            select(Payment).where(Payment.id == outcome.payment_id)
+        ).scalar_one()
+        assert payment.status == PaymentStatus.PENDING
+        assert payment.amount_mismatch is True
+        assert payment.amount_mismatch_bank_amount == 1000
+
+    # Тик 2: доплата остатка — сумма теперь точно совпадает.
+    settings._fake_entries = [  # type: ignore[attr-defined]
+        BankStatementEntry(
+            external_id="op-1",
+            amount=1000,
+            purpose=f"Оплата по счету № {outcome.invoice_no} от 22.07.2026",
+            operation_date=utcnow(),
+        ),
+        BankStatementEntry(
+            external_id="op-2",
+            amount=total - 1000,
+            purpose=f"Оплата по счету № {outcome.invoice_no} от 23.07.2026",
+            operation_date=utcnow(),
+        ),
+    ]
+    svc.reconcile(db, settings)
+
     with db.session() as session:
         payment = session.execute(
             select(Payment).where(Payment.id == outcome.payment_id)
@@ -423,7 +484,7 @@ def test_reconcile_closes_invoice_and_flags_overpayment_when_sum_exceeds(
 def test_check_status_sums_partial_payments(db: Database, monkeypatch) -> None:
     """Разовая проверка по кнопке «Проверить статус оплаты» (RequisitesQrProvider.
     check_status) должна закрывать счёт по той же логике суммирования, что и
-    фоновая сверка — см. DECISIONS_LOG.md №51."""
+    фоновая сверка — см. DECISIONS_LOG.md №53."""
     gid = make_giveaway(db)
     pid = make_participant(db)
     outcome = make_pending_payment(db, giveaway_id=gid, participant_id=pid, quantity=1)
