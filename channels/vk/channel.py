@@ -94,11 +94,16 @@ class VkChannel(BaseMessengerChannel):
     )
 
     def __init__(self, *, token: str, group_id: int | None = None) -> None:
-        # group_id не обязателен — при отсутствии BotPolling сам резолвит его
-        # через groups.getById по токену сообщества (VK_GROUP_ID в .env — опционален).
+        # group_id не обязателен для polling — при отсутствии BotPolling сам
+        # резолвит его через groups.getById по токену сообщества (VK_GROUP_ID
+        # в .env — опционален для канала с polling). Но `is_messages_allowed`
+        # (проактивная сверка разрешений, вне контекста polling — см.
+        # backend/background) требует его явно, т.к. без запущенного polling
+        # сам не резолвится.
         api = API(token)
         polling = BotPolling(api, group_id=group_id)
         self.bot = Bot(api=api, polling=polling)
+        self.group_id = group_id
 
     async def send_message(self, external_user_id: str, text: str, **kwargs: Any) -> None:
         await self.bot.api.messages.send(
@@ -204,6 +209,23 @@ class VkChannel(BaseMessengerChannel):
         else:
             await self.send_message(external_user_id, intro)
         await self.send_ticket_codes(external_user_id, codes)
+
+    async def is_messages_allowed(self, external_user_id: str) -> bool:
+        """Живая проверка через `messages.isMessagesFromGroupAllowed` — источник
+        истины у самого VK, в отличие от локально закэшенного
+        `ChannelBinding.messages_allowed`, который обновляется только пассивно
+        по Long Poll `message_allow`/`message_deny` (`on_message_allow`/
+        `on_message_deny` в `channels/vk/handlers.py`) и может разойтись с
+        реальным состоянием — напр. если пользователь сам начал переписку с
+        сообществом первым, VK не всегда шлёт `message_allow` отдельным
+        событием, хотя разрешение уже действует (см.
+        `backend/background._reconcile_vk_permissions`, DECISIONS_LOG.md №61)."""
+        if self.group_id is None:
+            raise RuntimeError("VK_GROUP_ID не задан — is_messages_allowed требует явный group_id")
+        result = await self.bot.api.messages.is_messages_from_group_allowed(
+            group_id=self.group_id, user_id=int(external_user_id)
+        )
+        return bool(result.is_allowed)
 
     async def handle_update(self, update: Any) -> None:
         """При Long Poll диспетчеризация обычно идёт напрямую через

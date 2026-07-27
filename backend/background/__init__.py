@@ -16,7 +16,8 @@ import structlog
 from app.core.config import Settings
 from app.core.db import Database
 from app.models.base import utcnow
-from app.models.enums import PaymentProviderType, PaymentStatus
+from app.models.channel_binding import ChannelBinding
+from app.models.enums import ChannelType, PaymentProviderType, PaymentStatus
 from app.models.payment import Payment
 from app.payments.factory import create_provider
 from app.repositories import ticket_pool_repo as pool_repo
@@ -24,7 +25,7 @@ from app.services import bank_reconciliation_service, notification_service
 from app.services import manual_registration_service as manual_svc
 from app.services import payment_service as payment_svc
 from app.services.payment_service import FinalizeOutcome
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 if TYPE_CHECKING:
     from channels.telegram.channel import TelegramChannel
@@ -105,6 +106,48 @@ def _release_expired_manual_registrations(
             )
 
 
+_VK_PERMISSION_RECONCILE_BATCH = 50
+
+
+async def _reconcile_vk_permissions(db: Database, vk_channel: VkChannel | None) -> None:
+    """Сверяет `ChannelBinding.messages_allowed` с реальным состоянием в VK
+    (`VkChannel.is_messages_allowed`) для привязок, где локальный флаг ещё не
+    известен (`IS NULL`) — см. DECISIONS_LOG.md №61. Локальный флаг обновляется
+    только пассивно по Long Poll `message_allow`/`message_deny`
+    (`channels/vk/handlers.py`), а VK не всегда шлёт `message_allow`, если
+    пользователь сам начал переписку с сообществом первым — разрешение у VK уже
+    действует, но наш кэш так и остаётся `NULL` навсегда без этой сверки.
+    Батч ограничен, чтобы не заливать VK API запросами при росте базы —
+    непросверенные строки просто дождутся следующего тика."""
+    if vk_channel is None:
+        return
+    with db.session() as session:
+        bindings = list(
+            session.execute(
+                select(ChannelBinding.id, ChannelBinding.external_user_id)
+                .where(
+                    ChannelBinding.channel == ChannelType.VK,
+                    ChannelBinding.messages_allowed.is_(None),
+                )
+                .limit(_VK_PERMISSION_RECONCILE_BATCH)
+            )
+            .tuples()
+            .all()
+        )
+    for binding_id, external_user_id in bindings:
+        try:
+            allowed = await vk_channel.is_messages_allowed(external_user_id)
+        except Exception:
+            logger.exception("vk_messages_allowed_check_failed", external_user_id=external_user_id)
+            continue
+        with db.session() as session:
+            session.execute(
+                update(ChannelBinding)
+                .where(ChannelBinding.id == binding_id)
+                .values(messages_allowed=allowed)
+            )
+
+
 async def run_background_loop(
     db: Database,
     settings: Settings,
@@ -118,7 +161,9 @@ async def run_background_loop(
     финализированных платежах (`notification_service`) отправляются уже после
     возврата на event loop, т.к. отправка сообщений в мессенджер — асинхронный
     сетевой вызов. `notification_service` сам выбирает каналы получателя
-    (Telegram И VK одновременно, по привязкам) — см. DECISIONS_LOG.md №43."""
+    (Telegram И VK одновременно, по привязкам) — см. DECISIONS_LOG.md №43.
+    Дополнительно каждый тик сверяет `ChannelBinding.messages_allowed` для VK
+    через `_reconcile_vk_permissions` — см. DECISIONS_LOG.md №61."""
     while True:
         try:
             outcomes = await asyncio.to_thread(_reconcile_pending_payments, db, settings)
@@ -134,6 +179,7 @@ async def run_background_loop(
                         await notification_service.notify_payment_outcome(
                             db, outcome, telegram_channel=telegram_channel, vk_channel=vk_channel
                         )
+            await _reconcile_vk_permissions(db, vk_channel)
         except Exception:
             logger.exception("background_reconciliation_tick_failed")
         await asyncio.sleep(settings.online_status_poll_interval_sec)
