@@ -1,8 +1,10 @@
-"""Проактивное уведомление участника об исходе онлайн-платежа — единая точка
-для всех вызывающих контекстов вне живого запроса бота (фоновая сверка
-банковской выписки — см. app/services/bank_reconciliation_service.py,
-backend/background), по прямому запросу заказчика (продуктовое решение сверх
-(локально усечённого) ТЗ, см. DECISIONS.md).
+"""Проактивное уведомление участника об исходе онлайн-платежа и о подтверждении
+ручной (офлайн) регистрации — единая точка для всех вызывающих контекстов вне
+живого запроса бота (фоновая сверка банковской выписки — см.
+app/services/bank_reconciliation_service.py, backend/background; подтверждение
+ручной регистрации оператором — см. backend/api/manual_registrations.py), по
+прямому запросу заказчика (продуктовое решение сверх (локально усечённого) ТЗ,
+см. DECISIONS.md).
 
 Адресуется участнику-получателю (`Payment.participant_id`) через ВСЕ его
 привязки каналов одновременно (`_resolve_notify_targets`). Если у получателя
@@ -31,6 +33,7 @@ from app.core.db import Database
 from app.models.channel_binding import ChannelBinding
 from app.models.enums import ChannelType, PaymentStatus
 from app.models.giveaway import Giveaway
+from app.models.ticket import Ticket
 from app.services import settings_service
 from app.services.payment_service import FinalizeOutcome
 
@@ -225,4 +228,54 @@ async def notify_late_success_no_tickets(
                 "notify_late_success_no_tickets_channel_failed",
                 channel=channel_type.value,
                 participant_id=outcome.participant_id,
+            )
+
+
+async def notify_manual_registration_confirmed(
+    db: Database,
+    *,
+    participant_id: int,
+    giveaway_id: int,
+    tickets: list[Ticket],
+    telegram_channel: NotifiableChannel | None,
+    vk_channel: NotifiableChannel | None,
+) -> None:
+    """Уведомляет участника о выдаче номерков по ручной (офлайн) регистрации,
+    подтверждённой оператором в панели (п.7.7 ТЗ). Уходит во ВСЕ каналы с
+    подходящей привязкой одновременно, как и `notify_payment_outcome` (см.
+    `_resolve_notify_targets`, DECISIONS_LOG.md №43) — в отличие от онлайн-оплаты
+    здесь нет чата-инициатора покупки (регистрацию создаёт оператор в панели,
+    не участник в боте), поэтому фолбэка на инициирующий чат нет: если у
+    участника нет ни одной привязки каналов — тихо ничего не делает."""
+    targets = _resolve_notify_targets(db, participant_id)
+    if not targets:
+        return
+
+    with db.session() as session:
+        giveaway = session.get(Giveaway, giveaway_id)
+        poster_path = (
+            random.choice([p.file_path for p in giveaway.posters])
+            if giveaway is not None and giveaway.posters
+            else None
+        )
+    codes = [t.full_code for t in tickets]
+
+    for channel_type, external_user_id in targets:
+        channel = _channel_for(
+            channel_type, telegram_channel=telegram_channel, vk_channel=vk_channel
+        )
+        if channel is None:
+            continue
+        try:
+            await channel.deliver_purchase(
+                external_user_id,
+                poster_path=poster_path,
+                codes=codes,
+                intro="Ваша регистрация подтверждена! Ваши постеры куплены, номера:",
+            )
+        except Exception:
+            logger.exception(
+                "notify_manual_registration_confirmed_channel_failed",
+                channel=channel_type.value,
+                participant_id=participant_id,
             )

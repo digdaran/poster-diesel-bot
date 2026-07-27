@@ -12,16 +12,25 @@ from app.models.enums import AuditActorType, ManualRegistrationStatus
 from app.models.manual_registration import ManualRegistration
 from app.models.panel_user import PanelUser
 from app.models.participant import Participant
-from app.services import audit_service, participant_service
+from app.services import audit_service, notification_service, participant_service
 from app.services import manual_registration_service as svc
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, contains_eager, joinedload
 
-from backend.api.deps import get_database, get_session, get_settings_dep, require_permission
+from backend.api.deps import (
+    get_database,
+    get_session,
+    get_settings_dep,
+    get_telegram_channel,
+    get_vk_channel,
+    require_permission,
+)
 from backend.api.export_utils import ExportFormat, maybe_export
 from backend.api.pagination import count_total, page_bounds, validate_page_size
 from backend.api.schemas import ManualRegistrationCreateRequest, ManualRegistrationOut
+from channels.telegram.channel import TelegramChannel
+from channels.vk.channel import VkChannel
 
 router = APIRouter(prefix="/manual-registrations", tags=["manual-registrations"])
 
@@ -185,14 +194,18 @@ def create_manual_registration(
 
 
 @router.post("/{registration_id}/confirm", response_model=ManualRegistrationOut)
-def confirm_manual_registration(
+async def confirm_manual_registration(
     registration_id: int,
     request: Request,
     db: Database = Depends(get_database),
     user: PanelUser = Depends(require_permission(Permission.MANUAL_REGISTRATION_CONFIRM)),
+    telegram_channel: TelegramChannel | None = Depends(get_telegram_channel),
+    vk_channel: VkChannel | None = Depends(get_vk_channel),
 ) -> ManualRegistrationOut:
     try:
-        svc.confirm_manual_registration(db, manual_registration_id=registration_id)
+        confirm_outcome = svc.confirm_manual_registration(
+            db, manual_registration_id=registration_id
+        )
     except svc.ManualRegistrationStateError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
@@ -209,7 +222,20 @@ def confirm_manual_registration(
             entity_id=registration_id,
             ip_address=request.client.host if request.client else None,
         )
-        return _to_out(session, registration)
+        out = _to_out(session, registration)
+        participant_id = registration.participant_id
+        giveaway_id = registration.giveaway_id
+
+    if telegram_channel is not None or vk_channel is not None:
+        await notification_service.notify_manual_registration_confirmed(
+            db,
+            participant_id=participant_id,
+            giveaway_id=giveaway_id,
+            tickets=confirm_outcome.tickets,
+            telegram_channel=telegram_channel,
+            vk_channel=vk_channel,
+        )
+    return out
 
 
 @router.post("/{registration_id}/cancel", response_model=ManualRegistrationOut)
