@@ -172,7 +172,7 @@ async def notify_payment_outcome(
                     external_user_id,
                     poster_path=poster_path,
                     codes=codes,
-                    intro="Оплата прошла успешно! Ваши номера:",
+                    intro="Оплата прошла успешно! Ваши постеры куплены, номера:",
                 )
             else:
                 await channel.send_message(external_user_id, _FAILURE_TEXT)
