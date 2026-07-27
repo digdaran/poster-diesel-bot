@@ -653,8 +653,12 @@ async def _create_and_offer_payment(
                     qr_payload,
                     caption=(
                         "Отсканируйте QR-код в банковском приложении и оплатите по реквизитам.\n"
-                        "После оплаты пришлите сюда квитанцию — номера придут после зачисления "
-                        "денег на расчётный счёт (может занять несколько дней)."
+                        "Этот QR-код действителен только для данного счёта: не используйте его "
+                        "повторно для оплаты другого заказа и не меняйте сумму или назначение "
+                        "платежа — иначе оплата не будет засчитана автоматически.\n"
+                        "После оплаты пришлите сюда квитанцию — постеры с присвоенными номерами "
+                        "придут после зачисления денег на расчётный счёт (как правило, до 30 "
+                        "минут, в редких случаях — до 3 дней)."
                     ),
                 )
                 qr_sent = True
@@ -697,7 +701,7 @@ async def _deliver_tickets(message: Message, outcome: payment_svc.FinalizeOutcom
         str(message.chat.id),
         poster_path=poster_path,
         codes=codes,
-        intro="Оплата прошла успешно! Ваши номера:",
+        intro="Оплата прошла успешно! Ваши постеры куплены, номера:",
     )
 
 
@@ -726,7 +730,7 @@ async def on_my_tickets(message: Message) -> None:
         return
 
     if tickets:
-        await message.answer(f"Ваши номера ({len(tickets)}):")
+        await message.answer(f"Ваши постеры ({len(tickets)} шт.), номера:")
         await _get_channel().send_ticket_codes(str(message.chat.id), [t.full_code for t in tickets])
 
     if pending_payments:
