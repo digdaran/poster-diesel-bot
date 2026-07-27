@@ -124,20 +124,18 @@ class TelegramChannel(BaseMessengerChannel):
             resize_keyboard=True,
         )
 
-    def render_payment_prompt(
-        self, *, payment_url: str | None, order_id: str, has_qr: bool
-    ) -> InlineKeyboardMarkup:
-        rows: list[list[InlineKeyboardButton]] = []
-        if payment_url:
-            rows.append([InlineKeyboardButton(text="💳 Оплатить", url=payment_url)])
-        if has_qr:
-            rows.append(
-                [InlineKeyboardButton(text="🔳 Показать QR", callback_data=f"show_qr:{order_id}")]
-            )
-        rows.append(
-            [InlineKeyboardButton(text="🔄 Проверить статус оплаты", callback_data="check_payment")]
+    def render_payment_prompt(self, *, payment_url: str | None) -> InlineKeyboardMarkup | None:
+        """QR отправляется отдельным сообщением сразу при создании платежа
+        (`send_qr_code`), а статус подтверждается фоновой сверкой и проактивным
+        уведомлением (`notification_service`) — своих кнопок для этого больше нет
+        (см. DECISIONS_LOG.md). Кнопка-ссылка остаётся, если у провайдера есть
+        `payment_url`; сейчас (`RequisitesQrProvider`) его нет, так что клавиатуры
+        не будет вовсе."""
+        if not payment_url:
+            return None
+        return InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="💳 Оплатить", url=payment_url)]]
         )
-        return InlineKeyboardMarkup(inline_keyboard=rows)
 
     def render_support_prompt(self, *, url: str) -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(

@@ -43,6 +43,14 @@ class Payment(Base):
     channel: Mapped[ChannelType | None] = mapped_column(
         SAEnum(ChannelType, native_enum=False), nullable=True
     )
+    # ID чата/пользователя в `channel`, из которого была инициирована покупка —
+    # NULL для платежей до появления этого поля и для покупок вне бота (панель).
+    # Используется ТОЛЬКО как fallback-получатель проактивного уведомления
+    # (`notification_service`), когда у участника-получателя платежа нет
+    # `ChannelBinding` (подарочная покупка на неподтверждённый номер получателя,
+    # см. DECISIONS_LOG.md №51/№52) — обычная покупка получает уведомление через
+    # привязку получателя, это поле для неё не используется.
+    initiating_external_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     amount: Mapped[int] = mapped_column(Integer, nullable=False)
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[PaymentStatus] = mapped_column(
@@ -58,9 +66,11 @@ class Payment(Base):
 
     # Ссылка на оплату и содержимое QR (СБП) — one-shot данные от провайдера в
     # момент создания платежа (см. CreatedPayment), сохраняются здесь, т.к.
-    # некоторые провайдеры (Т-Банк) не дают способа получить их повторно позже
-    # (кнопка «Показать QR» в боте открывается отдельным событием без доступа
-    # к транзиентному результату create_payment).
+    # некоторые провайдеры (Т-Банк) не дают способа получить их повторно позже.
+    # Сейчас (`RequisitesQrProvider`) ничего в коде не перечитывает эти поля из
+    # БД — QR отправляется участнику сразу при создании из транзиентного
+    # результата `create_payment`, без кнопки повторного показа (см.
+    # DECISIONS_LOG.md №51) — колонки остаются для ручной сверки/будущих фич.
     payment_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     qr_code_payload: Mapped[str | None] = mapped_column(String(2000), nullable=True)
 

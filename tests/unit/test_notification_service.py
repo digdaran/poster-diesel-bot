@@ -200,6 +200,98 @@ async def test_notify_without_binding_is_noop(db: Database) -> None:
     assert not channel.send_message_calls
 
 
+async def test_notify_success_falls_back_to_initiating_chat_without_binding(db: Database) -> None:
+    """Подарочная покупка на неподтверждённый номер получателя (см.
+    `participant_service.resolve_manual_recipient`, DECISIONS_LOG.md №51/№52):
+    получатель без `ChannelBinding`, но платёж хранит чат, откуда его создал
+    покупатель (`initiating_external_user_id`) — доставка должна уйти туда,
+    а не потеряться, как раньше (см. `test_notify_without_binding_is_noop`,
+    где нет ни привязки, ни инициирующего чата)."""
+    gid = make_giveaway(db)
+    pid = make_participant_without_binding(db)
+    outcome = svc.create_payment_safe(
+        db,
+        make_provider(),
+        giveaway_id=gid,
+        participant_id=pid,
+        participant_phone="79997654321",
+        quantity=1,
+        channel=ChannelType.TELEGRAM,
+        initiating_external_user_id="buyer-chat-1",
+    )
+    assert outcome.ok
+    finalize = svc.finalize_payment(
+        db, order_id=outcome.order_id, new_status=PaymentStatus.SUCCEEDED
+    )
+    assert finalize.applied
+
+    channel = FakeChannel()
+    await notification_service.notify_payment_outcome(
+        db, finalize, telegram_channel=channel, vk_channel=None
+    )
+
+    assert len(channel.deliver_purchase_calls) == 1
+    assert channel.deliver_purchase_calls[0]["external_user_id"] == "buyer-chat-1"
+    assert not channel.send_message_calls
+
+
+async def test_notify_failure_falls_back_to_initiating_chat_without_binding(db: Database) -> None:
+    gid = make_giveaway(db)
+    pid = make_participant_without_binding(db)
+    outcome = svc.create_payment_safe(
+        db,
+        make_provider(),
+        giveaway_id=gid,
+        participant_id=pid,
+        participant_phone="79997654321",
+        quantity=1,
+        channel=ChannelType.VK,
+        initiating_external_user_id="buyer-chat-2",
+    )
+    assert outcome.ok
+    finalize = svc.finalize_payment(db, order_id=outcome.order_id, new_status=PaymentStatus.FAILED)
+    assert finalize.applied
+
+    channel = FakeChannel()
+    await notification_service.notify_payment_outcome(
+        db, finalize, telegram_channel=None, vk_channel=channel
+    )
+
+    assert not channel.deliver_purchase_calls
+    assert channel.send_message_calls == [("buyer-chat-2", notification_service._FAILURE_TEXT)]
+
+
+async def test_notify_prefers_binding_over_initiating_chat_fallback(db: Database) -> None:
+    """Если у получателя ЕСТЬ рабочая привязка, fallback на инициирующий чат не
+    используется — обычная (не подарочная) покупка не должна задваивать
+    уведомление в два разных чата."""
+    gid = make_giveaway(db)
+    pid = make_participant_with_binding(db)
+    outcome = svc.create_payment_safe(
+        db,
+        make_provider(),
+        giveaway_id=gid,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=1,
+        channel=ChannelType.TELEGRAM,
+        initiating_external_user_id="123456",
+    )
+    assert outcome.ok
+    finalize = svc.finalize_payment(
+        db, order_id=outcome.order_id, new_status=PaymentStatus.SUCCEEDED
+    )
+    assert finalize.applied
+
+    channel = FakeChannel()
+    await notification_service.notify_payment_outcome(
+        db, finalize, telegram_channel=channel, vk_channel=None
+    )
+
+    assert len(channel.deliver_purchase_calls) == 1
+    assert channel.deliver_purchase_calls[0]["external_user_id"] == "123456"
+
+
 async def test_notify_noop_when_not_applied(db: Database) -> None:
     """`applied=False` означает повторный webhook/гонку с фоновой сверкой —
     уведомление уже было отправлено при первой финализации, повторно слать не нужно."""
@@ -238,6 +330,31 @@ async def test_notify_late_success_no_tickets_without_binding_is_noop(db: Databa
     assert not channel.send_message_calls
 
 
+async def test_notify_late_success_no_tickets_falls_back_to_initiating_chat(db: Database) -> None:
+    """Тот же fallback (DECISIONS_LOG.md №52), что и у `notify_payment_outcome` —
+    без привязки получателя, но с известным инициирующим чатом, уведомление
+    уходит туда, а не теряется (в отличие от
+    `test_notify_late_success_no_tickets_without_binding_is_noop`, где
+    инициирующий чат тоже не известен)."""
+    pid = make_participant_without_binding(db)
+    outcome = svc.FinalizeOutcome(
+        applied=False,
+        participant_id=pid,
+        late_success_no_tickets=True,
+        initiating_channel=ChannelType.TELEGRAM,
+        initiating_external_user_id="buyer-chat-3",
+    )
+    channel = FakeChannel()
+
+    await notification_service.notify_late_success_no_tickets(
+        db, outcome, telegram_channel=channel, vk_channel=None
+    )
+
+    assert channel.send_message_calls == [
+        ("buyer-chat-3", notification_service._LATE_SUCCESS_NO_TICKETS_TEXT)
+    ]
+
+
 def make_participant_with_vk_binding(
     db: Database, *, phone: str = "79995551122", messages_allowed: bool | None = True
 ) -> int:
@@ -273,8 +390,8 @@ async def test_notify_uses_vk_when_only_vk_binding_allowed(db: Database) -> None
 
 async def test_notify_skips_vk_when_messages_not_allowed(db: Database) -> None:
     """VK-разрешение отозвано (`message_deny`, см. DECISIONS_LOG.md #32/#33) —
-    проактивно писать нельзя, участник остаётся без уведомления (реактивный
-    путь через "Проверить статус оплаты" в боте остаётся рабочим fallback'ом)."""
+    проактивно писать нельзя, участник остаётся без уведомления через этот канал
+    (см. DECISIONS_LOG.md №51 про удалённую кнопку "Проверить статус оплаты")."""
     pid = make_participant_with_vk_binding(db, messages_allowed=False)
     outcome = svc.FinalizeOutcome(applied=False, participant_id=pid, late_success_no_tickets=True)
     vk_channel = FakeChannel()

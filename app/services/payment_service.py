@@ -68,6 +68,7 @@ def create_payment(
     participant_phone: str,
     quantity: int,
     channel: ChannelType | None = None,
+    initiating_external_user_id: str | None = None,
 ) -> CreatePaymentOutcome:
     """Создаёт платёж и резервирует номера атомарно (п.7.3, 7.5 ТЗ).
 
@@ -101,6 +102,7 @@ def create_payment(
             giveaway_id=giveaway_id,
             provider=provider.provider_type,
             channel=channel,
+            initiating_external_user_id=initiating_external_user_id,
             amount=amount,
             quantity=quantity,
             status=PaymentStatus.PENDING,
@@ -202,6 +204,7 @@ def create_payment_safe(
     participant_phone: str,
     quantity: int,
     channel: ChannelType | None = None,
+    initiating_external_user_id: str | None = None,
 ) -> CreatePaymentOutcome:
     """Обёртка над `create_payment`, превращающая нехватку номеров в обычный
     (не-исключительный) результат — удобно для вызова из ботов/API."""
@@ -214,6 +217,7 @@ def create_payment_safe(
             participant_phone=participant_phone,
             quantity=quantity,
             channel=channel,
+            initiating_external_user_id=initiating_external_user_id,
         )
     except _InsufficientTickets as exc:
         return CreatePaymentOutcome(
@@ -259,6 +263,13 @@ class FinalizeOutcome:
     сценария "оплачено после освобождения" — кандидат на возврат). Авто-возврат
     не делается (ТЗ §21) — вызывающая сторона обязана уведомить участника
     отдельным сообщением (`notification_service.notify_late_success_no_tickets`)."""
+    initiating_channel: ChannelType | None = None
+    """Канал (`Payment.channel`), из которого была создана покупка — вместе с
+    `initiating_external_user_id` используется `notification_service` как
+    fallback-получатель, когда у участника-получателя платежа нет `ChannelBinding`
+    (подарочная покупка на неподтверждённый номер, см. DECISIONS_LOG.md №52)."""
+    initiating_external_user_id: str | None = None
+    """См. `initiating_channel` — ID чата/пользователя в этом канале."""
 
 
 def _reserve_and_issue_now(
@@ -317,6 +328,8 @@ def _reserve_and_issue_now(
             participant_id=payment.participant_id,
             giveaway_id=payment.giveaway_id,
             late_success_no_tickets=True,
+            initiating_channel=payment.channel,
+            initiating_external_user_id=payment.initiating_external_user_id,
         )
 
     session.execute(
@@ -358,6 +371,8 @@ def _reserve_and_issue_now(
         giveaway_id=payment.giveaway_id,
         new_status=PaymentStatus.SUCCEEDED,
         tickets=tickets,
+        initiating_channel=payment.channel,
+        initiating_external_user_id=payment.initiating_external_user_id,
     )
 
 
@@ -455,6 +470,8 @@ def finalize_payment(
             giveaway_id=payment.giveaway_id,
             new_status=new_status,
             tickets=tickets,
+            initiating_channel=payment.channel,
+            initiating_external_user_id=payment.initiating_external_user_id,
         )
 
 

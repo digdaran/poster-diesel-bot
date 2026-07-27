@@ -58,9 +58,12 @@ class BaseMessengerChannel(ABC):
         """UI-примитив: обычная (reply) клавиатура из подписей кнопок."""
 
     @abstractmethod
-    def render_payment_prompt(self, *, payment_url: str, order_id: str, has_qr: bool) -> Any:
-        """UI-примитив: приглашение к оплате (ссылка, кнопка «Показать QR» если
-        `has_qr`, кнопка проверки статуса)."""
+    def render_payment_prompt(self, *, payment_url: str | None) -> Any:
+        """UI-примитив: приглашение к оплате (кнопка-ссылка, если у провайдера есть
+        `payment_url`). QR отправляется отдельным сообщением (`send_qr_code`) сразу
+        при создании платежа — своей кнопки для повторного показа больше нет (см.
+        DECISIONS_LOG.md); статус подтверждается фоновой сверкой и уведомлением
+        (`notification_service`), отдельной кнопки проверки тоже больше нет."""
 
     @abstractmethod
     def render_support_prompt(self, *, url: str) -> Any:

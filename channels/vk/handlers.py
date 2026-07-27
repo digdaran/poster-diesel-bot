@@ -32,7 +32,6 @@ from channels.vk.state import (
     RegistrationStates,
     get_active_provider,
     get_channel_db,
-    get_provider_for_type,
 )
 
 if TYPE_CHECKING:
@@ -520,6 +519,7 @@ async def _create_and_offer_payment(
             participant_phone=phone,
             quantity=quantity,
             channel=ChannelType.VK,
+            initiating_external_user_id=_uid(peer_id),
         )
     if not outcome.ok:
         if outcome.participant_blocked:
@@ -545,44 +545,42 @@ async def _create_and_offer_payment(
     assert outcome.created is not None
     assert outcome.order_id is not None
     assert outcome.amount is not None
-    keyboard = channel.render_payment_prompt(
-        payment_url=outcome.created.payment_url,
-        order_id=outcome.order_id,
-        has_qr=bool(outcome.created.qr_code_payload),
-    )
+    keyboard = channel.render_payment_prompt(payment_url=outcome.created.payment_url)
     invoice_line = f" Счёт № {outcome.invoice_no}." if outcome.invoice_no else ""
     qr_payload = outcome.created.qr_code_payload
     qr_sent = False
     if qr_payload:
-        # Присылаем QR сразу же, не дожидаясь нажатия «Показать QR» — кнопка
-        # остаётся способом повторно запросить QR, в т.ч. если проактивная
-        # отправка здесь не удастся (не должна ломать оформление заказа целиком).
-        try:
-            await channel.send_qr_code(
-                _uid(peer_id),
-                qr_payload,
-                caption=(
-                    "Отсканируйте QR-код в банковском приложении и оплатите по реквизитам.\n"
-                    "После оплаты пришлите сюда квитанцию — номера придут после зачисления "
-                    "денег на расчётный счёт (может занять несколько дней)."
-                ),
-            )
-            qr_sent = True
-        except Exception:
-            logger.exception("vk_proactive_qr_send_failed", order_id=outcome.order_id)
+        # QR — единственный способ получить платёжные реквизиты (нет кнопки
+        # повторного показа, см. DECISIONS_LOG.md), поэтому при сетевой ошибке
+        # пробуем ещё раз, прежде чем признать отправку неудавшейся.
+        for attempt in range(2):
+            try:
+                await channel.send_qr_code(
+                    _uid(peer_id),
+                    qr_payload,
+                    caption=(
+                        "Отсканируйте QR-код в банковском приложении и оплатите по реквизитам.\n"
+                        "После оплаты пришлите сюда квитанцию — номера придут после зачисления "
+                        "денег на расчётный счёт (может занять несколько дней)."
+                    ),
+                )
+                qr_sent = True
+                break
+            except Exception:
+                if attempt == 1:
+                    logger.exception("vk_proactive_qr_send_failed", order_id=outcome.order_id)
     if outcome.created.payment_url:
         instruction = (
             "Оплатите по ссылке ниже, либо QR-кодом выше (СБП)."
             if qr_sent
-            else "Оплатите по ссылке ниже, либо нажмите «Показать QR» для оплаты по QR-коду (СБП)."
+            else "Оплатите по ссылке ниже (СБП)."
         )
     elif qr_sent:
         instruction = "Оплатите QR-код выше в банковском приложении по реквизитам."
     else:
         instruction = (
-            "Нажмите «Показать QR» и оплатите по QR-коду в банковском приложении по "
-            "реквизитам. После оплаты пришлите сюда квитанцию — номера придут после "
-            "зачисления денег на расчётный счёт (может занять несколько дней)."
+            "Не удалось отправить QR-код для оплаты. Пожалуйста, воспользуйтесь кнопкой "
+            "«💬 Написать в поддержку», чтобы получить реквизиты для оплаты вручную."
         )
     await channel.send_message(
         _uid(peer_id),
@@ -799,83 +797,7 @@ async def _dispatch_message_event(event: GroupTypes.MessageEvent) -> None:
         await _answer_event(event)
         return
 
-    if action == "show_qr":
-        order_id = payload["order_id"]
-        from app.models.payment import Payment
-
-        with db.session() as session:
-            payment = session.execute(
-                select(Payment).where(Payment.order_id == order_id)
-            ).scalar_one_or_none()
-            qr_payload = payment.qr_code_payload if payment else None
-        if not qr_payload:
-            await _answer_event(event, snackbar="QR недоступен для этого платежа.")
-            return
-        await _get_channel().send_qr_code(_uid(peer_id), qr_payload)
-        await _answer_event(event)
-        return
-
-    if action == "check_payment":
-        await _handle_check_payment(event, peer_id)
-        return
-
     await _answer_event(event, snackbar="Это действие больше недоступно. Напишите «Начать».")
-
-
-async def _handle_check_payment(event: GroupTypes.MessageEvent, peer_id: int) -> None:
-    """Резервная проверка оплаты (п.7.5, 8.1, 10.2 ТЗ)."""
-    db = get_channel_db()
-
-    with db.session() as session:
-        participant = participant_service.get_participant_by_channel(
-            session, channel=ChannelType.VK, external_user_id=_uid(peer_id)
-        )
-        if participant is None:
-            await _answer_event(event, snackbar="Платёж не найден")
-            return
-        from app.models.enums import PaymentStatus as _PS
-        from app.models.payment import Payment
-
-        payment = (
-            session.execute(
-                select(Payment)
-                .where(Payment.participant_id == participant.id, Payment.status == _PS.PENDING)
-                .order_by(Payment.id.desc())
-            )
-            .scalars()
-            .first()
-        )
-
-    if payment is None:
-        await _answer_event(event, snackbar="Ожидающих оплаты счетов не найдено.")
-        return
-
-    # Сверяем статус ЧЕРЕЗ ТОТ БАНК, которым платёж был создан (`payment.provider`),
-    # а не через текущий активный провайдер (п.9.3 ТЗ, DECISIONS.md).
-    provider = get_provider_for_type(payment.provider)
-    try:
-        async with _get_channel().typing_action(peer_id=str(peer_id)):
-            bank_status = provider.check_status(
-                payment.order_id, external_payment_id=payment.external_payment_id
-            )
-    except Exception:
-        logger.exception("check_payment_status_failed", payment_id=payment.id)
-        await _answer_event(
-            event, snackbar="Не удалось проверить статус оплаты у банка. Попробуйте чуть позже."
-        )
-        return
-    if bank_status == PaymentStatus.PENDING:
-        await _answer_event(event, snackbar="Оплата ещё не поступила. Попробуйте чуть позже.")
-        return
-
-    outcome = payment_svc.finalize_payment(db, order_id=payment.order_id, new_status=bank_status)
-    if outcome.applied and outcome.new_status == PaymentStatus.SUCCEEDED:
-        await _deliver_tickets(peer_id, outcome)
-        await _answer_event(event, snackbar="Оплата подтверждена!")
-    elif outcome.new_status == PaymentStatus.FAILED:
-        await _answer_event(event, snackbar="Платёж не прошёл.")
-    else:
-        await _answer_event(event, snackbar="Статус пока без изменений.")
 
 
 @labeler.raw_event(GroupEventType.MESSAGE_EVENT, dataclass=GroupTypes.MessageEvent)

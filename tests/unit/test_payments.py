@@ -180,12 +180,43 @@ def test_create_payment_persists_channel(db: Database) -> None:
         assert payment_without.channel is None
 
 
+def test_create_payment_persists_initiating_external_user_id(db: Database) -> None:
+    """`initiating_external_user_id` (чат, из которого создан платёж) сохраняется
+    на Payment и попадает в `FinalizeOutcome` при финализации — используется
+    `notification_service` как fallback-получатель уведомления, когда у
+    участника-получателя нет `ChannelBinding` (см. DECISIONS_LOG.md №52)."""
+    gid = make_giveaway(db, max_tickets=10)
+    pid = make_participant(db)
+    outcome = svc.create_payment_safe(
+        db,
+        make_provider(),
+        giveaway_id=gid,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=1,
+        channel=ChannelType.TELEGRAM,
+        initiating_external_user_id="buyer-chat-1",
+    )
+    assert outcome.ok
+    with db.session() as session:
+        payment = session.execute(
+            select(Payment).where(Payment.id == outcome.payment_id)
+        ).scalar_one()
+        assert payment.initiating_external_user_id == "buyer-chat-1"
+
+    finalize = svc.finalize_payment(
+        db, order_id=outcome.order_id, new_status=PaymentStatus.SUCCEEDED
+    )
+    assert finalize.applied
+    assert finalize.initiating_channel == ChannelType.TELEGRAM
+    assert finalize.initiating_external_user_id == "buyer-chat-1"
+
+
 def test_create_payment_persists_payment_url_and_qr(db: Database) -> None:
     """payment_url/qr_code_payload — one-shot данные от провайдера (см.
     CreatedPayment) — должны сохраняться на Payment, а не оставаться только в
-    транзиентном outcome, иначе кнопка «Показать QR» в боте не сможет их
-    получить позже отдельным событием (см. DECISIONS.md). RequisitesQrProvider
-    не имеет ссылки на оплату (только статический QR) — payment_url всегда None."""
+    транзиентном outcome (см. DECISIONS.md). RequisitesQrProvider не имеет
+    ссылки на оплату (только статический QR) — payment_url всегда None."""
     gid = make_giveaway(db, max_tickets=10)
     pid = make_participant(db)
     outcome = svc.create_payment_safe(

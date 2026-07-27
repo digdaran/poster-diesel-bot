@@ -57,24 +57,16 @@ def test_render_keyboard_builds_reply_markup(channel: TelegramChannel) -> None:
     assert markup.keyboard[0][0].text == "Купить"
 
 
-def test_render_payment_prompt_has_pay_and_check_buttons(channel: TelegramChannel) -> None:
-    markup = channel.render_payment_prompt(
-        payment_url="https://pay.example/1", order_id="order-1", has_qr=False
-    )
+def test_render_payment_prompt_has_pay_link_when_available(channel: TelegramChannel) -> None:
+    markup = channel.render_payment_prompt(payment_url="https://pay.example/1")
+    assert markup is not None
     flat = [btn for row in markup.inline_keyboard for btn in row]
     assert any(btn.url == "https://pay.example/1" for btn in flat)
-    assert any(btn.callback_data == "check_payment" for btn in flat)
-    assert not any((btn.callback_data or "").startswith("show_qr:") for btn in flat)
-    assert len(markup.inline_keyboard) == 2
+    assert len(markup.inline_keyboard) == 1
 
 
-def test_render_payment_prompt_adds_qr_button_when_available(channel: TelegramChannel) -> None:
-    markup = channel.render_payment_prompt(
-        payment_url="https://pay.example/1", order_id="order-1", has_qr=True
-    )
-    flat = [btn for row in markup.inline_keyboard for btn in row]
-    assert any(btn.callback_data == "show_qr:order-1" for btn in flat)
-    assert len(markup.inline_keyboard) == 3
+def test_render_payment_prompt_returns_none_without_pay_link(channel: TelegramChannel) -> None:
+    assert channel.render_payment_prompt(payment_url=None) is None
 
 
 def test_render_support_prompt_has_url_button(channel: TelegramChannel) -> None:

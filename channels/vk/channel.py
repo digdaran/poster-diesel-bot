@@ -18,9 +18,7 @@ from app.channels.base import BaseMessengerChannel, ChannelCapabilities
 from app.models.enums import ChannelType
 from vkbottle import (
     API,
-    Callback,
     Keyboard,
-    KeyboardButtonColor,
     OpenLink,
     PhotoMessageUploader,
     Text,
@@ -149,25 +147,13 @@ class VkChannel(BaseMessengerChannel):
                 keyboard.add(Text(label))
         return keyboard.get_json()
 
-    def render_payment_prompt(self, *, payment_url: str | None, order_id: str, has_qr: bool) -> str:
+    def render_payment_prompt(self, *, payment_url: str | None) -> str | None:
+        """См. `channels.telegram.channel.TelegramChannel.render_payment_prompt` —
+        та же логика: QR и статус оплаты больше не завязаны на кнопки здесь."""
+        if not payment_url:
+            return None
         keyboard = Keyboard(inline=True)
-        first_row = True
-        if payment_url:
-            keyboard.add(OpenLink(payment_url, "💳 Оплатить"))
-            first_row = False
-        if has_qr:
-            if not first_row:
-                keyboard.row()
-            keyboard.add(
-                Callback("🔳 Показать QR", payload={"a": "show_qr", "order_id": order_id}),
-                color=KeyboardButtonColor.SECONDARY,
-            )
-            first_row = False
-        keyboard.row()
-        keyboard.add(
-            Callback("🔄 Проверить статус оплаты", payload={"a": "check_payment"}),
-            color=KeyboardButtonColor.PRIMARY,
-        )
+        keyboard.add(OpenLink(payment_url, "💳 Оплатить"))
         return keyboard.get_json()
 
     def render_support_prompt(self, *, url: str) -> str:

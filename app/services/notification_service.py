@@ -4,13 +4,15 @@
 backend/background), по прямому запросу заказчика (продуктовое решение сверх
 (локально усечённого) ТЗ, см. DECISIONS.md).
 
-Раздельно с реактивной доставкой в чат покупателя (channels/*/handlers.py) —
-та отвечает в чат, из которого пришёл запрос (важно для подарочных покупок на
-неподтверждённый номер без привязки получателя, см. DECISIONS.md), тогда как
-это уведомление адресуется участнику-получателю (`Payment.participant_id`)
-через его собственную привязку канала и потому не может достучаться до
-получателя без привязки — это осознанное ограничение, а не регресс:
-реактивный путь остаётся рабочим fallback'ом для этого случая.
+Адресуется участнику-получателю (`Payment.participant_id`) через ВСЕ его
+привязки каналов одновременно (`_resolve_notify_targets`). Если у получателя
+нет ни одной привязки (подарочная покупка на неподтверждённый номер получателя,
+см. `resolve_manual_recipient`/DECISIONS.md) — доставка идёт в чат, ГДЕ БЫЛА
+ИНИЦИИРОВАНА покупка, через `Payment.channel`/`initiating_external_user_id`
+(см. `_resolve_targets_with_fallback`, DECISIONS_LOG.md №52) — раньше для этого
+случая была отдельная реактивная кнопка «Проверить статус оплаты», которая уже
+не работала на практике (покупатель тоже без привязки, см. DECISIONS_LOG.md
+№51) и была убрана; этот fallback — её замена.
 
 Многоканально (Telegram, VK): по прямому запросу заказчика уведомление уходит
 **во все** каналы, где есть подходящая привязка, одновременно — см.
@@ -110,6 +112,25 @@ def _channel_for(
     return None
 
 
+def _resolve_targets_with_fallback(
+    db: Database, outcome: FinalizeOutcome
+) -> list[tuple[ChannelType, str]]:
+    """`_resolve_notify_targets` по `ChannelBinding` получателя, а если пусто (нет
+    привязки — типично подарочная покупка на неподтверждённый номер получателя,
+    см. `resolve_manual_recipient`) — fallback на чат, ГДЕ БЫЛА ИНИЦИИРОВАНА
+    покупка (`Payment.channel`/`initiating_external_user_id`, см.
+    DECISIONS_LOG.md №51/№52). Без этого fallback'а такие покупки не имели ни
+    одного рабочего способа доставки: ни получатель, ни сам покупатель не
+    привязаны, `ChannelBinding` для уведомления искать не у кого."""
+    assert outcome.participant_id is not None
+    targets = _resolve_notify_targets(db, outcome.participant_id)
+    if targets:
+        return targets
+    if outcome.initiating_channel is not None and outcome.initiating_external_user_id is not None:
+        return [(outcome.initiating_channel, outcome.initiating_external_user_id)]
+    return []
+
+
 async def notify_payment_outcome(
     db: Database,
     outcome: FinalizeOutcome,
@@ -119,15 +140,15 @@ async def notify_payment_outcome(
 ) -> None:
     """Отправляет участнику сообщение об исходе платежа: при успехе — постер и
     купленные номерки, при отказе — короткое уведомление. Уходит во ВСЕ каналы
-    с подходящей привязкой одновременно (см. `_resolve_notify_targets`). Тихо
-    ничего не делает, если у участника нет ни одной подходящей привязки канала
-    (напр. подарочная покупка на неподтверждённый номер без доступа к аккаунту,
-    п.7.1, 10.3 ТЗ, либо процесс поднят без токена нужного канала) — уведомлять
-    там некого."""
+    с подходящей привязкой одновременно (см. `_resolve_notify_targets`), а если
+    подходящих привязок нет — в чат, откуда была инициирована покупка (см.
+    `_resolve_targets_with_fallback`). Тихо ничего не делает, только если ни
+    привязки, ни инициирующего чата нет вовсе (платёж создан не через бота —
+    напр. панель, либо процесс поднят без токена нужного канала)."""
     if not outcome.applied or outcome.participant_id is None:
         return
 
-    targets = _resolve_notify_targets(db, outcome.participant_id)
+    targets = _resolve_targets_with_fallback(db, outcome)
     if not targets:
         return
 
@@ -179,10 +200,11 @@ async def notify_late_success_no_tickets(
     `payment_service._recover_late_success`, DECISIONS.md). Автоматический
     возврат не делается (ТЗ §21) — сообщаем участнику, чтобы он не остался в
     неведении, что деньги списаны. Уходит во ВСЕ каналы с подходящей
-    привязкой одновременно (см. `_resolve_notify_targets`)."""
+    привязкой одновременно, либо в чат инициатора покупки, если подходящей
+    привязки нет (см. `_resolve_targets_with_fallback`)."""
     if outcome.participant_id is None:
         return
-    targets = _resolve_notify_targets(db, outcome.participant_id)
+    targets = _resolve_targets_with_fallback(db, outcome)
     if not targets:
         return
     with db.session() as session:

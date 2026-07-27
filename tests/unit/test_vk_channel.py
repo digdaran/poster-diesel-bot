@@ -97,28 +97,16 @@ def test_render_keyboard_produces_valid_vk_json() -> None:
     assert [btn["action"]["label"] for btn in keyboard["buttons"][1]] == ["C"]
 
 
-def test_render_payment_prompt_includes_pay_link_and_qr_button() -> None:
+def test_render_payment_prompt_includes_pay_link_when_available() -> None:
     channel = VkChannel(token="x")
-    keyboard = json.loads(
-        channel.render_payment_prompt(
-            payment_url="https://pay.example/1", order_id="ORD1", has_qr=True
-        )
-    )
+    keyboard = json.loads(channel.render_payment_prompt(payment_url="https://pay.example/1"))
     actions = [btn["action"] for row in keyboard["buttons"] for btn in row]
     assert any(a.get("link") == "https://pay.example/1" for a in actions)
-    assert any(a.get("payload") == {"a": "show_qr", "order_id": "ORD1"} for a in actions)
-    assert any(a.get("payload") == {"a": "check_payment"} for a in actions)
 
 
-def test_render_payment_prompt_omits_qr_button_when_unavailable() -> None:
+def test_render_payment_prompt_returns_none_without_pay_link() -> None:
     channel = VkChannel(token="x")
-    keyboard = json.loads(
-        channel.render_payment_prompt(
-            payment_url="https://pay.example/1", order_id="ORD1", has_qr=False
-        )
-    )
-    actions = [btn["action"] for row in keyboard["buttons"] for btn in row]
-    assert not any(a.get("payload", {}).get("a") == "show_qr" for a in actions)
+    assert channel.render_payment_prompt(payment_url=None) is None
 
 
 def test_render_support_prompt_has_open_link_button() -> None:
