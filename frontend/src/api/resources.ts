@@ -194,6 +194,8 @@ export const ReportsApi = {
     apiRequest<{
       revenue_online: number;
       revenue_offline: number;
+      revenue_offline_cash: number;
+      revenue_offline_cashless: number;
       revenue_total: number;
       successful_payments_count: number;
       average_check: number;
