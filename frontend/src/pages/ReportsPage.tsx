@@ -13,6 +13,13 @@ const CHANNEL_LABELS: Record<string, string> = {
   unknown: "Неизвестно (до внедрения)",
 };
 
+const ONLINE_OFFLINE_LABELS: Record<string, string> = {
+  online: "Онлайн",
+  offline: "Офлайн — итого",
+  offline_cash: "Офлайн — наличные (касса)",
+  offline_cashless: "Офлайн — безнал (QR оператора)",
+};
+
 export function ReportsPage() {
   const { hasPermission } = useAuth();
   const [giveaways, setGiveaways] = useState<Giveaway[]>([]);
@@ -20,6 +27,8 @@ export function ReportsPage() {
   const [summary, setSummary] = useState<{
     revenue_online: number;
     revenue_offline: number;
+    revenue_offline_cash: number;
+    revenue_offline_cashless: number;
     revenue_total: number;
     successful_payments_count: number;
     average_check: number;
@@ -81,18 +90,20 @@ export function ReportsPage() {
                 <tr>
                   <th>Коллекция</th>
                   <th>Эквайринг</th>
-                  <th>Наличные (оператор)</th>
+                  <th>Офлайн, наличные (касса)</th>
+                  <th>Офлайн, безнал (QR оператора)</th>
                   <th>Итого</th>
                   <th>Экземпляров выдано</th>
                 </tr>
               </thead>
               <tbody>
-                {byGiveaway.length === 0 && <EmptyStateRow colSpan={5} />}
+                {byGiveaway.length === 0 && <EmptyStateRow colSpan={6} />}
                 {byGiveaway.map((row) => (
                   <tr key={row.giveaway_id}>
                     <td>{row.giveaway_name}</td>
                     <td>{formatMoney(row.revenue_online)}</td>
-                    <td>{formatMoney(row.revenue_offline)}</td>
+                    <td>{formatMoney(row.revenue_offline_cash)}</td>
+                    <td>{formatMoney(row.revenue_offline_cashless)}</td>
                     <td>{formatMoney(row.revenue_total)}</td>
                     <td>{row.tickets_issued}</td>
                   </tr>
@@ -110,7 +121,8 @@ export function ReportsPage() {
         {summary ? (
           <ul>
             <li>Эквайринг: {formatMoney(summary.revenue_online)}</li>
-            <li>Наличные (оператор): {formatMoney(summary.revenue_offline)}</li>
+            <li>Офлайн, наличные (касса): {formatMoney(summary.revenue_offline_cash)}</li>
+            <li>Офлайн, безнал (QR оператора): {formatMoney(summary.revenue_offline_cashless)}</li>
             <li>Итого выручка: {formatMoney(summary.revenue_total)}</li>
             <li>Успешных платежей: {summary.successful_payments_count}</li>
             <li>Средний чек (онлайн): {formatMoney(summary.average_check)}</li>
@@ -135,7 +147,7 @@ export function ReportsPage() {
               <tbody>
                 {Object.entries(onlineOffline).map(([key, value]) => (
                   <tr key={key}>
-                    <td>{key === "online" ? "Онлайн" : "Офлайн"}</td>
+                    <td>{ONLINE_OFFLINE_LABELS[key] ?? key}</td>
                     <td>{value.count}</td>
                     <td>{formatMoney(value.amount)}</td>
                   </tr>

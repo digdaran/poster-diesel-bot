@@ -107,6 +107,11 @@ export const ManualRegistrationsApi = {
     apiRequest<ManualRegistration>(`/api/manual-registrations/${id}/confirm`, { method: "POST" }),
   cancel: (id: number) =>
     apiRequest<ManualRegistration>(`/api/manual-registrations/${id}/cancel`, { method: "POST" }),
+  generateQr: (id: number) =>
+    apiRequest<ManualRegistration>(`/api/manual-registrations/${id}/generate-qr`, {
+      method: "POST",
+    }),
+  qrPngUrl: (id: number) => `/api/manual-registrations/${id}/qr.png`,
 };
 
 export interface SalesFilter extends PageParams {

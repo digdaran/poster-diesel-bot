@@ -45,6 +45,14 @@ class ManualRegistrationStatus(str, enum.Enum):
     CANCELLED = "CANCELLED"
 
 
+class ManualRegistrationPaymentMethod(str, enum.Enum):
+    """Способ расчёта при ручной регистрации — наличные оператору в кассу или
+    безналичный перевод по QR с реквизитами (см. DECISIONS.md)."""
+
+    CASH = "CASH"
+    CASHLESS = "CASHLESS"
+
+
 class PanelUserRole(str, enum.Enum):
     SUPER_ADMIN = "super_admin"
     ADMINISTRATOR = "administrator"

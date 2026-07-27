@@ -13,13 +13,22 @@ from app.core.config import Settings
 from app.core.db import Database
 from app.models.bank_reconciliation_run import BankReconciliationRun
 from app.models.base import utcnow
-from app.models.enums import BankReconciliationRunStatus, PaymentProviderType, PaymentStatus
+from app.models.enums import (
+    BankReconciliationRunStatus,
+    ManualRegistrationStatus,
+    PanelUserRole,
+    PaymentProviderType,
+    PaymentStatus,
+)
 from app.models.giveaway import Giveaway
+from app.models.manual_registration import ManualRegistration
+from app.models.panel_user import PanelUser
 from app.models.participant import Participant
 from app.models.payment import Payment
 from app.payments.bank_statement import BankStatementEntry
 from app.payments.requisites_qr import RequisitesQrProvider
 from app.services import bank_reconciliation_service as svc
+from app.services import manual_registration_service as manual_svc
 from app.services import payment_service as payment_svc
 from app.services import ticket_pool_service as pool_svc
 from sqlalchemy import select
@@ -42,6 +51,35 @@ def make_participant(db: Database, phone: str = "79991234567") -> int:
         session.add(p)
         session.flush()
         return p.id
+
+
+def make_operator(db: Database, login: str = "reconcile_op") -> int:
+    with db.session() as session:
+        u = PanelUser(login=login, password_hash="x", role=PanelUserRole.OPERATOR)
+        session.add(u)
+        session.flush()
+        return u.id
+
+
+def make_pending_manual_qr_registration(
+    db: Database, settings: Settings, *, giveaway_id: int, participant_id: int, quantity: int = 1
+):
+    """Ручная регистрация с уже сформированным QR (CASHLESS, PENDING) — как после
+    того, как оператор нажал «Сформировать QR» на панели."""
+    operator_id = make_operator(db, login=f"reconcile_op_{giveaway_id}_{participant_id}")
+    outcome = manual_svc.create_manual_registration_safe(
+        db,
+        giveaway_id=giveaway_id,
+        participant_id=participant_id,
+        quantity=quantity,
+        operator_id=operator_id,
+        ttl_seconds=3600,
+    )
+    assert outcome.ok
+    qr_result = manual_svc.generate_manual_registration_qr(
+        db, settings, manual_registration_id=outcome.manual_registration_id
+    )
+    return outcome.manual_registration_id, qr_result
 
 
 def make_pending_payment(db: Database, *, giveaway_id: int, participant_id: int, quantity: int = 1):
@@ -526,6 +564,122 @@ def test_check_status_sums_partial_payments(db: Database, monkeypatch) -> None:
     )
     status = provider.check_status(outcome.order_id, external_payment_id=outcome.invoice_no)
     assert status == PaymentStatus.SUCCEEDED
+
+
+def test_reconcile_confirms_matched_cashless_manual_registration(
+    db: Database, settings: Settings, monkeypatch
+) -> None:
+    """Safeguard: оператор сформировал QR, но забыл нажать «Подтвердить» —
+    фоновая сверка находит платёж в выписке и подтверждает регистрацию сама,
+    номерки выдаются немедленно (см. DECISIONS.md)."""
+    gid = make_giveaway(db)
+    pid = make_participant(db)
+    reg_id, qr_result = make_pending_manual_qr_registration(
+        db, settings, giveaway_id=gid, participant_id=pid, quantity=2
+    )
+
+    entries = [
+        BankStatementEntry(
+            external_id="op-1",
+            amount=qr_result.amount,
+            purpose=f"Оплата по счету № {qr_result.invoice_no} от 22.07.2026",
+            operation_date=utcnow(),
+        )
+    ]
+    settings._fake_entries = entries  # type: ignore[attr-defined]
+    monkeypatch.setattr(svc, "TBankStatementProvider", _FakeStatementProvider)
+
+    svc.reconcile(db, settings)
+
+    with db.session() as session:
+        reg = session.execute(
+            select(ManualRegistration).where(ManualRegistration.id == reg_id)
+        ).scalar_one()
+        assert reg.status == ManualRegistrationStatus.CONFIRMED
+        assert reg.confirmed_at is not None
+        g = session.execute(select(Giveaway).where(Giveaway.id == gid)).scalar_one()
+        assert g.tickets_issued == 2
+
+
+def test_reconcile_leaves_unmatched_cashless_manual_registration_pending(
+    db: Database, settings: Settings, monkeypatch
+) -> None:
+    gid = make_giveaway(db)
+    pid = make_participant(db)
+    reg_id, _qr_result = make_pending_manual_qr_registration(
+        db, settings, giveaway_id=gid, participant_id=pid, quantity=1
+    )
+
+    settings._fake_entries = []  # type: ignore[attr-defined]
+    monkeypatch.setattr(svc, "TBankStatementProvider", _FakeStatementProvider)
+
+    svc.reconcile(db, settings)
+
+    with db.session() as session:
+        reg = session.execute(
+            select(ManualRegistration).where(ManualRegistration.id == reg_id)
+        ).scalar_one()
+        assert reg.status == ManualRegistrationStatus.PENDING
+
+
+def test_reconcile_leaves_underpaid_cashless_manual_registration_pending(
+    db: Database, settings: Settings, monkeypatch
+) -> None:
+    gid = make_giveaway(db)
+    pid = make_participant(db)
+    reg_id, qr_result = make_pending_manual_qr_registration(
+        db, settings, giveaway_id=gid, participant_id=pid, quantity=1
+    )
+
+    entries = [
+        BankStatementEntry(
+            external_id="op-1",
+            amount=qr_result.amount - 1,
+            purpose=f"Оплата по счету № {qr_result.invoice_no} от 22.07.2026",
+            operation_date=utcnow(),
+        )
+    ]
+    settings._fake_entries = entries  # type: ignore[attr-defined]
+    monkeypatch.setattr(svc, "TBankStatementProvider", _FakeStatementProvider)
+
+    svc.reconcile(db, settings)
+
+    with db.session() as session:
+        reg = session.execute(
+            select(ManualRegistration).where(ManualRegistration.id == reg_id)
+        ).scalar_one()
+        assert reg.status == ManualRegistrationStatus.PENDING
+
+
+def test_reconcile_ignores_manual_registration_already_confirmed_by_operator(
+    db: Database, settings: Settings, monkeypatch
+) -> None:
+    """Гонка: оператор успел подтвердить сам между чтением кандидатов и тиком
+    сверки — не должно приводить к ошибке/повторной выдаче номерков."""
+    gid = make_giveaway(db)
+    pid = make_participant(db)
+    reg_id, qr_result = make_pending_manual_qr_registration(
+        db, settings, giveaway_id=gid, participant_id=pid, quantity=1
+    )
+    manual_svc.confirm_manual_registration(db, manual_registration_id=reg_id)
+
+    entries = [
+        BankStatementEntry(
+            external_id="op-1",
+            amount=qr_result.amount,
+            purpose=f"Оплата по счету № {qr_result.invoice_no} от 22.07.2026",
+            operation_date=utcnow(),
+        )
+    ]
+    settings._fake_entries = entries  # type: ignore[attr-defined]
+    monkeypatch.setattr(svc, "TBankStatementProvider", _FakeStatementProvider)
+
+    outcomes = svc.reconcile(db, settings)  # не должно поднять исключение
+
+    assert outcomes == []
+    with db.session() as session:
+        g = session.execute(select(Giveaway).where(Giveaway.id == gid)).scalar_one()
+        assert g.tickets_issued == 1  # номерки выданы один раз, при обычном подтверждении
 
 
 def _all_runs(db: Database) -> list[BankReconciliationRun]:

@@ -6,11 +6,11 @@ import datetime as dt
 from typing import TYPE_CHECKING
 
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy import ForeignKey, Integer, String
+from sqlalchemy import ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, created_at_column
-from app.models.enums import ManualRegistrationStatus
+from app.models.enums import ManualRegistrationPaymentMethod, ManualRegistrationStatus
 
 if TYPE_CHECKING:
     from app.models.giveaway import Giveaway
@@ -22,6 +22,13 @@ if TYPE_CHECKING:
 
 class ManualRegistration(Base):
     __tablename__ = "manual_registrations"
+    __table_args__ = (
+        UniqueConstraint(
+            "giveaway_id",
+            "payment_number",
+            name="uq_manual_registrations_giveaway_id_payment_number",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     participant_id: Mapped[int] = mapped_column(
@@ -42,6 +49,28 @@ class ManualRegistration(Base):
     created_at: Mapped[dt.datetime] = created_at_column(index=True)
     confirmed_at: Mapped[dt.datetime | None] = mapped_column(nullable=True)
     cancelled_at: Mapped[dt.datetime | None] = mapped_column(nullable=True)
+
+    # Наличные оператору в кассу (по умолчанию, как раньше) или безналичный QR по
+    # реквизитам, сформированный оператором по просьбе покупателя — см.
+    # DECISIONS.md. Влияет только на разметку выручки в отчётах (кассовая vs
+    # безналичная) и на то, что `payment_number`/`qr_code_payload` ниже заполнены;
+    # сама выдача номерков через `confirm_manual_registration` не меняется.
+    payment_method: Mapped[ManualRegistrationPaymentMethod] = mapped_column(
+        SAEnum(ManualRegistrationPaymentMethod, native_enum=False),
+        default=ManualRegistrationPaymentMethod.CASH,
+        nullable=False,
+    )
+    # Номер счёта на оплату — из ТОГО ЖЕ счётчика Giveaway.next_payment_number, что
+    # и у онлайн-платежей (см. Payment.payment_number), поэтому PREFIX-NNNNN
+    # остаётся уникальным в рамках розыгрыша независимо от источника. Заполняется
+    # только когда оператор реально сформировал QR (CASHLESS), иначе NULL.
+    payment_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Собранный ST00012-payload на момент генерации — хранится (а не пересобирается
+    # на лету), чтобы GET .../qr.png не зависел от того, не поменялись ли реквизиты
+    # в настройках после показа QR покупателю (тот же принцип, что и
+    # Payment.qr_code_payload).
+    qr_code_payload: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    qr_generated_at: Mapped[dt.datetime | None] = mapped_column(nullable=True)
 
     participant: Mapped[Participant] = relationship(back_populates="manual_registrations")
     giveaway: Mapped[Giveaway] = relationship(back_populates="manual_registrations")

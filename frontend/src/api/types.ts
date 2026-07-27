@@ -52,6 +52,8 @@ export interface ManualRegistration {
   operator_id: number;
   operator_login: string;
   comment: string | null;
+  payment_method: "CASH" | "CASHLESS";
+  invoice_no: string | null;
   created_at: string;
   confirmed_at: string | null;
   cancelled_at: string | null;
@@ -196,6 +198,8 @@ export interface RevenueByGiveawayRow {
   giveaway_name: string;
   revenue_online: number;
   revenue_offline: number;
+  revenue_offline_cash: number;
+  revenue_offline_cashless: number;
   revenue_total: number;
   tickets_issued: number;
 }

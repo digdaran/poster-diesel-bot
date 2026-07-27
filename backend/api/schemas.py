@@ -108,6 +108,9 @@ class ManualRegistrationOut(BaseModel):
     operator_id: int
     operator_login: str
     comment: str | None
+    payment_method: str
+    invoice_no: str | None
+    """Номер счёта (PREFIX-NNNNN) — заполнен только после генерации QR (payment_method=CASHLESS)."""
     created_at: dt.datetime
     confirmed_at: dt.datetime | None
     cancelled_at: dt.datetime | None

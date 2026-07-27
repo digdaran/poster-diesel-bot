@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from app.models.enums import (
     ChannelType,
+    ManualRegistrationPaymentMethod,
     ManualRegistrationStatus,
     PanelUserRole,
     PaymentProviderType,
@@ -79,6 +80,8 @@ def test_sales_by_provider_and_financial_summary(session: Session) -> None:
     summary = svc.financial_summary(session)
     assert summary["revenue_online"] == 30000
     assert summary["revenue_offline"] == 0
+    assert summary["revenue_offline_cash"] == 0
+    assert summary["revenue_offline_cashless"] == 0
     assert summary["revenue_total"] == 30000
     assert summary["successful_payments_count"] == 2
     assert summary["average_check"] == 15000
@@ -193,11 +196,23 @@ def test_online_vs_offline(session: Session) -> None:
             operator_id=operator.id,
         )
     )
+    session.add(
+        ManualRegistration(
+            participant_id=p.id,
+            giveaway_id=g.id,
+            quantity=3,
+            status=ManualRegistrationStatus.CONFIRMED,
+            operator_id=operator.id,
+            payment_method=ManualRegistrationPaymentMethod.CASHLESS,
+        )
+    )
     session.flush()
 
     result = svc.online_vs_offline(session)
     assert result["online"] == {"count": 1, "amount": 10000}
-    assert result["offline"] == {"count": 1, "amount": 20000}  # 2 * ticket_price(10000)
+    assert result["offline"] == {"count": 2, "amount": 50000}  # (2 + 3) * ticket_price(10000)
+    assert result["offline_cash"] == {"count": 1, "amount": 20000}
+    assert result["offline_cashless"] == {"count": 1, "amount": 30000}
 
 
 def test_revenue_by_giveaway(session: Session) -> None:
@@ -230,6 +245,16 @@ def test_revenue_by_giveaway(session: Session) -> None:
         )
     )
     session.add(
+        ManualRegistration(
+            participant_id=p.id,
+            giveaway_id=g1.id,
+            quantity=2,
+            status=ManualRegistrationStatus.CONFIRMED,
+            operator_id=operator.id,
+            payment_method=ManualRegistrationPaymentMethod.CASHLESS,
+        )
+    )
+    session.add(
         Payment(
             order_id="rbg-o2",
             participant_id=p.id,
@@ -245,8 +270,10 @@ def test_revenue_by_giveaway(session: Session) -> None:
     rows = {row["giveaway_id"]: row for row in svc.revenue_by_giveaway(session)}
 
     assert rows[g1.id]["revenue_online"] == 5000
-    assert rows[g1.id]["revenue_offline"] == 10000  # 1 * ticket_price(10000)
-    assert rows[g1.id]["revenue_total"] == 15000
+    assert rows[g1.id]["revenue_offline"] == 30000  # (1 + 2) * ticket_price(10000)
+    assert rows[g1.id]["revenue_offline_cash"] == 10000
+    assert rows[g1.id]["revenue_offline_cashless"] == 20000
+    assert rows[g1.id]["revenue_total"] == 35000
 
     assert rows[g2.id]["revenue_online"] == 7000
     assert rows[g2.id]["revenue_offline"] == 0

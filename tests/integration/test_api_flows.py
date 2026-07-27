@@ -90,6 +90,81 @@ def test_full_manual_sale_flow(api_client: TestClient) -> None:
     assert resp.status_code == 200  # список без экспорта доступен всем ролям (VIEW_SALES)
 
 
+def test_manual_registration_generate_qr_flow(api_client: TestClient) -> None:
+    """Оператор формирует QR по просьбе покупателя (безнал), затем подтверждает
+    после поступления денег — номерки выдаются как обычно, но выручка размечена
+    как безналичная (см. DECISIONS.md)."""
+    token = login(api_client, "admin", "admin-strong-pass-123")
+    headers = auth_headers(token)
+
+    resp = api_client.post(
+        "/api/giveaways",
+        json={"name": "QR Test", "prefix": "QRF", "ticket_price": 5000, "max_tickets": 10},
+        headers=headers,
+    )
+    giveaway_id = resp.json()["id"]
+    api_client.post(f"/api/giveaways/{giveaway_id}/open", headers=headers)
+
+    resp = api_client.get("/api/manual-registrations/999999/qr.png", headers=headers)
+    assert resp.status_code == 404
+
+    resp = api_client.post(
+        "/api/manual-registrations",
+        json={
+            "giveaway_id": giveaway_id,
+            "participant_phone": "+7 999 222-33-44",
+            "participant_full_name": "Пётр Петров",
+            "quantity": 2,
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 201
+    registration_id = resp.json()["id"]
+    assert resp.json()["payment_method"] == "CASH"
+    assert resp.json()["invoice_no"] is None
+
+    resp = api_client.get(f"/api/manual-registrations/{registration_id}/qr.png", headers=headers)
+    assert resp.status_code == 404
+
+    resp = api_client.post(
+        f"/api/manual-registrations/{registration_id}/generate-qr", headers=headers
+    )
+    assert resp.status_code == 200
+    assert resp.json()["payment_method"] == "CASHLESS"
+    invoice_no = resp.json()["invoice_no"]
+    assert invoice_no is not None
+    assert invoice_no.startswith("QRF-")
+
+    resp = api_client.get(f"/api/manual-registrations/{registration_id}/qr.png", headers=headers)
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "image/png"
+    assert len(resp.content) > 0
+
+    # Повторный вызов — тот же номер счёта, без повторного инкремента счётчика.
+    resp = api_client.post(
+        f"/api/manual-registrations/{registration_id}/generate-qr", headers=headers
+    )
+    assert resp.status_code == 200
+    assert resp.json()["invoice_no"] == invoice_no
+
+    resp = api_client.post(f"/api/manual-registrations/{registration_id}/confirm", headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "CONFIRMED"
+    assert resp.json()["payment_method"] == "CASHLESS"
+
+    resp = api_client.get("/api/reports/online-vs-offline", headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["offline_cashless"]["amount"] == 2 * 5000
+    assert body["offline_cash"]["amount"] == 0
+
+    # QR можно сформировать только для PENDING.
+    resp = api_client.post(
+        f"/api/manual-registrations/{registration_id}/generate-qr", headers=headers
+    )
+    assert resp.status_code == 409
+
+
 def test_giveaway_immutable_fields_not_editable_after_open(api_client: TestClient) -> None:
     token = login(api_client, "admin", "admin-strong-pass-123")
     headers = auth_headers(token)

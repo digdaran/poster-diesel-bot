@@ -7,13 +7,18 @@ from __future__ import annotations
 
 import csv
 import io
+from collections.abc import Sequence
 from typing import Any
 
 from openpyxl import Workbook
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models.enums import ManualRegistrationStatus, PaymentStatus
+from app.models.enums import (
+    ManualRegistrationPaymentMethod,
+    ManualRegistrationStatus,
+    PaymentStatus,
+)
 from app.models.giveaway import Giveaway
 from app.models.manual_registration import ManualRegistration
 from app.models.panel_user import PanelUser
@@ -44,7 +49,14 @@ def sales_by_period(
 def online_vs_offline(
     session: Session, *, giveaway_id: int | None = None
 ) -> dict[str, dict[str, int]]:
-    """Сравнение онлайн/офлайн продаж по количеству и выручке (п.16 ТЗ)."""
+    """Сравнение онлайн/офлайн продаж по количеству и выручке (п.16 ТЗ).
+
+    `offline` разбивается на `offline_cash` (наличные оператору в кассу) и
+    `offline_cashless` (безнал по QR, сформированному оператором по просьбе
+    покупателя, см. DECISIONS.md) — кассе важно видеть только `offline_cash` как
+    реально полученные наличные, `offline_cashless` для неё — не деньги в ящике.
+    `offline` остаётся суммой обоих, для обратной совместимости с потребителями,
+    которым нужен только общий офлайн-итог (напр. `dashboard.py`)."""
     online_stmt = select(Payment).where(Payment.status == PaymentStatus.SUCCEEDED)
     if giveaway_id is not None:
         online_stmt = online_stmt.where(Payment.giveaway_id == giveaway_id)
@@ -58,13 +70,25 @@ def online_vs_offline(
     if giveaway_id is not None:
         offline_stmt = offline_stmt.where(ManualRegistration.giveaway_id == giveaway_id)
     offline_rows = session.execute(offline_stmt).all()
+    cash_rows = [
+        (reg, price)
+        for reg, price in offline_rows
+        if reg.payment_method == ManualRegistrationPaymentMethod.CASH
+    ]
+    cashless_rows = [
+        (reg, price)
+        for reg, price in offline_rows
+        if reg.payment_method == ManualRegistrationPaymentMethod.CASHLESS
+    ]
+
+    def _bucket(rows: Sequence[Any]) -> dict[str, int]:
+        return {"count": len(rows), "amount": sum(reg.quantity * price for reg, price in rows)}
 
     return {
         "online": {"count": len(online_payments), "amount": sum(p.amount for p in online_payments)},
-        "offline": {
-            "count": len(offline_rows),
-            "amount": sum(reg.quantity * price for reg, price in offline_rows),
-        },
+        "offline": _bucket(offline_rows),
+        "offline_cash": _bucket(cash_rows),
+        "offline_cashless": _bucket(cashless_rows),
     }
 
 
@@ -152,8 +176,11 @@ def participants_report(session: Session) -> list[dict[str, Any]]:
 
 
 def financial_summary(session: Session, *, giveaway_id: int | None = None) -> dict[str, Any]:
-    """Общая выручка (эквайринг + наличные через оператора), число успешных
-    платежей, средний чек (п.16 ТЗ).
+    """Общая выручка (эквайринг + офлайн через оператора — наличные и безнал по
+    QR), число успешных платежей, средний чек (п.16 ТЗ). `revenue_offline_cash`/
+    `revenue_offline_cashless` — разбивка офлайн-выручки для кассы (см.
+    `online_vs_offline`, DECISIONS.md): реальные наличные в ящике — только
+    `revenue_offline_cash`.
 
     `successful_payments_count`/`average_check` намеренно считаются только по
     онлайн-платежам (`Payment`) — ручная регистрация не является дискретным
@@ -169,6 +196,8 @@ def financial_summary(session: Session, *, giveaway_id: int | None = None) -> di
     return {
         "revenue_online": online["amount"],
         "revenue_offline": offline["amount"],
+        "revenue_offline_cash": revenue["offline_cash"]["amount"],
+        "revenue_offline_cashless": revenue["offline_cashless"]["amount"],
         "revenue_total": online["amount"] + offline["amount"],
         "successful_payments_count": online["count"],
         "average_check": average,
@@ -194,18 +223,26 @@ def revenue_by_giveaway(session: Session) -> list[dict[str, Any]]:
     )
     online_by_giveaway = {gid: amount for gid, _count, amount in session.execute(online_stmt).all()}
 
+    # Группировка ещё и по payment_method — для разбивки кассовой (CASH) и
+    # безналичной (CASHLESS) офлайн-выручки по розыгрышу, см. `online_vs_offline`.
     offline_stmt = (
         select(
             ManualRegistration.giveaway_id,
+            ManualRegistration.payment_method,
             func.coalesce(func.sum(ManualRegistration.quantity), 0),
         )
         .where(ManualRegistration.status == ManualRegistrationStatus.CONFIRMED)
-        .group_by(ManualRegistration.giveaway_id)
+        .group_by(ManualRegistration.giveaway_id, ManualRegistration.payment_method)
     )
-    # dict(...) here breaks mypy: SQLAlchemy's Row isn't seen as tuple[int, int].
-    offline_quantity_by_giveaway = {  # noqa: C416
-        gid: qty for gid, qty in session.execute(offline_stmt).all()
-    }
+    offline_cash_quantity_by_giveaway: dict[int, int] = {}
+    offline_cashless_quantity_by_giveaway: dict[int, int] = {}
+    for gid, method, qty in session.execute(offline_stmt).all():
+        bucket = (
+            offline_cash_quantity_by_giveaway
+            if method == ManualRegistrationPaymentMethod.CASH
+            else offline_cashless_quantity_by_giveaway
+        )
+        bucket[gid] = qty
 
     giveaways = session.execute(
         select(Giveaway.id, Giveaway.name, Giveaway.ticket_price, Giveaway.tickets_issued)
@@ -214,13 +251,17 @@ def revenue_by_giveaway(session: Session) -> list[dict[str, Any]]:
     result = []
     for gid, name, ticket_price, tickets_issued in giveaways:
         revenue_online = online_by_giveaway.get(gid, 0)
-        revenue_offline = offline_quantity_by_giveaway.get(gid, 0) * ticket_price
+        revenue_offline_cash = offline_cash_quantity_by_giveaway.get(gid, 0) * ticket_price
+        revenue_offline_cashless = offline_cashless_quantity_by_giveaway.get(gid, 0) * ticket_price
+        revenue_offline = revenue_offline_cash + revenue_offline_cashless
         result.append(
             {
                 "giveaway_id": gid,
                 "giveaway_name": name,
                 "revenue_online": revenue_online,
                 "revenue_offline": revenue_offline,
+                "revenue_offline_cash": revenue_offline_cash,
+                "revenue_offline_cashless": revenue_offline_cashless,
                 "revenue_total": revenue_online + revenue_offline,
                 "tickets_issued": tickets_issued,
             }

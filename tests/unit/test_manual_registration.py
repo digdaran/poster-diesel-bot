@@ -5,8 +5,13 @@
 from __future__ import annotations
 
 import pytest
+from app.core.config import Settings
 from app.core.db import Database
-from app.models.enums import ManualRegistrationStatus, PanelUserRole
+from app.models.enums import (
+    ManualRegistrationPaymentMethod,
+    ManualRegistrationStatus,
+    PanelUserRole,
+)
 from app.models.giveaway import Giveaway
 from app.models.manual_registration import ManualRegistration
 from app.models.panel_user import PanelUser
@@ -226,3 +231,108 @@ def test_cancel_already_cancelled_forbidden(db: Database) -> None:
     svc.cancel_manual_registration(db, manual_registration_id=outcome.manual_registration_id)
     with pytest.raises(svc.ManualRegistrationStateError):
         svc.cancel_manual_registration(db, manual_registration_id=outcome.manual_registration_id)
+
+
+def test_generate_qr_assigns_invoice_and_marks_cashless(db: Database, settings: Settings) -> None:
+    gid = make_giveaway(db, max_tickets=10, prefix="QRT")
+    pid = make_participant(db)
+    oid = make_operator(db)
+    outcome = svc.create_manual_registration_safe(
+        db, giveaway_id=gid, participant_id=pid, quantity=2, operator_id=oid, ttl_seconds=3600
+    )
+    assert outcome.ok
+
+    result = svc.generate_manual_registration_qr(
+        db, settings, manual_registration_id=outcome.manual_registration_id
+    )
+    assert result.invoice_no == "QRT-00001"
+    assert result.amount == 20000  # 2 * ticket_price(10000)
+    assert "ST00012|" in result.qr_code_payload
+    assert "QRT-00001" in result.qr_code_payload
+
+    with db.session() as session:
+        reg = session.execute(
+            select(ManualRegistration).where(
+                ManualRegistration.id == outcome.manual_registration_id
+            )
+        ).scalar_one()
+        assert reg.payment_method == ManualRegistrationPaymentMethod.CASHLESS
+        assert reg.payment_number == 1
+        assert reg.qr_code_payload == result.qr_code_payload
+        assert reg.qr_generated_at is not None
+        # Резерв в пуле не тронут генерацией QR — регистрация всё ещё PENDING.
+        assert reg.status == ManualRegistrationStatus.PENDING
+    assert pool_svc.get_free_count(db, giveaway_id=gid) == 8
+
+
+def test_generate_qr_is_idempotent_does_not_reuse_counter_twice(
+    db: Database, settings: Settings
+) -> None:
+    gid = make_giveaway(db, max_tickets=10, prefix="QRI")
+    pid = make_participant(db)
+    oid = make_operator(db)
+    outcome = svc.create_manual_registration_safe(
+        db, giveaway_id=gid, participant_id=pid, quantity=1, operator_id=oid, ttl_seconds=3600
+    )
+    first = svc.generate_manual_registration_qr(
+        db, settings, manual_registration_id=outcome.manual_registration_id
+    )
+    second = svc.generate_manual_registration_qr(
+        db, settings, manual_registration_id=outcome.manual_registration_id
+    )
+    assert second.invoice_no == first.invoice_no
+    assert second.qr_code_payload == first.qr_code_payload
+
+    with db.session() as session:
+        g = session.execute(select(Giveaway).where(Giveaway.id == gid)).scalar_one()
+        assert g.next_payment_number == 2  # инкремент произошёл только один раз
+
+
+def test_generate_qr_shares_invoice_counter_with_online_payments(
+    db: Database, settings: Settings
+) -> None:
+    """PREFIX-NNNNN должен быть уникален в рамках розыгрыша независимо от
+    источника (online Payment vs ручная регистрация) — см. DECISIONS.md, оба
+    берут номер из одного Giveaway.next_payment_number."""
+    gid = make_giveaway(db, max_tickets=10, prefix="QRS")
+    pid = make_participant(db)
+    oid = make_operator(db)
+
+    payment_outcome = payment_svc.create_payment_safe(
+        db,
+        make_provider(),
+        giveaway_id=gid,
+        participant_id=pid,
+        participant_phone="79991234567",
+        quantity=1,
+    )
+    assert payment_outcome.ok
+    assert payment_outcome.invoice_no == "QRS-00001"
+
+    manual_outcome = svc.create_manual_registration_safe(
+        db, giveaway_id=gid, participant_id=pid, quantity=1, operator_id=oid, ttl_seconds=3600
+    )
+    assert manual_outcome.ok
+    qr_result = svc.generate_manual_registration_qr(
+        db, settings, manual_registration_id=manual_outcome.manual_registration_id
+    )
+    assert qr_result.invoice_no == "QRS-00002"
+
+
+def test_generate_qr_forbidden_after_confirmation(db: Database, settings: Settings) -> None:
+    gid = make_giveaway(db, max_tickets=10)
+    pid = make_participant(db)
+    oid = make_operator(db)
+    outcome = svc.create_manual_registration_safe(
+        db, giveaway_id=gid, participant_id=pid, quantity=1, operator_id=oid, ttl_seconds=3600
+    )
+    svc.confirm_manual_registration(db, manual_registration_id=outcome.manual_registration_id)
+    with pytest.raises(svc.ManualRegistrationStateError):
+        svc.generate_manual_registration_qr(
+            db, settings, manual_registration_id=outcome.manual_registration_id
+        )
+
+
+def test_generate_qr_missing_registration_raises(db: Database, settings: Settings) -> None:
+    with pytest.raises(svc.ManualRegistrationStateError):
+        svc.generate_manual_registration_qr(db, settings, manual_registration_id=999999)

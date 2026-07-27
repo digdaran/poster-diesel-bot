@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import datetime as dt
+import io
 from typing import Any
 
+import qrcode
 from app.core.config import Settings
 from app.core.db import Database
 from app.core.permissions import PanelRole, Permission
@@ -119,6 +121,12 @@ def _to_out(session: Session, registration: ManualRegistration) -> ManualRegistr
         operator_id=registration.operator_id,
         operator_login=registration.operator.login,
         comment=registration.comment,
+        payment_method=registration.payment_method.value,
+        invoice_no=(
+            registration.giveaway.format_invoice_number(registration.payment_number)
+            if registration.payment_number is not None
+            else None
+        ),
         created_at=registration.created_at,
         confirmed_at=registration.confirmed_at,
         cancelled_at=registration.cancelled_at,
@@ -191,6 +199,61 @@ def create_manual_registration(
             ip_address=request.client.host if request.client else None,
         )
         return _to_out(session, registration)
+
+
+@router.post("/{registration_id}/generate-qr", response_model=ManualRegistrationOut)
+def generate_manual_registration_qr(
+    registration_id: int,
+    request: Request,
+    db: Database = Depends(get_database),
+    settings: Settings = Depends(get_settings_dep),
+    user: PanelUser = Depends(require_permission(Permission.MANUAL_REGISTRATION_CREATE)),
+) -> ManualRegistrationOut:
+    """Оператор формирует QR с реквизитами для оплаты — по желанию покупателя,
+    вместо наличных в кассу (см. DECISIONS.md). Только для PENDING; повторный
+    вызов идемпотентно возвращает уже сформированные ранее номер счёта и QR."""
+    try:
+        svc.generate_manual_registration_qr(db, settings, manual_registration_id=registration_id)
+    except svc.ManualRegistrationStateError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    with db.session() as session:
+        registration = session.get(ManualRegistration, registration_id)
+        assert registration is not None
+        audit_service.log(
+            session,
+            action="manual_registration_generate_qr",
+            actor_type=AuditActorType.PANEL_USER,
+            actor_id=user.id,
+            actor_label=user.login,
+            entity_type="manual_registration",
+            entity_id=registration_id,
+            ip_address=request.client.host if request.client else None,
+        )
+        return _to_out(session, registration)
+
+
+@router.get("/{registration_id}/qr.png")
+def get_manual_registration_qr_png(
+    registration_id: int,
+    db: Database = Depends(get_database),
+    user: PanelUser = Depends(require_permission(Permission.MANUAL_REGISTRATION_CREATE)),
+) -> Response:
+    """PNG для показа покупателю на экране — тот же способ рендера (Windows-1251),
+    что и `channels/*/channel.py::send_qr_code` для онлайн-оплаты по QR."""
+    with db.session() as session:
+        registration = session.get(ManualRegistration, registration_id)
+        if registration is None or registration.qr_code_payload is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="QR для этой регистрации не сформирован",
+            )
+        payload = registration.qr_code_payload
+
+    img = qrcode.make(payload.encode("cp1251"))
+    buffer = io.BytesIO()
+    img.save(buffer, format="PNG")  # type: ignore[call-arg]
+    return Response(content=buffer.getvalue(), media_type="image/png")
 
 
 @router.post("/{registration_id}/confirm", response_model=ManualRegistrationOut)

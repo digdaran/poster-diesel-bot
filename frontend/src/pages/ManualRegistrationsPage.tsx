@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { GiveawaysApi, ManualRegistrationsApi, ParticipantsApi } from "../api/resources";
 import { apiDownload } from "../api/client";
@@ -21,6 +21,11 @@ const STATUS_TONE: Record<string, "success" | "danger" | "muted"> = {
   PENDING: "muted",
 };
 
+const PAYMENT_METHOD_LABEL: Record<string, string> = {
+  CASH: "Наличные",
+  CASHLESS: "Безнал (QR)",
+};
+
 export function ManualRegistrationsPage() {
   const { hasPermission, user } = useAuth();
   const isSuperAdmin = user?.role === "super_admin";
@@ -41,6 +46,11 @@ export function ManualRegistrationsPage() {
   const [nameLocked, setNameLocked] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pendingId, setPendingId] = useState<number | null>(null);
+  const [qrModal, setQrModal] = useState<{
+    registration: ManualRegistration;
+    imageUrl: string;
+  } | null>(null);
+  const qrObjectUrlRef = useRef<string | null>(null);
 
   const [filterGiveawayId, setFilterGiveawayId] = useState("");
   const [participantQuery, setParticipantQuery] = useState("");
@@ -167,6 +177,36 @@ export function ManualRegistrationsPage() {
     );
     if (!confirmed) return;
     void runRowAction(r.id, () => ManualRegistrationsApi.cancel(r.id), "Регистрация отменена");
+  };
+
+  const closeQrModal = () => {
+    if (qrObjectUrlRef.current) {
+      URL.revokeObjectURL(qrObjectUrlRef.current);
+      qrObjectUrlRef.current = null;
+    }
+    setQrModal(null);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (qrObjectUrlRef.current) URL.revokeObjectURL(qrObjectUrlRef.current);
+    };
+  }, []);
+
+  const onGenerateQr = async (r: ManualRegistration) => {
+    setPendingId(r.id);
+    try {
+      const updated = await ManualRegistrationsApi.generateQr(r.id);
+      const { blob } = await apiDownload(ManualRegistrationsApi.qrPngUrl(r.id));
+      const imageUrl = URL.createObjectURL(blob);
+      qrObjectUrlRef.current = imageUrl;
+      setQrModal({ registration: updated, imageUrl });
+      load();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Не удалось сформировать QR", "error");
+    } finally {
+      setPendingId(null);
+    }
   };
 
   return (
@@ -297,13 +337,14 @@ export function ManualRegistrationsPage() {
               <th>Каналы</th>
               <th>Кол-во</th>
               <th>Сумма</th>
+              <th>Оплата</th>
               <th>Оператор</th>
               <th>Статус</th>
               <th>Действия</th>
             </tr>
           </thead>
           <tbody>
-            {registrations.length === 0 && <EmptyStateRow colSpan={9} />}
+            {registrations.length === 0 && <EmptyStateRow colSpan={10} />}
             {registrations.map((r) => (
               <tr key={r.id}>
                 <td>{r.id}</td>
@@ -314,6 +355,10 @@ export function ManualRegistrationsPage() {
                 </td>
                 <td>{r.quantity}</td>
                 <td>{formatMoney(r.revenue)}</td>
+                <td>
+                  {PAYMENT_METHOD_LABEL[r.payment_method] ?? r.payment_method}
+                  {r.invoice_no && <div className="muted-text">счёт {r.invoice_no}</div>}
+                </td>
                 <td>{r.operator_login}</td>
                 <td>
                   <Badge tone={STATUS_TONE[r.status] ?? "muted"}>{r.status}</Badge>
@@ -321,6 +366,9 @@ export function ManualRegistrationsPage() {
                 <td className="actions">
                   {r.status === "PENDING" && (
                     <>
+                      <button disabled={pendingId === r.id} onClick={() => void onGenerateQr(r)}>
+                        Сформировать QR
+                      </button>
                       <button
                         disabled={pendingId === r.id}
                         onClick={() =>
@@ -355,6 +403,23 @@ export function ManualRegistrationsPage() {
         onPageChange={setPage}
         onPageSizeChange={setPageSize}
       />
+      {qrModal && (
+        <div className="modal-overlay" onClick={closeQrModal}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <p className="modal-message">
+              Счёт № {qrModal.registration.invoice_no} на{" "}
+              {formatMoney(qrModal.registration.revenue)} — покажите QR покупателю для оплаты по
+              реквизитам, затем подтвердите регистрацию после поступления денег.
+            </p>
+            <img src={qrModal.imageUrl} alt="QR для оплаты по реквизитам" className="qr-preview" />
+            <div className="modal-actions">
+              <button className="button-secondary" onClick={closeQrModal}>
+                Закрыть
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

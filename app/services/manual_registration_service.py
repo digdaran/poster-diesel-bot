@@ -10,12 +10,15 @@ from dataclasses import dataclass
 
 from sqlalchemy import select, update
 
+from app.core.config import Settings
 from app.core.db import Database
 from app.models.base import utcnow
-from app.models.enums import ManualRegistrationStatus, TicketSource
+from app.models.enums import ManualRegistrationPaymentMethod, ManualRegistrationStatus, TicketSource
 from app.models.giveaway import Giveaway
 from app.models.manual_registration import ManualRegistration
 from app.models.ticket import Ticket
+from app.payments import qr_requisites as qr
+from app.payments.requisites_qr import RequisitesQrProvider
 from app.repositories import ticket_pool_repo as repo
 from app.services import participant_service
 
@@ -159,6 +162,106 @@ def create_manual_registration_safe(
     except _ParticipantBlocked:
         return CreateManualRegistrationOutcome(
             ok=False, manual_registration_id=None, free_count=0, participant_blocked=True
+        )
+
+
+@dataclass(frozen=True)
+class GenerateQrOutcome:
+    manual_registration_id: int
+    invoice_no: str
+    qr_code_payload: str
+    amount: int
+    """Сумма в копейках (quantity * ticket_price) — для отображения оператору рядом с QR."""
+
+
+def generate_manual_registration_qr(
+    db: Database,
+    settings: Settings,
+    *,
+    manual_registration_id: int,
+    now: dt.datetime | None = None,
+) -> GenerateQrOutcome:
+    """Формирует QR с банковскими реквизитами для оплаты конкретной ручной
+    регистрации — по желанию покупателя, вместо наличных оператору в кассу (см.
+    DECISIONS.md). Доступно только для `PENDING`; не трогает резерв номерков в
+    пуле (он уже сделан при создании регистрации) — только присваивает номер
+    счёта и собирает payload, теми же чистыми функциями
+    (`app.payments.qr_requisites`), что и `RequisitesQrProvider` для онлайн-оплаты.
+
+    Идемпотентно: повторный вызов для той же регистрации возвращает уже
+    сформированные ранее номер счёта и payload, не трогая счётчик
+    `Giveaway.next_payment_number` повторно.
+    """
+    now = now or utcnow()
+    with db.immediate_session() as session:
+        registration = session.execute(
+            select(ManualRegistration).where(ManualRegistration.id == manual_registration_id)
+        ).scalar_one_or_none()
+        if registration is None:
+            raise ManualRegistrationStateError(f"Регистрация {manual_registration_id} не найдена")
+        if registration.status != ManualRegistrationStatus.PENDING:
+            raise ManualRegistrationStateError(
+                f"Регистрация {manual_registration_id} в статусе {registration.status} — "
+                "QR можно сформировать только для регистрации в статусе PENDING"
+            )
+
+        giveaway = session.execute(
+            select(Giveaway).where(Giveaway.id == registration.giveaway_id)
+        ).scalar_one()
+        amount = registration.quantity * giveaway.ticket_price
+
+        if registration.payment_number is not None:
+            assert registration.qr_code_payload is not None  # заполняются вместе, см. ниже
+            return GenerateQrOutcome(
+                manual_registration_id=manual_registration_id,
+                invoice_no=giveaway.format_invoice_number(registration.payment_number),
+                qr_code_payload=registration.qr_code_payload,
+                amount=amount,
+            )
+
+        payment_number = giveaway.next_payment_number
+        session.execute(
+            update(Giveaway)
+            .where(Giveaway.id == giveaway.id)
+            .values(next_payment_number=Giveaway.next_payment_number + 1)
+        )
+        invoice_no = giveaway.format_invoice_number(payment_number)
+
+        provider = RequisitesQrProvider.from_settings(settings)
+        purpose = qr.build_purpose(
+            invoice_no=invoice_no,
+            invoice_date=now.date(),
+            amount_kopecks=amount,
+            vat_rate_percent=provider.vat_rate_percent,
+        )
+        payload = qr.build_st00012_payload(
+            name=provider.recipient_name,
+            personal_acc=provider.personal_acc,
+            bank_name=provider.bank_name,
+            bic=provider.bic,
+            corresp_acc=provider.corresp_acc,
+            payee_inn=provider.recipient_inn,
+            kpp=provider.recipient_kpp or None,
+            sum_kopecks=amount,
+            purpose=purpose,
+        )
+
+        session.execute(
+            update(ManualRegistration)
+            .where(ManualRegistration.id == manual_registration_id)
+            .values(
+                payment_method=ManualRegistrationPaymentMethod.CASHLESS,
+                payment_number=payment_number,
+                qr_code_payload=payload,
+                qr_generated_at=now,
+            )
+        )
+
+        return GenerateQrOutcome(
+            manual_registration_id=manual_registration_id,
+            invoice_no=invoice_no,
+            qr_code_payload=payload,
+            amount=amount,
         )
 
 

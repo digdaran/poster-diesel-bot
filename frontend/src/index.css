@@ -606,6 +606,19 @@ section {
   gap: 8px;
 }
 
+.qr-preview {
+  display: block;
+  width: 100%;
+  max-width: 280px;
+  margin: 0 auto 16px;
+  border-radius: var(--radius-lg);
+}
+
+.muted-text {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
 /* Responsive */
 
 @media (max-width: 768px) {

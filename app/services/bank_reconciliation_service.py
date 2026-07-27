@@ -2,19 +2,28 @@
 `requisites_qr` (см. DECISIONS_LOG.md №38/39/53/54, ARCHITECTURE.md §3/§4).
 
 Сопоставление — по назначению платежа (префикс розыгрыша + номер счёта,
-`Giveaway.format_invoice_number` — `Giveaway.prefix` уникален по всей системе, см.
-app/models/giveaway.py, поэтому номер счёта `PREFIX-NNNNN` тоже уникален глобально
-и однозначно указывает на один `Payment`). Все операции с таким назначением в окне
-выписки СУММИРУЮТСЯ (участник мог доплатить недостающее отдельным переводом по тому
-же QR) и сравниваются с `Payment.amount`:
+`Giveaway.format_invoice_number` — `Giveaway.prefix` уникален по всей системе, а
+`payment_number` берётся из ОДНОГО общего счётчика `Giveaway.next_payment_number`
+и для `Payment`, и для `ManualRegistration`, см. app/models/giveaway.py), поэтому
+номер счёта `PREFIX-NNNNN` уникален глобально и однозначно указывает на одну из
+этих двух сущностей. Все операции с таким назначением в окне выписки СУММИРУЮТСЯ
+(участник мог доплатить недостающее отдельным переводом по тому же QR) и
+сравниваются с ожидаемой суммой:
 
-- сумма >= ожидаемой — счёт закрывается (`SUCCEEDED`); если пришло больше, чем нужно,
-  разница дополнительно помечается на `Payment` (`amount_mismatch`/
-  `amount_mismatch_bank_amount`) как переплата, для подсветки в панели «Продажи» —
-  заказ при этом уже выполнен, возврат вне объёма ТЗ §21;
-- сумма < ожидаемой — счёт остаётся `PENDING`, помечается тем же способом как
-  недоплата (та же пара полей, разница в отображении — см. `SalesPage.tsx`) и
-  логируется (`bank_statement_amount_mismatch`).
+- сумма >= ожидаемой — счёт закрывается (`Payment.SUCCEEDED` /
+  `ManualRegistration.CONFIRMED`); для `Payment`, если пришло больше, чем нужно,
+  разница дополнительно помечается (`amount_mismatch`/`amount_mismatch_bank_amount`)
+  как переплата, для подсветки в панели «Продажи» — заказ при этом уже выполнен,
+  возврат вне объёма ТЗ §21;
+- сумма < ожидаемой — счёт остаётся `PENDING`, для `Payment` помечается тем же
+  способом как недоплата (та же пара полей, разница в отображении — см.
+  `SalesPage.tsx`) и логируется (`bank_statement_amount_mismatch`); для
+  `ManualRegistration` — просто остаётся `PENDING` до ручного разбора (нет
+  отдельных полей расхождения на этой модели, см. `reconcile()`).
+
+`ManualRegistration` подключается сюда как safeguard для сценария «оператор
+сформировал QR по просьбе покупателя, но забыл нажать „Подтвердить“» (см.
+DECISIONS.md) — основной путь подтверждения остаётся ручным, на операторе.
 """
 
 from __future__ import annotations
@@ -31,10 +40,18 @@ from app.core.config import Settings
 from app.core.db import Database
 from app.models.bank_reconciliation_run import BankReconciliationRun
 from app.models.base import utcnow
-from app.models.enums import BankReconciliationRunStatus, PaymentProviderType, PaymentStatus
+from app.models.enums import (
+    BankReconciliationRunStatus,
+    ManualRegistrationPaymentMethod,
+    ManualRegistrationStatus,
+    PaymentProviderType,
+    PaymentStatus,
+)
+from app.models.manual_registration import ManualRegistration
 from app.models.payment import Payment
 from app.payments.bank_statement import BankStatementEntry
 from app.payments.tbank_statement import TBankStatementProvider
+from app.services import manual_registration_service as manual_svc
 from app.services import payment_service as payment_svc
 from app.services.payment_service import FinalizeOutcome
 
@@ -100,8 +117,32 @@ def reconcile(
             .scalars()
             .all()
         )
+        # Ручные регистрации, где оператор сформировал QR по просьбе покупателя
+        # (см. DECISIONS.md) — safeguard НА СЛУЧАЙ, если оператор забыл нажать
+        # «Подтвердить» сам: сверка подтверждает их тем же способом
+        # (`manual_registration_service.confirm_manual_registration`, номерки
+        # выдаются немедленно). В отличие от Payment — только PENDING без
+        # lookback по CANCELLED/FAILED: просроченные PENDING уже забирает
+        # `_release_expired_manual_registrations` (см. backend/background), а
+        # искать совпадение по выписке для уже отменённой регистрации не нужно —
+        # это не online-покупка с гонкой "TTL истёк ровно в момент оплаты".
+        manual_candidates = list(
+            session.execute(
+                select(ManualRegistration)
+                .options(joinedload(ManualRegistration.giveaway))
+                .where(
+                    ManualRegistration.payment_method == ManualRegistrationPaymentMethod.CASHLESS,
+                    ManualRegistration.payment_number.is_not(None),
+                    ManualRegistration.status == ManualRegistrationStatus.PENDING,
+                )
+            )
+            .unique()
+            .scalars()
+            .all()
+        )
 
-    if not candidates:
+    total_candidates = len(candidates) + len(manual_candidates)
+    if not total_candidates:
         _record_run(
             db,
             settings,
@@ -123,7 +164,7 @@ def reconcile(
             settings,
             started_at=run_started_at,
             status=BankReconciliationRunStatus.FETCH_FAILED,
-            candidates_checked=len(candidates),
+            candidates_checked=total_candidates,
             entries_fetched=None,
             error_message=str(exc),
         )
@@ -212,12 +253,41 @@ def reconcile(
                 logger.exception("bank_statement_ttl_expire_failed", payment_id=payment.id)
                 finalize_error_count += 1
 
+    for registration in manual_candidates:
+        invoice_no = registration.giveaway.format_invoice_number(registration.payment_number)  # type: ignore[arg-type]
+        matching_entries = find_matching_entries(entries, invoice_no)
+        if not matching_entries:
+            continue
+        total_received = sum(entry.amount for entry in matching_entries)
+        expected_amount = registration.quantity * registration.giveaway.ticket_price
+        if total_received < expected_amount:
+            # Недоплата — оставляем PENDING (в отличие от Payment здесь нет
+            # отдельных полей/UI для подсветки расхождения на ManualRegistration,
+            # разбор — вручную оператором в кассе/панели по комментарию к заказу).
+            continue
+
+        matched_count += 1
+        try:
+            manual_svc.confirm_manual_registration(
+                db, manual_registration_id=registration.id, now=now
+            )
+        except manual_svc.ManualRegistrationStateError:
+            # Гонка: оператор успел подтвердить/отменить регистрацию вручную
+            # между чтением кандидатов и этим тиком — не ошибка сверки.
+            pass
+        except Exception:
+            logger.exception(
+                "bank_statement_manual_registration_finalize_failed",
+                manual_registration_id=registration.id,
+            )
+            finalize_error_count += 1
+
     _record_run(
         db,
         settings,
         started_at=run_started_at,
         status=BankReconciliationRunStatus.SUCCESS,
-        candidates_checked=len(candidates),
+        candidates_checked=total_candidates,
         entries_fetched=len(entries),
         matched_count=matched_count,
         mismatch_count=mismatch_count,
