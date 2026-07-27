@@ -12,7 +12,11 @@ from app.services import bank_reconciliation_service as reconciliation_svc
 from fastapi import APIRouter, Depends
 
 from backend.api.deps import get_database, get_settings_dep, require_permission
-from backend.api.schemas import BankReconciliationRunOut, BankReconciliationStatusOut
+from backend.api.schemas import (
+    BankReconciliationRunOut,
+    BankReconciliationStatusOut,
+    PaymentsBriefOut,
+)
 
 router = APIRouter(prefix="/bank-reconciliation", tags=["bank-reconciliation"])
 
@@ -24,10 +28,12 @@ def get_status(
     _user: PanelUser = Depends(require_permission(Permission.VIEW_BANK_RECONCILIATION)),
 ) -> BankReconciliationStatusOut:
     status_ = reconciliation_svc.get_reconciliation_status(db, settings)
+    brief = reconciliation_svc.get_payments_brief(db)
     return BankReconciliationStatusOut(
         runs=[BankReconciliationRunOut.model_validate(run) for run in status_.runs],
         total_runs_24h=status_.total_runs_24h,
         failed_runs_24h=status_.failed_runs_24h,
         last_success_at=status_.last_success_at,
         is_stale=status_.is_stale,
+        payments_brief=PaymentsBriefOut.model_validate(brief),
     )

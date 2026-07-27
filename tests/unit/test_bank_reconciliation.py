@@ -7,12 +7,13 @@
 from __future__ import annotations
 
 import datetime as dt
+import itertools
 
 from app.core.config import Settings
 from app.core.db import Database
 from app.models.bank_reconciliation_run import BankReconciliationRun
 from app.models.base import utcnow
-from app.models.enums import BankReconciliationRunStatus, PaymentStatus
+from app.models.enums import BankReconciliationRunStatus, PaymentProviderType, PaymentStatus
 from app.models.giveaway import Giveaway
 from app.models.participant import Participant
 from app.models.payment import Payment
@@ -22,6 +23,8 @@ from app.services import bank_reconciliation_service as svc
 from app.services import payment_service as payment_svc
 from app.services import ticket_pool_service as pool_svc
 from sqlalchemy import select
+
+_order_id_counter = itertools.count()
 
 
 def make_giveaway(db: Database, *, max_tickets: int = 10, prefix: str = "REQ") -> int:
@@ -60,6 +63,37 @@ def make_pending_payment(db: Database, *, giveaway_id: int, participant_id: int,
         participant_phone="79991234567",
         quantity=quantity,
     )
+
+
+def make_raw_payment(
+    db: Database,
+    *,
+    giveaway_id: int,
+    participant_id: int,
+    created_at: dt.datetime,
+    status: PaymentStatus = PaymentStatus.PENDING,
+    provider: PaymentProviderType = PaymentProviderType.REQUISITES_QR,
+    amount: int = 10000,
+    amount_mismatch: bool = False,
+) -> int:
+    """Вставляет `Payment` напрямую, минуя `payment_service`, — нужен полный
+    контроль над `created_at`/`status` для тестов агрегации по дню создания
+    (`get_payments_brief`), которых через обычный флоу не добиться."""
+    with db.session() as session:
+        payment = Payment(
+            order_id=f"test-order-{next(_order_id_counter)}",
+            participant_id=participant_id,
+            giveaway_id=giveaway_id,
+            provider=provider,
+            amount=amount,
+            quantity=1,
+            status=status,
+            created_at=created_at,
+            amount_mismatch=amount_mismatch,
+        )
+        session.add(payment)
+        session.flush()
+        return payment.id
 
 
 def test_find_matching_entry_matches_by_prefix_number_and_amount() -> None:
@@ -456,3 +490,106 @@ def test_get_reconciliation_status_is_stale_when_last_run_too_old(
     status = svc.get_reconciliation_status(db, settings, now=now)
 
     assert status.is_stale is True
+
+
+def test_get_payments_brief_buckets_by_creation_day_and_status(db: Database) -> None:
+    gid = make_giveaway(db)
+    pid = make_participant(db)
+    now = utcnow()
+    today_start = dt.datetime.combine(now.date(), dt.time.min)
+
+    # Сегодня: успешный, ожидающий, спорный (расхождение суммы) + один ровно на
+    # границе полуночи (проверка включительно/исключительно).
+    make_raw_payment(
+        db,
+        giveaway_id=gid,
+        participant_id=pid,
+        created_at=today_start + dt.timedelta(hours=1),
+        status=PaymentStatus.SUCCEEDED,
+        amount=10000,
+    )
+    make_raw_payment(
+        db,
+        giveaway_id=gid,
+        participant_id=pid,
+        created_at=today_start + dt.timedelta(hours=2),
+        status=PaymentStatus.PENDING,
+        amount=20000,
+    )
+    make_raw_payment(
+        db,
+        giveaway_id=gid,
+        participant_id=pid,
+        created_at=today_start + dt.timedelta(hours=3),
+        status=PaymentStatus.PENDING,
+        amount=30000,
+        amount_mismatch=True,
+    )
+    make_raw_payment(
+        db,
+        giveaway_id=gid,
+        participant_id=pid,
+        created_at=today_start,  # ровно полночь — должен попасть в "сегодня"
+        status=PaymentStatus.PENDING,
+        amount=1000,
+    )
+
+    # Вчера: один успешный (не должен попасть в "сегодня").
+    make_raw_payment(
+        db,
+        giveaway_id=gid,
+        participant_id=pid,
+        created_at=today_start - dt.timedelta(hours=2),
+        status=PaymentStatus.SUCCEEDED,
+        amount=5000,
+    )
+
+    # Позавчера — не должен попасть ни в "сегодня", ни в "вчера".
+    make_raw_payment(
+        db,
+        giveaway_id=gid,
+        participant_id=pid,
+        created_at=today_start - dt.timedelta(days=2),
+        status=PaymentStatus.SUCCEEDED,
+        amount=99999,
+    )
+
+    # Другой провайдер сегодня — не должен попасть в бриф (только requisites_qr).
+    make_raw_payment(
+        db,
+        giveaway_id=gid,
+        participant_id=pid,
+        created_at=today_start + dt.timedelta(hours=1),
+        status=PaymentStatus.SUCCEEDED,
+        provider=PaymentProviderType.MOCK,
+        amount=77777,
+    )
+
+    brief = svc.get_payments_brief(db, now=now)
+
+    assert brief.today.total_count == 4
+    assert brief.today.total_amount == 61000
+    assert brief.today.succeeded_count == 1
+    assert brief.today.succeeded_amount == 10000
+    assert brief.today.pending_count == 2
+    assert brief.today.pending_amount == 21000
+    assert brief.today.disputed_count == 1
+    assert brief.today.disputed_amount == 30000
+
+    assert brief.yesterday.total_count == 1
+    assert brief.yesterday.total_amount == 5000
+    assert brief.yesterday.succeeded_count == 1
+    assert brief.yesterday.succeeded_amount == 5000
+    assert brief.yesterday.pending_count == 0
+    assert brief.yesterday.disputed_count == 0
+
+
+def test_get_payments_brief_returns_zeroed_cohorts_when_no_payments(db: Database) -> None:
+    brief = svc.get_payments_brief(db)
+
+    for cohort in (brief.today, brief.yesterday):
+        assert cohort.total_count == 0
+        assert cohort.total_amount == 0
+        assert cohort.succeeded_count == 0
+        assert cohort.pending_count == 0
+        assert cohort.disputed_count == 0

@@ -181,12 +181,33 @@ class BankReconciliationRunOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class PaymentsCohortBriefOut(BaseModel):
+    total_count: int
+    total_amount: int
+    succeeded_count: int
+    succeeded_amount: int
+    pending_count: int
+    pending_amount: int
+    disputed_count: int
+    disputed_amount: int
+
+    model_config = {"from_attributes": True}
+
+
+class PaymentsBriefOut(BaseModel):
+    today: PaymentsCohortBriefOut
+    yesterday: PaymentsCohortBriefOut
+
+    model_config = {"from_attributes": True}
+
+
 class BankReconciliationStatusOut(BaseModel):
     runs: list[BankReconciliationRunOut]
     total_runs_24h: int
     failed_runs_24h: int
     last_success_at: dt.datetime | None
     is_stale: bool
+    payments_brief: PaymentsBriefOut
 
 
 class TicketOut(BaseModel):
