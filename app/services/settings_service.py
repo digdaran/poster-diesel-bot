@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any, Literal
+
 from sqlalchemy.orm import Session
 
 from app.models.base import utcnow
@@ -37,3 +39,20 @@ def update_ignore_phone_verification(
     settings.updated_by = updated_by
     session.flush()
     return settings
+
+
+def support_contact_url(
+    contacts: dict[str, Any], platform: Literal["telegram", "vk"]
+) -> str | None:
+    """Строит кликабельную ссылку «Написать в поддержку» из `support_contacts`
+    по зарезервированному ключу канала (см. DECISIONS_LOG.md №50). Админ может
+    указать в веб-панели готовую ссылку (https://...) либо просто
+    username/id — в этом случае ссылка достраивается автоматически."""
+    value = contacts.get(platform)
+    if not isinstance(value, str) or not value.strip():
+        return None
+    value = value.strip()
+    if value.startswith("http://") or value.startswith("https://"):
+        return value
+    handle = value.lstrip("@")
+    return f"https://t.me/{handle}" if platform == "telegram" else f"https://vk.com/{handle}"

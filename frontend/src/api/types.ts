@@ -101,12 +101,29 @@ export interface BankReconciliationRun {
   error_message: string | null;
 }
 
+export interface PaymentsCohortBrief {
+  total_count: number;
+  total_amount: number;
+  succeeded_count: number;
+  succeeded_amount: number;
+  pending_count: number;
+  pending_amount: number;
+  disputed_count: number;
+  disputed_amount: number;
+}
+
+export interface PaymentsBrief {
+  today: PaymentsCohortBrief;
+  yesterday: PaymentsCohortBrief;
+}
+
 export interface BankReconciliationStatus {
   runs: BankReconciliationRun[];
   total_runs_24h: number;
   failed_runs_24h: number;
   last_success_at: string | null;
   is_stale: boolean;
+  payments_brief: PaymentsBrief;
 }
 
 export interface Ticket {

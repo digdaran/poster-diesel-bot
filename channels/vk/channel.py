@@ -170,6 +170,11 @@ class VkChannel(BaseMessengerChannel):
         )
         return keyboard.get_json()
 
+    def render_support_prompt(self, *, url: str) -> str:
+        keyboard = Keyboard(inline=True)
+        keyboard.add(OpenLink(url, "💬 Написать в поддержку"))
+        return keyboard.get_json()
+
     def typing_action(self, peer_id: str) -> _TypingAction:
         return _TypingAction(self.bot, int(peer_id))
 

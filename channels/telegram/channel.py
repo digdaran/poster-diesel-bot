@@ -139,6 +139,11 @@ class TelegramChannel(BaseMessengerChannel):
         )
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
+    def render_support_prompt(self, *, url: str) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="💬 Написать в поддержку", url=url)]]
+        )
+
     async def send_qr_code(
         self, external_user_id: str, qr_code_payload: str, *, caption: str | None = None
     ) -> None:

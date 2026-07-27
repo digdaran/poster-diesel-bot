@@ -77,6 +77,13 @@ def test_render_payment_prompt_adds_qr_button_when_available(channel: TelegramCh
     assert len(markup.inline_keyboard) == 3
 
 
+def test_render_support_prompt_has_url_button(channel: TelegramChannel) -> None:
+    markup = channel.render_support_prompt(url="https://t.me/support_user")
+    flat = [btn for row in markup.inline_keyboard for btn in row]
+    assert len(flat) == 1
+    assert flat[0].url == "https://t.me/support_user"
+
+
 async def test_send_ticket_codes_sends_short_list_as_single_message(
     channel: TelegramChannel,
 ) -> None:

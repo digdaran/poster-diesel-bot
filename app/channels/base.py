@@ -63,6 +63,12 @@ class BaseMessengerChannel(ABC):
         `has_qr`, кнопка проверки статуса)."""
 
     @abstractmethod
+    def render_support_prompt(self, *, url: str) -> Any:
+        """UI-примитив: кнопка-ссылка «Написать в поддержку», открывающая личный
+        чат/диалог с поддержкой (`url` строится из `PlatformSettings.support_contacts`,
+        см. `app.services.settings_service.support_contact_url`)."""
+
+    @abstractmethod
     async def handle_update(self, update: Any) -> None:
         """Приём входящего события платформы (используется при webhook-режиме;
         для long polling диспетчеризация может идти напрямую через SDK канала)."""

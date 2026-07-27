@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 import structlog
 from sqlalchemy import and_, delete, func, or_, select, update
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import Settings
 from app.core.db import Database
@@ -335,3 +335,73 @@ def get_reconciliation_status(
         last_success_at=last_success_at,
         is_stale=is_stale,
     )
+
+
+@dataclass(frozen=True)
+class PaymentsCohortBrief:
+    """Разбивка счетов `requisites_qr`, СОЗДАННЫХ за один календарный день (UTC),
+    по текущему статусу — не по дню, в который статус изменился. Платёж, созданный
+    сегодня и подтверждённый сегодня же, попадает в "сегодня"; если он провисит в
+    PENDING неделю, он навсегда останется в когорте дня СОЗДАНИЯ, не "переедет"."""
+
+    total_count: int
+    total_amount: int
+    succeeded_count: int
+    """SUCCEEDED — деньги пришли и сверка их засчитала."""
+    succeeded_amount: int
+    pending_count: int
+    """PENDING без активного расхождения суммы — ещё ждут поступления/сверки."""
+    pending_amount: int
+    disputed_count: int
+    """PENDING с активным `amount_mismatch` — деньги пришли, но не той суммой,
+    требуют ручного разбора оператором (см. DECISIONS_LOG.md №39)."""
+    disputed_amount: int
+
+
+@dataclass(frozen=True)
+class PaymentsBrief:
+    today: PaymentsCohortBrief
+    yesterday: PaymentsCohortBrief
+
+
+def _cohort_brief(
+    session: Session, *, day_start: dt.datetime, day_end: dt.datetime
+) -> PaymentsCohortBrief:
+    rows = session.execute(
+        select(Payment.status, Payment.amount_mismatch, Payment.amount).where(
+            Payment.provider == PaymentProviderType.REQUISITES_QR,
+            Payment.created_at >= day_start,
+            Payment.created_at < day_end,
+        )
+    ).all()
+
+    succeeded = [r for r in rows if r.status == PaymentStatus.SUCCEEDED]
+    disputed = [r for r in rows if r.status == PaymentStatus.PENDING and r.amount_mismatch]
+    pending = [r for r in rows if r.status == PaymentStatus.PENDING and not r.amount_mismatch]
+
+    return PaymentsCohortBrief(
+        total_count=len(rows),
+        total_amount=sum(r.amount for r in rows),
+        succeeded_count=len(succeeded),
+        succeeded_amount=sum(r.amount for r in succeeded),
+        pending_count=len(pending),
+        pending_amount=sum(r.amount for r in pending),
+        disputed_count=len(disputed),
+        disputed_amount=sum(r.amount for r in disputed),
+    )
+
+
+def get_payments_brief(db: Database, *, now: dt.datetime | None = None) -> PaymentsBrief:
+    """Краткая сводка по счетам `requisites_qr` за сегодня/вчера (UTC-сутки) для
+    верхней строки статуса на «Продажи» — см. DECISIONS_LOG.md."""
+    now = now or utcnow()
+    today_start = dt.datetime.combine(now.date(), dt.time.min)
+    yesterday_start = today_start - dt.timedelta(days=1)
+
+    with db.session() as session:
+        today = _cohort_brief(
+            session, day_start=today_start, day_end=today_start + dt.timedelta(days=1)
+        )
+        yesterday = _cohort_brief(session, day_start=yesterday_start, day_end=today_start)
+
+    return PaymentsBrief(today=today, yesterday=yesterday)

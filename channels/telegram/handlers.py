@@ -40,7 +40,10 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 router = Router(name="telegram-main")
 
-_MAIN_KEYBOARD_BUTTONS = [["🖼 Купить постер", "📋 Мои покупки"], ["ℹ️ Помощь"]]
+_MAIN_KEYBOARD_BUTTONS = [
+    ["🖼 Купить постер", "📋 Мои покупки"],
+    ["💬 Написать в поддержку", "ℹ️ Помощь"],
+]
 
 _channel: TelegramChannel | None = None  # устанавливается через set_channel() в main.py
 
@@ -780,6 +783,23 @@ async def on_my_tickets(message: Message) -> None:
         return
     await message.answer(f"Ваши номера ({len(tickets)}):")
     await _get_channel().send_ticket_codes(str(message.chat.id), [t.full_code for t in tickets])
+
+
+@router.message(F.text == "💬 Написать в поддержку")
+@router.message(Command("support"))
+async def on_support_contact(message: Message) -> None:
+    db = get_channel_db()
+    with db.session() as session:
+        platform_settings = settings_service.get_or_create_settings(session)
+    contacts = platform_settings.support_contacts or {}
+    url = settings_service.support_contact_url(contacts, "telegram")
+    if url is None:
+        await on_help(message)
+        return
+    keyboard = _get_channel().render_support_prompt(url=url)
+    await message.answer(
+        "Нажмите кнопку ниже, чтобы открыть чат с поддержкой.", reply_markup=keyboard
+    )
 
 
 @router.message(F.text == "ℹ️ Помощь")

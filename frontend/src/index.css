@@ -428,30 +428,75 @@ section {
 
 /* Статус фоновой сверки банковской выписки (панель «Продажи») */
 
-.reconciliation-status {
+.reconciliation-bar {
   background: var(--color-surface);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-card);
-  padding: 16px 20px;
+  padding: 12px 20px;
   margin-bottom: 20px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 24px;
 }
 
-.reconciliation-status summary {
-  cursor: pointer;
-  font-weight: 600;
+.reconciliation-bar-status {
   display: flex;
   align-items: center;
   gap: 8px;
+  font-size: 13px;
 }
 
-.reconciliation-status .cards {
-  margin-top: 16px;
+.reconciliation-bar-updated {
+  color: var(--color-text-muted);
+}
+
+.reconciliation-bar-brief {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  flex: 1 1 auto;
+}
+
+.reconciliation-cohort {
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.reconciliation-cohort-label {
+  font-weight: 600;
+}
+
+.reconciliation-cohort-detail {
+  color: var(--color-text-muted);
 }
 
 .reconciliation-error-message {
   color: var(--color-danger);
   font-size: 13px;
   margin: 12px 0 0;
+}
+
+.modal-details {
+  width: 900px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+}
+
+.modal-details-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.modal-details-header h2 {
+  margin: 0;
+  font-size: 16px;
 }
 
 /* Empty / loading states */
@@ -656,4 +701,10 @@ section {
   justify-content: center;
   color: var(--color-text-muted);
   font-size: 13px;
+}
+
+.settings-hint {
+  color: var(--color-text-muted);
+  font-size: 13px;
+  max-width: 60ch;
 }
