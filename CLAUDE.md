@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Отвечай всегда на русском языке
 
+Если я явно не разрешил, реред тем как пушить и\или деплоить, справшивай сначала.
+
 `docs/ТЗ_Raffle_Platform.md` (v2.4) documents the original data model and business rules for
 ticket pools/payments (§1–§7.6) — the checked-in copy stops there; later sections (permissions detail,
 scope exclusions, etc.) referenced by early comments/decisions were never checked into this repo.
