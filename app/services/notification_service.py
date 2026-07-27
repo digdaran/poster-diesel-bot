@@ -9,10 +9,10 @@ backend/background), по прямому запросу заказчика (пр
 нет ни одной привязки (подарочная покупка на неподтверждённый номер получателя,
 см. `resolve_manual_recipient`/DECISIONS.md) — доставка идёт в чат, ГДЕ БЫЛА
 ИНИЦИИРОВАНА покупка, через `Payment.channel`/`initiating_external_user_id`
-(см. `_resolve_targets_with_fallback`, DECISIONS_LOG.md №52) — раньше для этого
+(см. `_resolve_targets_with_fallback`, DECISIONS_LOG.md №56) — раньше для этого
 случая была отдельная реактивная кнопка «Проверить статус оплаты», которая уже
 не работала на практике (покупатель тоже без привязки, см. DECISIONS_LOG.md
-№51) и была убрана; этот fallback — её замена.
+№55) и была убрана; этот fallback — её замена.
 
 Многоканально (Telegram, VK): по прямому запросу заказчика уведомление уходит
 **во все** каналы, где есть подходящая привязка, одновременно — см.
@@ -119,7 +119,7 @@ def _resolve_targets_with_fallback(
     привязки — типично подарочная покупка на неподтверждённый номер получателя,
     см. `resolve_manual_recipient`) — fallback на чат, ГДЕ БЫЛА ИНИЦИИРОВАНА
     покупка (`Payment.channel`/`initiating_external_user_id`, см.
-    DECISIONS_LOG.md №51/№52). Без этого fallback'а такие покупки не имели ни
+    DECISIONS_LOG.md №55/№56). Без этого fallback'а такие покупки не имели ни
     одного рабочего способа доставки: ни получатель, ни сам покупатель не
     привязаны, `ChannelBinding` для уведомления искать не у кого."""
     assert outcome.participant_id is not None

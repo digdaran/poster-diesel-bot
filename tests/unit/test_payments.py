@@ -184,7 +184,7 @@ def test_create_payment_persists_initiating_external_user_id(db: Database) -> No
     """`initiating_external_user_id` (чат, из которого создан платёж) сохраняется
     на Payment и попадает в `FinalizeOutcome` при финализации — используется
     `notification_service` как fallback-получатель уведомления, когда у
-    участника-получателя нет `ChannelBinding` (см. DECISIONS_LOG.md №52)."""
+    участника-получателя нет `ChannelBinding` (см. DECISIONS_LOG.md №56)."""
     gid = make_giveaway(db, max_tickets=10)
     pid = make_participant(db)
     outcome = svc.create_payment_safe(

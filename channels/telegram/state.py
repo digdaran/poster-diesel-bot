@@ -45,6 +45,7 @@ class PurchaseStates(StatesGroup):
     choosing_quantity = State()
     awaiting_phone_for_gift = State()
     confirming_order = State()
+    awaiting_receipt = State()
 
 
 class RegistrationStates(StatesGroup):

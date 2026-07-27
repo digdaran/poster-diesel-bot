@@ -48,7 +48,7 @@ class Payment(Base):
     # Используется ТОЛЬКО как fallback-получатель проактивного уведомления
     # (`notification_service`), когда у участника-получателя платежа нет
     # `ChannelBinding` (подарочная покупка на неподтверждённый номер получателя,
-    # см. DECISIONS_LOG.md №51/№52) — обычная покупка получает уведомление через
+    # см. DECISIONS_LOG.md №55/№56) — обычная покупка получает уведомление через
     # привязку получателя, это поле для неё не используется.
     initiating_external_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     amount: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -70,7 +70,7 @@ class Payment(Base):
     # Сейчас (`RequisitesQrProvider`) ничего в коде не перечитывает эти поля из
     # БД — QR отправляется участнику сразу при создании из транзиентного
     # результата `create_payment`, без кнопки повторного показа (см.
-    # DECISIONS_LOG.md №51) — колонки остаются для ручной сверки/будущих фич.
+    # DECISIONS_LOG.md №55) — колонки остаются для ручной сверки/будущих фич.
     payment_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     qr_code_payload: Mapped[str | None] = mapped_column(String(2000), nullable=True)
 
@@ -94,14 +94,19 @@ class Payment(Base):
     # в поддержку вручную. Только для видимости в админ-панели (см. DECISIONS.md).
     oversold: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
-    # Банковская сверка (requisites_qr) нашла операцию с совпавшим номером счёта в
-    # назначении платежа, но с другой суммой (см. app/services/bank_reconciliation_service.py) —
-    # счёт НЕ закрывается автоматически (см. DECISIONS_LOG.md №39), только помечается
-    # для ручного разбора оператором в панели. `amount_mismatch_bank_amount` —
-    # фактическая сумма из последней такой операции (копейки), для сравнения с
-    # `amount` в UI. Не сбрасывается автоматически при последующей успешной
-    # финализации по другой операции — служит историческим следом ("по этому
-    # счёту также приходил платёж на другую сумму").
+    # Банковская сверка (requisites_qr) нашла операцию(и) с совпавшим номером счёта в
+    # назначении платежа, но суммарно не равные `amount` (см.
+    # app/services/bank_reconciliation_service.py, суммирует ВСЕ операции с таким
+    # назначением в окне выписки — участник мог доплатить недостающее отдельным
+    # переводом, см. DECISIONS_LOG.md №53). Два случая:
+    #   - сумма < `amount` (недоплата) — счёт НЕ закрывается, остаётся PENDING до
+    #     появления доплаты или ручного разбора оператором (DECISIONS_LOG.md №39);
+    #   - сумма > `amount` (переплата) — счёт закрывается как обычно (SUCCEEDED),
+    #     флаг только подсвечивает разницу оператору, ничего не блокирует.
+    # `amount_mismatch_bank_amount` — фактическая СУММА всех подходящих операций на
+    # момент последней проверки (копейки), для сравнения с `amount` в UI (UI отличает
+    # переплату от недоплаты сравнением этих двух полей, см. `SalesPage.tsx`). Не
+    # сбрасывается автоматически впоследствии — служит историческим следом.
     amount_mismatch: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     amount_mismatch_bank_amount: Mapped[int | None] = mapped_column(Integer, nullable=True)
 

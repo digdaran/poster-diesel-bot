@@ -114,7 +114,7 @@ class RequisitesQrProvider(BasePaymentProvider):
         """Разовая сверка по конкретному платежу — реализация обязательного
         метода `BasePaymentProvider.check_status`. Кнопка бота «Проверить статус
         оплаты», которая раньше вызывала это напрямую по запросу участника,
-        убрана (см. DECISIONS_LOG.md №51) — сейчас этот путь ничем не вызывается
+        убрана (см. DECISIONS_LOG.md №55) — сейчас этот путь ничем не вызывается
         для `requisites_qr` (фоновая сверка `bank_reconciliation_service.reconcile`
         финализирует платёж сама, без участия этого метода). Оставлено ради
         реализации интерфейса и на случай будущей ручной проверки (напр. из
@@ -138,7 +138,7 @@ class RequisitesQrProvider(BasePaymentProvider):
             expected_amount = payment.amount
 
         from app.payments.tbank_statement import TBankStatementProvider
-        from app.services.bank_reconciliation_service import find_matching_entry
+        from app.services.bank_reconciliation_service import find_matching_entries
 
         settings = self.db.settings
         try:
@@ -146,8 +146,17 @@ class RequisitesQrProvider(BasePaymentProvider):
         except Exception:
             return PaymentStatus.PENDING
 
-        result = find_matching_entry(entries, external_payment_id, expected_amount)
-        return PaymentStatus.SUCCEEDED if result.matched is not None else PaymentStatus.PENDING
+        # Та же логика суммирования, что и в фоновой сверке (см.
+        # bank_reconciliation_service.reconcile, DECISIONS_LOG.md №53) — несколько
+        # частичных переводов по одному счёту тоже должны закрывать его здесь, а не
+        # только на следующем тике фонового цикла. Расхождение (в т.ч. переплата) эта
+        # разовая проверка не помечает на Payment — этим по-прежнему занимается
+        # только фоновая сверка на своём следующем тике.
+        matching_entries = find_matching_entries(entries, external_payment_id)
+        total_received = sum(entry.amount for entry in matching_entries)
+        return (
+            PaymentStatus.SUCCEEDED if total_received >= expected_amount else PaymentStatus.PENDING
+        )
 
     def cancel(self, order_id: str, *, external_payment_id: str | None = None) -> PaymentStatus:
         """Нет банковской сессии для закрытия — статический QR остаётся валидным

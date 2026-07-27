@@ -238,9 +238,15 @@ export function SalesPage() {
                   {p.amount_mismatch && (
                     <>
                       {" "}
-                      <Badge tone="danger">
-                        не совпадает: пришло {formatMoney(p.amount_mismatch_bank_amount ?? 0)}
-                      </Badge>
+                      {(p.amount_mismatch_bank_amount ?? 0) > p.amount ? (
+                        <Badge tone="info">
+                          переплата: пришло {formatMoney(p.amount_mismatch_bank_amount ?? 0)}
+                        </Badge>
+                      ) : (
+                        <Badge tone="danger">
+                          не хватает: пришло {formatMoney(p.amount_mismatch_bank_amount ?? 0)}
+                        </Badge>
+                      )}
                     </>
                   )}
                 </td>

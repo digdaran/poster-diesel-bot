@@ -202,7 +202,7 @@ async def test_notify_without_binding_is_noop(db: Database) -> None:
 
 async def test_notify_success_falls_back_to_initiating_chat_without_binding(db: Database) -> None:
     """Подарочная покупка на неподтверждённый номер получателя (см.
-    `participant_service.resolve_manual_recipient`, DECISIONS_LOG.md №51/№52):
+    `participant_service.resolve_manual_recipient`, DECISIONS_LOG.md №55/№56):
     получатель без `ChannelBinding`, но платёж хранит чат, откуда его создал
     покупатель (`initiating_external_user_id`) — доставка должна уйти туда,
     а не потеряться, как раньше (см. `test_notify_without_binding_is_noop`,
@@ -331,7 +331,7 @@ async def test_notify_late_success_no_tickets_without_binding_is_noop(db: Databa
 
 
 async def test_notify_late_success_no_tickets_falls_back_to_initiating_chat(db: Database) -> None:
-    """Тот же fallback (DECISIONS_LOG.md №52), что и у `notify_payment_outcome` —
+    """Тот же fallback (DECISIONS_LOG.md №56), что и у `notify_payment_outcome` —
     без привязки получателя, но с известным инициирующим чатом, уведомление
     уходит туда, а не теряется (в отличие от
     `test_notify_late_success_no_tickets_without_binding_is_noop`, где
@@ -391,7 +391,7 @@ async def test_notify_uses_vk_when_only_vk_binding_allowed(db: Database) -> None
 async def test_notify_skips_vk_when_messages_not_allowed(db: Database) -> None:
     """VK-разрешение отозвано (`message_deny`, см. DECISIONS_LOG.md #32/#33) —
     проактивно писать нельзя, участник остаётся без уведомления через этот канал
-    (см. DECISIONS_LOG.md №51 про удалённую кнопку "Проверить статус оплаты")."""
+    (см. DECISIONS_LOG.md №55 про удалённую кнопку "Проверить статус оплаты")."""
     pid = make_participant_with_vk_binding(db, messages_allowed=False)
     outcome = svc.FinalizeOutcome(applied=False, participant_id=pid, late_success_no_tickets=True)
     vk_channel = FakeChannel()
