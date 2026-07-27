@@ -60,6 +60,15 @@ def test_full_manual_sale_flow(api_client: TestClient) -> None:
     assert all(t["participant_full_name"] == "Иван Иванов" for t in tickets)
     assert all(t["giveaway_name"] == "Осенний розыгрыш" for t in tickets)
 
+    # Фильтр по manual_registration_id — для модалки «Показать номерки» на панели.
+    resp = api_client.get(
+        "/api/tickets",
+        params={"manual_registration_id": registration_id},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert {t["id"] for t in resp.json()["items"]} == {t["id"] for t in tickets}
+
     resp = api_client.get("/api/dashboard", headers=headers)
     assert resp.status_code == 200
     dashboard = resp.json()

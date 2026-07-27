@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { GiveawaysApi, ManualRegistrationsApi, ParticipantsApi } from "../api/resources";
+import {
+  GiveawaysApi,
+  ManualRegistrationsApi,
+  ParticipantsApi,
+  TicketsApi,
+} from "../api/resources";
 import { apiDownload } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { usePagination } from "../hooks/usePagination";
@@ -13,7 +18,8 @@ import { Badge } from "../components/Badge";
 import { ChannelBadges } from "../components/ChannelBadges";
 import { EmptyStateRow } from "../components/EmptyState";
 import { formatMoney } from "../utils/format";
-import type { Giveaway, ManualRegistration } from "../api/types";
+import { PAGE_SIZES } from "../api/types";
+import type { Giveaway, ManualRegistration, Ticket } from "../api/types";
 
 const STATUS_TONE: Record<string, "success" | "danger" | "muted"> = {
   CONFIRMED: "success",
@@ -51,6 +57,10 @@ export function ManualRegistrationsPage() {
     imageUrl: string;
   } | null>(null);
   const qrObjectUrlRef = useRef<string | null>(null);
+  const [ticketsModal, setTicketsModal] = useState<{
+    registration: ManualRegistration;
+    tickets: Ticket[];
+  } | null>(null);
 
   const [filterGiveawayId, setFilterGiveawayId] = useState("");
   const [participantQuery, setParticipantQuery] = useState("");
@@ -204,6 +214,37 @@ export function ManualRegistrationsPage() {
       load();
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Не удалось сформировать QR", "error");
+    } finally {
+      setPendingId(null);
+    }
+  };
+
+  // page_size у /api/tickets принимает только фиксированный набор значений —
+  // берём наименьший, покрывающий quantity регистрации (если она больше
+  // максимального page_size, показываем первую страницу номерков).
+  const ticketsPageSize = (quantity: number) =>
+    PAGE_SIZES.find((size) => size >= quantity) ?? PAGE_SIZES[PAGE_SIZES.length - 1];
+
+  const showAssignedTickets = async (registration: ManualRegistration) => {
+    const { items } = await TicketsApi.list({
+      manual_registration_id: registration.id,
+      page_size: ticketsPageSize(registration.quantity),
+    });
+    setTicketsModal({
+      registration,
+      tickets: [...items].sort((a, b) => a.number - b.number),
+    });
+  };
+
+  const onConfirm = async (r: ManualRegistration) => {
+    setPendingId(r.id);
+    try {
+      const updated = await ManualRegistrationsApi.confirm(r.id);
+      showToast("Регистрация подтверждена");
+      load();
+      await showAssignedTickets(updated);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Не удалось подтвердить", "error");
     } finally {
       setPendingId(null);
     }
@@ -383,16 +424,7 @@ export function ManualRegistrationsPage() {
                           Наличные
                         </button>
                       )}
-                      <button
-                        disabled={pendingId === r.id}
-                        onClick={() =>
-                          void runRowAction(
-                            r.id,
-                            () => ManualRegistrationsApi.confirm(r.id),
-                            "Регистрация подтверждена",
-                          )
-                        }
-                      >
+                      <button disabled={pendingId === r.id} onClick={() => void onConfirm(r)}>
                         Подтвердить
                       </button>
                       <button
@@ -403,6 +435,14 @@ export function ManualRegistrationsPage() {
                         Отменить
                       </button>
                     </>
+                  )}
+                  {r.status === "CONFIRMED" && (
+                    <button
+                      disabled={pendingId === r.id}
+                      onClick={() => void showAssignedTickets(r)}
+                    >
+                      Показать номерки
+                    </button>
                   )}
                 </td>
               </tr>
@@ -428,6 +468,28 @@ export function ManualRegistrationsPage() {
             <img src={qrModal.imageUrl} alt="QR для оплаты по реквизитам" className="qr-preview" />
             <div className="modal-actions">
               <button className="button-secondary" onClick={closeQrModal}>
+                Закрыть
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {ticketsModal && (
+        <div className="modal-overlay" onClick={() => setTicketsModal(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <p className="modal-message">
+              Регистрация №{ticketsModal.registration.id} (
+              {ticketsModal.registration.participant_full_name ??
+                ticketsModal.registration.participant_phone}
+              ) — присвоенные номерки:
+            </p>
+            <ul className="ticket-codes-list">
+              {ticketsModal.tickets.map((t) => (
+                <li key={t.id}>{t.full_code}</li>
+              ))}
+            </ul>
+            <div className="modal-actions">
+              <button className="button-secondary" onClick={() => setTicketsModal(null)}>
                 Закрыть
               </button>
             </div>

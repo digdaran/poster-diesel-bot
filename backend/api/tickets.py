@@ -46,6 +46,7 @@ def list_tickets(
     participant_query: str | None = None,
     source: TicketSource | None = None,
     channel: ChannelType | None = None,
+    manual_registration_id: int | None = None,
     created_from: dt.date | None = None,
     created_to: dt.date | None = None,
     page: int = 1,
@@ -58,6 +59,8 @@ def list_tickets(
     stmt = select(Ticket)
     if giveaway_id is not None:
         stmt = stmt.where(Ticket.giveaway_id == giveaway_id)
+    if manual_registration_id is not None:
+        stmt = stmt.where(Ticket.manual_registration_id == manual_registration_id)
     if full_code:
         stmt = stmt.where(Ticket.full_code.like(f"%{full_code}%"))
     if source is not None:
