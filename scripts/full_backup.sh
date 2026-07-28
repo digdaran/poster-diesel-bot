@@ -66,9 +66,12 @@ restic -r "$RESTIC_LOCAL_REPO" backup $BACKUP_PATHS --tag hourly
 restic -r "$RESTIC_LOCAL_REPO" forget --keep-within "$RESTIC_LOCAL_KEEP_WITHIN" --prune
 
 echo "== Офсайт-репозиторий: $RESTIC_REMOTE_REPO =="
-if ! restic -r "$RESTIC_REMOTE_REPO" snapshots >/dev/null 2>&1; then
-  restic -r "$RESTIC_REMOTE_REPO" init
-fi
+# Пред-проверка "существует ли репозиторий" через отдельный restic-вызов по SFTP
+# оказалась ненадёжной (падала не только на реально отсутствующем репозитории).
+# Поэтому просто пытаемся init каждый раз и игнорируем ошибку "уже существует" —
+# настоящая проблема с доступом всё равно проявится на следующей команде (backup),
+# которая уже не проглатывается (set -e).
+restic -r "$RESTIC_REMOTE_REPO" init >/dev/null 2>&1 || true
 # shellcheck disable=SC2086
 restic -r "$RESTIC_REMOTE_REPO" backup $BACKUP_PATHS --tag hourly
 restic -r "$RESTIC_REMOTE_REPO" forget \
