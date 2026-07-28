@@ -481,10 +481,19 @@ section {
 }
 
 .modal-details {
-  width: 900px;
+  width: 1600px;
   max-width: calc(100vw - 32px);
   max-height: calc(100vh - 64px);
   overflow-y: auto;
+}
+
+.modal-details h3 {
+  margin: 20px 0 4px;
+  font-size: 15px;
+}
+
+.modal-details h3:first-of-type {
+  margin-top: 0;
 }
 
 .modal-details-header {
