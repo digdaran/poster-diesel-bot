@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 # Backend (FastAPI) — REST API панели, фоновые задачи (сверка платежей по
 # банковской выписке, освобождение просроченных резервов), /metrics. Банковских
 # webhook-роутеров больше нет — интернет-эквайринг удалён, см. DECISIONS_LOG.md #44.
@@ -14,8 +15,7 @@
 FROM python:3.11-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PYTHONUNBUFFERED=1
 
 WORKDIR /srv
 
@@ -30,7 +30,8 @@ COPY channels ./channels
 COPY migrations ./migrations
 COPY alembic.ini ./
 
-RUN pip install --no-cache-dir ".[backend,telegram,vk]"
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install ".[backend,telegram,vk]"
 
 COPY scripts/backend-entrypoint.sh /usr/local/bin/backend-entrypoint.sh
 RUN chmod +x /usr/local/bin/backend-entrypoint.sh
