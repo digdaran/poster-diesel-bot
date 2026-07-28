@@ -116,6 +116,11 @@ data/
 - `scripts/backup_db.sh` — консистентный снимок SQLite (`VACUUM INTO` через
   `app/core/backup.py`), gzip, ротация по `BACKUP_RETENTION_DAYS`. Добавьте в cron
   хоста: `0 3 * * * cd /opt/raffle-platform && ./scripts/backup_db.sh`.
+- `scripts/full_backup.sh` — почасовой полный офсайт-бэкап (`restic`): снимок БД +
+  квитанции/постеры/TLS-сертификаты Caddy/`.env`, локально (1 день) и на другой
+  сервер по SSH. Требует `restic` на хосте и переменные `RESTIC_*` в `.env` (см.
+  `.env.example`). Добавьте в cron хоста:
+  `0 * * * * cd /opt/raffle-platform && ./scripts/full_backup.sh >> /var/log/raffle-full-backup.log 2>&1`.
 - **CI не используется** (сознательное решение заказчика). Перед каждым пушем в
   `main` вручную прогоняются `ruff check`, `black --check`, `mypy`, `pytest` —
   все должны быть зелёными.
