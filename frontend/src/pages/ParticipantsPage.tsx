@@ -9,6 +9,7 @@ import { useToast } from "../components/Toast";
 import { Badge } from "../components/Badge";
 import { ChannelBadges } from "../components/ChannelBadges";
 import { EmptyStateRow } from "../components/EmptyState";
+import { ParticipantOrdersModal } from "../components/ParticipantOrdersModal";
 import { formatDateTime } from "../utils/format";
 
 export function ParticipantsPage() {
@@ -24,6 +25,7 @@ export function ParticipantsPage() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingName, setEditingName] = useState("");
   const [pendingId, setPendingId] = useState<number | null>(null);
+  const [ordersParticipant, setOrdersParticipant] = useState<Participant | null>(null);
   const { page, pageSize, setPage, setPageSize } = usePagination();
 
   const debouncedQuery = useDebouncedValue(query);
@@ -158,11 +160,12 @@ export function ParticipantsPage() {
               <th>Заблокирован</th>
               <th>Каналы</th>
               <th>Регистрация</th>
+              <th>Заказы</th>
               {showActions && <th>Действия</th>}
             </tr>
           </thead>
           <tbody>
-            {participants.length === 0 && <EmptyStateRow colSpan={showActions ? 7 : 6} />}
+            {participants.length === 0 && <EmptyStateRow colSpan={showActions ? 8 : 7} />}
             {participants.map((p) => (
               <tr key={p.id}>
                 <td>{p.phone}</td>
@@ -187,6 +190,9 @@ export function ParticipantsPage() {
                   <ChannelBadges channels={p.channels} />
                 </td>
                 <td>{formatDateTime(p.created_at)}</td>
+                <td>
+                  <button onClick={() => setOrdersParticipant(p)}>Заказы</button>
+                </td>
                 {showActions && (
                   <td className="actions">
                     {hasPermission("participant_edit") &&
@@ -225,6 +231,12 @@ export function ParticipantsPage() {
         onPageChange={setPage}
         onPageSizeChange={setPageSize}
       />
+      {ordersParticipant && (
+        <ParticipantOrdersModal
+          participant={ordersParticipant}
+          onClose={() => setOrdersParticipant(null)}
+        />
+      )}
     </div>
   );
 }

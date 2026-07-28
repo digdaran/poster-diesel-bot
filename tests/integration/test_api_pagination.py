@@ -258,3 +258,76 @@ def test_participants_filter_by_blocked_and_verified(api_client: TestClient) -> 
         headers=headers,
     )
     assert resp.json()["total"] == 0  # заблокирован, под этим фильтром не пройдёт
+
+
+def test_participant_id_filter_scopes_payments_tickets_and_registrations(
+    api_client: TestClient,
+) -> None:
+    """Раздел «Участники» — просмотр заказов/оплат/номерков конкретного
+    участника (по запросу заказчика) фильтрует /payments, /tickets и
+    /manual-registrations по participant_id, не задевая данные других
+    участников."""
+    token = login(api_client, "admin", "admin-strong-pass-123")
+    headers = auth_headers(token)
+    giveaway_id = _create_open_giveaway(api_client, headers, prefix="PID")
+
+    reg_a = api_client.post(
+        "/api/manual-registrations",
+        json={
+            "giveaway_id": giveaway_id,
+            "participant_phone": "79990008881",
+            "participant_full_name": "Участник А",
+            "quantity": 1,
+        },
+        headers=headers,
+    )
+    reg_a.raise_for_status()
+    participant_a_id = reg_a.json()["participant_id"]
+    api_client.post(
+        f"/api/manual-registrations/{reg_a.json()['id']}/confirm", headers=headers
+    ).raise_for_status()
+    _seed_payments(giveaway_id, participant_a_id)
+
+    reg_b = api_client.post(
+        "/api/manual-registrations",
+        json={
+            "giveaway_id": giveaway_id,
+            "participant_phone": "79990008882",
+            "participant_full_name": "Участник Б",
+            "quantity": 1,
+        },
+        headers=headers,
+    )
+    reg_b.raise_for_status()
+    participant_b_id = reg_b.json()["participant_id"]
+    api_client.post(
+        f"/api/manual-registrations/{reg_b.json()['id']}/confirm", headers=headers
+    ).raise_for_status()
+
+    resp = api_client.get(
+        "/api/payments", params={"participant_id": participant_a_id}, headers=headers
+    )
+    body = resp.json()
+    assert body["total"] == 2
+    assert all(p["participant_id"] == participant_a_id for p in body["items"])
+
+    resp = api_client.get(
+        "/api/tickets", params={"participant_id": participant_a_id}, headers=headers
+    )
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["participant_id"] == participant_a_id
+
+    resp = api_client.get(
+        "/api/tickets", params={"participant_id": participant_b_id}, headers=headers
+    )
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["participant_id"] == participant_b_id
+
+    resp = api_client.get(
+        "/api/manual-registrations", params={"participant_id": participant_a_id}, headers=headers
+    )
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["participant_id"] == participant_a_id

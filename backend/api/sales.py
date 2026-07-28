@@ -58,6 +58,7 @@ def list_payments(
     order_id: str | None = None,
     provider: PaymentProviderType | None = None,
     channel: ChannelType | None = None,
+    participant_id: int | None = None,
     participant_query: str | None = None,
     created_from: dt.date | None = None,
     created_to: dt.date | None = None,
@@ -79,6 +80,8 @@ def list_payments(
         stmt = stmt.where(Payment.provider == provider)
     if channel is not None:
         stmt = stmt.where(Payment.channel == channel)
+    if participant_id is not None:
+        stmt = stmt.where(Payment.participant_id == participant_id)
     if created_from is not None:
         stmt = stmt.where(Payment.created_at >= created_from)
     if created_to is not None:

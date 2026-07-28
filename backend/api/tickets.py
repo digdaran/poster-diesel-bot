@@ -43,6 +43,7 @@ def _to_dict(t: Ticket) -> dict[str, Any]:
 def list_tickets(
     giveaway_id: int | None = None,
     full_code: str | None = None,
+    participant_id: int | None = None,
     participant_query: str | None = None,
     source: TicketSource | None = None,
     channel: ChannelType | None = None,
@@ -63,6 +64,8 @@ def list_tickets(
         stmt = stmt.where(Ticket.manual_registration_id == manual_registration_id)
     if full_code:
         stmt = stmt.where(Ticket.full_code.like(f"%{full_code}%"))
+    if participant_id is not None:
+        stmt = stmt.where(Ticket.participant_id == participant_id)
     if source is not None:
         stmt = stmt.where(Ticket.source == source)
     if channel is not None:

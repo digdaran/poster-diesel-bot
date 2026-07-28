@@ -40,6 +40,7 @@ router = APIRouter(prefix="/manual-registrations", tags=["manual-registrations"]
 @router.get("", response_model=None)
 def list_manual_registrations(
     giveaway_id: int | None = None,
+    participant_id: int | None = None,
     participant_query: str | None = None,
     status_filter: ManualRegistrationStatus | None = None,
     created_from: dt.date | None = None,
@@ -57,6 +58,8 @@ def list_manual_registrations(
         stmt = stmt.where(ManualRegistration.operator_id == user.id)
     if giveaway_id is not None:
         stmt = stmt.where(ManualRegistration.giveaway_id == giveaway_id)
+    if participant_id is not None:
+        stmt = stmt.where(ManualRegistration.participant_id == participant_id)
     if status_filter is not None:
         stmt = stmt.where(ManualRegistration.status == status_filter)
     if created_from is not None:

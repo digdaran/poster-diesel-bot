@@ -86,6 +86,7 @@ export const GiveawaysApi = {
 
 export interface ManualRegistrationsFilter extends PageParams {
   giveaway_id?: number;
+  participant_id?: number;
   participant_query?: string;
   status_filter?: string;
   created_from?: string;
@@ -124,6 +125,7 @@ export interface SalesFilter extends PageParams {
   order_id?: string;
   provider?: string;
   channel?: string;
+  participant_id?: number;
   participant_query?: string;
   created_from?: string;
   created_to?: string;
@@ -141,6 +143,7 @@ export const SalesApi = {
 export interface TicketsFilter extends PageParams {
   giveaway_id?: number;
   full_code?: string;
+  participant_id?: number;
   participant_query?: string;
   source?: string;
   channel?: string;
