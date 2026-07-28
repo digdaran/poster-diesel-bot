@@ -96,7 +96,9 @@ def test_full_manual_sale_flow(api_client: TestClient) -> None:
     resp = api_client.get("/api/manual-registrations?export=csv", headers=auth_headers(op_token))
     assert resp.status_code == 403
     resp = api_client.get("/api/manual-registrations", headers=auth_headers(op_token))
-    assert resp.status_code == 200  # список без экспорта доступен всем ролям (VIEW_SALES)
+    assert (
+        resp.status_code == 200
+    )  # список без экспорта доступен всем ролям (MANUAL_REGISTRATION_CREATE)
 
 
 def test_manual_registration_generate_qr_flow(api_client: TestClient) -> None:

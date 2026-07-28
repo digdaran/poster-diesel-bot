@@ -48,7 +48,7 @@ def list_manual_registrations(
     page_size: int = 50,
     export: ExportFormat | None = None,
     session: Session = Depends(get_session),
-    user: PanelUser = Depends(require_permission(Permission.VIEW_SALES)),
+    user: PanelUser = Depends(require_permission(Permission.MANUAL_REGISTRATION_CREATE)),
 ) -> dict[str, Any] | list[dict[str, Any]] | Response:
     """Operator видит только СВОИ регистрации (п.14.2 ТЗ), Super Admin/Administrator — все."""
     validate_page_size(page_size)

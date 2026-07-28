@@ -18,12 +18,14 @@ class PanelRole(str, Enum):
 
 
 class Permission(str, Enum):
-    # Просмотр (доступен всем трём ролям)
-    VIEW_DASHBOARD = "view_dashboard"
+    # Просмотр, доступный всем трём ролям
     VIEW_PARTICIPANTS = "view_participants"
-    VIEW_SALES = "view_sales"
     VIEW_TICKETS = "view_tickets"
     VIEW_GIVEAWAYS = "view_giveaways"
+
+    # Просмотр — только Super Admin + Administrator (Operator не нужен в работе)
+    VIEW_DASHBOARD = "view_dashboard"
+    VIEW_SALES = "view_sales"
 
     # Ручные регистрации — доступны всем трём ролям
     MANUAL_REGISTRATION_CREATE = "manual_registration_create"
@@ -51,9 +53,7 @@ class Permission(str, Enum):
 
 
 _VIEW_ALL = {
-    Permission.VIEW_DASHBOARD,
     Permission.VIEW_PARTICIPANTS,
-    Permission.VIEW_SALES,
     Permission.VIEW_TICKETS,
     Permission.VIEW_GIVEAWAYS,
     Permission.MANUAL_REGISTRATION_CREATE,
@@ -62,6 +62,8 @@ _VIEW_ALL = {
 }
 
 _ADMINISTRATOR_EXTRA = {
+    Permission.VIEW_DASHBOARD,
+    Permission.VIEW_SALES,
     Permission.PARTICIPANT_EDIT,
     Permission.PARTICIPANT_BLOCK,
     Permission.GIVEAWAY_EDIT,

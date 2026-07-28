@@ -44,16 +44,17 @@ def test_operator_forbidden_from_admin_only_sections(api_client: TestClient) -> 
         "/api/panel-users",
         "/api/audit",
         "/api/bank-reconciliation/status",
+        "/api/dashboard",
+        "/api/payments",
     ]
     for path in forbidden_paths:
         resp = api_client.get(path, headers=auth_headers(op_token))
         assert resp.status_code == 403, f"{path}: expected 403, got {resp.status_code}"
 
     allowed_paths = [
-        "/api/dashboard",
         "/api/participants",
         "/api/giveaways",
-        "/api/payments",
+        "/api/manual-registrations",
         "/api/tickets",
     ]
     for path in allowed_paths:
