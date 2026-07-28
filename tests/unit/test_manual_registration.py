@@ -19,8 +19,10 @@ from app.models.giveaway import Giveaway
 from app.models.manual_registration import ManualRegistration
 from app.models.panel_user import PanelUser
 from app.models.participant import Participant
+from app.models.ticket_pool import TicketPool
 from app.payments.bank_statement import BankStatementEntry
 from app.payments.requisites_qr import RequisitesQrProvider
+from app.repositories import ticket_pool_repo
 from app.services import bank_reconciliation_service
 from app.services import manual_registration_service as svc
 from app.services import payment_service as payment_svc
@@ -369,7 +371,7 @@ def test_switch_to_cash_after_qr_reverts_payment_method(db: Database, settings: 
     )
 
     svc.switch_manual_registration_to_cash(
-        db, manual_registration_id=outcome.manual_registration_id
+        db, settings, manual_registration_id=outcome.manual_registration_id
     )
 
     with db.session() as session:
@@ -404,13 +406,13 @@ def test_switch_to_cash_forbidden_after_confirmation(db: Database, settings: Set
     svc.confirm_manual_registration(db, manual_registration_id=outcome.manual_registration_id)
     with pytest.raises(svc.ManualRegistrationStateError):
         svc.switch_manual_registration_to_cash(
-            db, manual_registration_id=outcome.manual_registration_id
+            db, settings, manual_registration_id=outcome.manual_registration_id
         )
 
 
-def test_switch_to_cash_missing_registration_raises(db: Database) -> None:
+def test_switch_to_cash_missing_registration_raises(db: Database, settings: Settings) -> None:
     with pytest.raises(svc.ManualRegistrationStateError):
-        svc.switch_manual_registration_to_cash(db, manual_registration_id=999999)
+        svc.switch_manual_registration_to_cash(db, settings, manual_registration_id=999999)
 
 
 def test_switched_to_cash_registration_excluded_from_reconciliation_candidates(
@@ -428,7 +430,7 @@ def test_switched_to_cash_registration_excluded_from_reconciliation_candidates(
         db, settings, manual_registration_id=outcome.manual_registration_id
     )
     svc.switch_manual_registration_to_cash(
-        db, manual_registration_id=outcome.manual_registration_id
+        db, settings, manual_registration_id=outcome.manual_registration_id
     )
 
     entries = [
@@ -455,3 +457,92 @@ def test_switched_to_cash_registration_excluded_from_reconciliation_candidates(
         # Всё ещё PENDING/CASH — сверка не подтвердила её "за компанию".
         assert reg.status == ManualRegistrationStatus.PENDING
         assert reg.payment_method == ManualRegistrationPaymentMethod.CASH
+
+
+def _reserved_until(db: Database, *, manual_registration_id: int) -> dt.datetime:
+    with db.session() as session:
+        row = (
+            session.execute(
+                select(TicketPool).where(
+                    TicketPool.manual_registration_id == manual_registration_id
+                )
+            )
+            .scalars()
+            .first()
+        )
+        assert row is not None
+        assert row.reserved_until is not None
+        return row.reserved_until
+
+
+def test_generate_qr_extends_reservation_past_short_manual_ttl(
+    db: Database, settings: Settings
+) -> None:
+    """QR подразумевает банковский перевод, который может идти дольше, чем
+    короткий TTL наличных (см. DECISIONS.md) — резерв номерков должен пережить
+    момент, когда MANUAL_RESERVATION_TTL_SEC уже истёк бы, но
+    REQUISITES_INVOICE_TTL_DAYS ещё нет."""
+    settings.manual_reservation_ttl_sec = 3600  # 1 час, как дефолт наличных
+    settings.requisites_invoice_ttl_days = 10
+    gid = make_giveaway(db, max_tickets=10, prefix="TTL")
+    pid = make_participant(db)
+    oid = make_operator(db)
+    now = utcnow()
+    outcome = svc.create_manual_registration_safe(
+        db,
+        giveaway_id=gid,
+        participant_id=pid,
+        quantity=1,
+        operator_id=oid,
+        ttl_seconds=settings.manual_reservation_ttl_sec,
+    )
+    reg_id = outcome.manual_registration_id
+    assert reg_id is not None
+
+    svc.generate_manual_registration_qr(db, settings, manual_registration_id=reg_id, now=now)
+    reserved_until = _reserved_until(db, manual_registration_id=reg_id)
+    assert reserved_until == now + dt.timedelta(days=10)
+
+    # Момент, когда наличный TTL (1 час) давно истёк бы, но QR-TTL (10 дней) — нет.
+    past_manual_ttl = now + dt.timedelta(hours=2)
+    with db.session() as session:
+        refs = ticket_pool_repo.find_expired_reservation_refs(session, now=past_manual_ttl)
+    assert ("manual", reg_id) not in refs
+
+
+def test_switch_to_cash_shortens_reservation_back_to_manual_ttl(
+    db: Database, settings: Settings
+) -> None:
+    settings.manual_reservation_ttl_sec = 1800  # 30 минут
+    settings.requisites_invoice_ttl_days = 10
+    gid = make_giveaway(db, max_tickets=10, prefix="TTS")
+    pid = make_participant(db)
+    oid = make_operator(db)
+    now = utcnow()
+    outcome = svc.create_manual_registration_safe(
+        db,
+        giveaway_id=gid,
+        participant_id=pid,
+        quantity=1,
+        operator_id=oid,
+        ttl_seconds=settings.manual_reservation_ttl_sec,
+    )
+    reg_id = outcome.manual_registration_id
+    assert reg_id is not None
+    svc.generate_manual_registration_qr(db, settings, manual_registration_id=reg_id, now=now)
+    assert _reserved_until(db, manual_registration_id=reg_id) == now + dt.timedelta(days=10)
+
+    switch_now = now + dt.timedelta(hours=1)
+    svc.switch_manual_registration_to_cash(
+        db, settings, manual_registration_id=reg_id, now=switch_now
+    )
+
+    reserved_until = _reserved_until(db, manual_registration_id=reg_id)
+    assert reserved_until == switch_now + dt.timedelta(seconds=1800)
+
+    # Короткий наличный TTL снова истекает как обычно.
+    with db.session() as session:
+        refs = ticket_pool_repo.find_expired_reservation_refs(
+            session, now=switch_now + dt.timedelta(minutes=31)
+        )
+    assert ("manual", reg_id) in refs

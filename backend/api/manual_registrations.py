@@ -238,12 +238,13 @@ def switch_manual_registration_to_cash(
     registration_id: int,
     request: Request,
     db: Database = Depends(get_database),
+    settings: Settings = Depends(get_settings_dep),
     user: PanelUser = Depends(require_permission(Permission.MANUAL_REGISTRATION_CREATE)),
 ) -> ManualRegistrationOut:
     """Возврат к наличным, если покупатель не смог/не захотел оплатить по уже
     сформированному QR (см. DECISIONS.md). Только для PENDING."""
     try:
-        svc.switch_manual_registration_to_cash(db, manual_registration_id=registration_id)
+        svc.switch_manual_registration_to_cash(db, settings, manual_registration_id=registration_id)
     except svc.ManualRegistrationStateError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 

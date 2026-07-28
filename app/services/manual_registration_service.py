@@ -183,14 +183,20 @@ def generate_manual_registration_qr(
 ) -> GenerateQrOutcome:
     """Формирует QR с банковскими реквизитами для оплаты конкретной ручной
     регистрации — по желанию покупателя, вместо наличных оператору в кассу (см.
-    DECISIONS.md). Доступно только для `PENDING`; не трогает резерв номерков в
-    пуле (он уже сделан при создании регистрации) — только присваивает номер
-    счёта и собирает payload, теми же чистыми функциями
-    (`app.payments.qr_requisites`), что и `RequisitesQrProvider` для онлайн-оплаты.
+    DECISIONS.md). Доступно только для `PENDING`; присваивает номер счёта и
+    собирает payload теми же чистыми функциями (`app.payments.qr_requisites`),
+    что и `RequisitesQrProvider` для онлайн-оплаты.
+
+    Продлевает резерв номерков в пуле до `REQUISITES_INVOICE_TTL_DAYS` — того же
+    TTL, что и у онлайн-счетов по QR (обычно дни, а не `MANUAL_RESERVATION_TTL_SEC`
+    ~час, рассчитанный на "покупатель стоит у оператора"): банковский перевод по
+    QR может дойти не сразу, а короткий TTL молча освободил бы номерки раньше,
+    чем покупатель успеет заплатить (см. DECISIONS.md). Обратное продление —
+    `switch_manual_registration_to_cash`.
 
     Идемпотентно: повторный вызов для той же регистрации возвращает уже
     сформированные ранее номер счёта и payload, не трогая счётчик
-    `Giveaway.next_payment_number` повторно.
+    `Giveaway.next_payment_number` повторно (TTL продлевается заново).
     """
     now = now or utcnow()
     with db.immediate_session() as session:
@@ -209,9 +215,15 @@ def generate_manual_registration_qr(
             select(Giveaway).where(Giveaway.id == registration.giveaway_id)
         ).scalar_one()
         amount = registration.quantity * giveaway.ticket_price
+        qr_reserved_until = now + dt.timedelta(days=settings.requisites_invoice_ttl_days)
 
         if registration.payment_number is not None:
             assert registration.qr_code_payload is not None  # заполняются вместе, см. ниже
+            repo.extend_reservation(
+                session,
+                manual_registration_id=manual_registration_id,
+                reserved_until=qr_reserved_until,
+            )
             return GenerateQrOutcome(
                 manual_registration_id=manual_registration_id,
                 invoice_no=giveaway.format_invoice_number(registration.payment_number),
@@ -256,6 +268,9 @@ def generate_manual_registration_qr(
                 qr_generated_at=now,
             )
         )
+        repo.extend_reservation(
+            session, manual_registration_id=manual_registration_id, reserved_until=qr_reserved_until
+        )
 
         return GenerateQrOutcome(
             manual_registration_id=manual_registration_id,
@@ -265,7 +280,13 @@ def generate_manual_registration_qr(
         )
 
 
-def switch_manual_registration_to_cash(db: Database, *, manual_registration_id: int) -> None:
+def switch_manual_registration_to_cash(
+    db: Database,
+    settings: Settings,
+    *,
+    manual_registration_id: int,
+    now: dt.datetime | None = None,
+) -> None:
     """Возврат к наличным после того, как для регистрации уже был сформирован
     QR (`payment_method=CASHLESS`), но покупатель не смог/не захотел оплатить
     по QR и решил заплатить оператору наличными (см. DECISIONS.md). Только для
@@ -273,7 +294,15 @@ def switch_manual_registration_to_cash(db: Database, *, manual_registration_id: 
     остаются неиспользованными (как и у отменённого онлайн-платежа); достаточно
     сменить `payment_method`, из-за чего регистрация перестаёт быть кандидатом
     фоновой сверки выписки (`bank_reconciliation_service.reconcile` матчит
-    только `CASHLESS`)."""
+    только `CASHLESS`).
+
+    Также укорачивает TTL резерва в пуле обратно до обычного "наличного" окна
+    (`MANUAL_RESERVATION_TTL_SEC`) — иначе номерки остались бы заморожены на
+    весь долгий QR-TTL (`generate_manual_registration_qr` продлевает его до
+    `REQUISITES_INVOICE_TTL_DAYS`), хотя оплата наличными подразумевает, что
+    покупатель платит прямо сейчас у оператора, а не когда-то в течение дней.
+    """
+    now = now or utcnow()
     with db.immediate_session() as session:
         result = session.execute(
             update(ManualRegistration)
@@ -293,6 +322,11 @@ def switch_manual_registration_to_cash(db: Database, *, manual_registration_id: 
                 f"Регистрация {manual_registration_id} в статусе {registration.status} — "
                 "сменить способ оплаты можно только для PENDING"
             )
+        repo.extend_reservation(
+            session,
+            manual_registration_id=manual_registration_id,
+            reserved_until=now + dt.timedelta(seconds=settings.manual_reservation_ttl_sec),
+        )
 
 
 @dataclass(frozen=True)

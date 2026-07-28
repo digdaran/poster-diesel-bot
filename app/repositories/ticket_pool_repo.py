@@ -211,6 +211,27 @@ def issue_reserved(
     return list(session.execute(select(TicketPool).where(TicketPool.id.in_(ids))).scalars().all())
 
 
+def extend_reservation(
+    session: Session, *, manual_registration_id: int, reserved_until: dt.datetime
+) -> int:
+    """Переставляет `reserved_until` для резерва под конкретную ручную
+    регистрацию, не трогая остальные поля/статус пула — используется при
+    переключении способа оплаты (QR получает более долгий TTL, чем наличные,
+    возврат к наличным укорачивает его обратно, см. DECISIONS.md). Не-op
+    (rowcount 0), если резерв уже выдан/освобождён — вызывающая сторона это не
+    проверяет, лишний резерв продлевать нечего."""
+    result = session.execute(
+        update(TicketPool)
+        .where(
+            TicketPool.manual_registration_id == manual_registration_id,
+            TicketPool.status == TicketPoolStatus.RESERVED,
+        )
+        .values(reserved_until=reserved_until)
+    )
+    session.flush()
+    return result.rowcount  # type: ignore[attr-defined]
+
+
 def find_expired_reservation_refs(session: Session, *, now: dt.datetime) -> list[tuple[str, int]]:
     """Находит уникальные ссылки (payment_id/manual_registration_id) на просроченные
     резервы (`reserved_until < now`) для фонового освобождения (п.7.5 ТЗ).
