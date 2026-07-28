@@ -26,8 +26,21 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
-# shellcheck disable=SC1091
-[ -f .env ] && . ./.env
+# .env — простой KEY=VALUE (как читают его docker compose/pydantic-settings), НЕ
+# валидный POSIX shell: значения (например REQUISITES_RECIPIENT_NAME) могут содержать
+# пробелы без кавычек. Поэтому не source'им файл целиком, а точечно вытаскиваем только
+# нужные переменные, если они не заданы окружением снаружи.
+env_get() {
+  [ -f .env ] || return 0
+  grep -m1 "^$1=" .env | cut -d= -f2- | sed -e 's/^"//' -e 's/"$//'
+}
+
+RESTIC_LOCAL_REPO="${RESTIC_LOCAL_REPO:-$(env_get RESTIC_LOCAL_REPO)}"
+RESTIC_REMOTE_REPO="${RESTIC_REMOTE_REPO:-$(env_get RESTIC_REMOTE_REPO)}"
+RESTIC_PASSWORD_FILE="${RESTIC_PASSWORD_FILE:-$(env_get RESTIC_PASSWORD_FILE)}"
+RESTIC_LOCAL_KEEP_WITHIN="${RESTIC_LOCAL_KEEP_WITHIN:-$(env_get RESTIC_LOCAL_KEEP_WITHIN)}"
+RESTIC_REMOTE_KEEP_HOURLY="${RESTIC_REMOTE_KEEP_HOURLY:-$(env_get RESTIC_REMOTE_KEEP_HOURLY)}"
+RESTIC_REMOTE_KEEP_DAILY="${RESTIC_REMOTE_KEEP_DAILY:-$(env_get RESTIC_REMOTE_KEEP_DAILY)}"
 
 : "${RESTIC_LOCAL_REPO:?RESTIC_LOCAL_REPO не задан (см. .env.example)}"
 : "${RESTIC_REMOTE_REPO:?RESTIC_REMOTE_REPO не задан (см. .env.example)}"
