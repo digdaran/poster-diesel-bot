@@ -7,13 +7,16 @@ interface NavItem {
   to: string;
   label: string;
   permission: string;
+  // Открывается в отдельной вкладке/окне без сайдбара (см. App.tsx) — для
+  // мониторинга на весь экран, а не обычная SPA-навигация.
+  newTab?: boolean;
 }
 
 const NAV_ITEMS: NavItem[] = [
   { to: "/", label: "Dashboard", permission: "view_dashboard" },
   { to: "/participants", label: "Участники", permission: "view_participants" },
   { to: "/sales", label: "Продажи On-Line", permission: "view_sales" },
-  { to: "/monitoring", label: "Мониторинг", permission: "view_sales" },
+  { to: "/monitoring", label: "Мониторинг", permission: "view_sales", newTab: true },
   {
     to: "/manual-registrations",
     label: "Ручные регистрации",
@@ -35,17 +38,29 @@ export function Layout() {
 
   const nav = (
     <nav>
-      {NAV_ITEMS.filter((item) => hasPermission(item.permission)).map((item) => (
-        <NavLink
-          key={item.to}
-          to={item.to}
-          end={item.to === "/"}
-          className="nav-link"
-          onClick={() => setNavOpen(false)}
-        >
-          {item.label}
-        </NavLink>
-      ))}
+      {NAV_ITEMS.filter((item) => hasPermission(item.permission)).map((item) =>
+        item.newTab ? (
+          <a
+            key={item.to}
+            href={item.to}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="nav-link"
+          >
+            {item.label} ↗
+          </a>
+        ) : (
+          <NavLink
+            key={item.to}
+            to={item.to}
+            end={item.to === "/"}
+            className="nav-link"
+            onClick={() => setNavOpen(false)}
+          >
+            {item.label}
+          </NavLink>
+        ),
+      )}
     </nav>
   );
 

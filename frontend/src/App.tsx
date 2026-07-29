@@ -28,6 +28,17 @@ export default function App() {
           <AuthProvider>
             <Routes>
               <Route path="/login" element={<LoginPage />} />
+              {/* Отдельный top-level маршрут (не внутри Layout) — открывается
+                  из сайдбара в новой вкладке (target=_blank), чтобы окно
+                  можно было развернуть на весь экран без сайдбара/шапки. */}
+              <Route
+                path="/monitoring"
+                element={
+                  <ProtectedRoute>
+                    <MonitoringPage />
+                  </ProtectedRoute>
+                }
+              />
               <Route
                 path="/"
                 element={
@@ -42,7 +53,6 @@ export default function App() {
                 <Route path="giveaways/:id" element={<GiveawayDetailPage />} />
                 <Route path="manual-registrations" element={<ManualRegistrationsPage />} />
                 <Route path="sales" element={<SalesPage />} />
-                <Route path="monitoring" element={<MonitoringPage />} />
                 <Route path="tickets" element={<TicketsPage />} />
                 <Route path="broadcasts" element={<BroadcastsPage />} />
                 <Route path="reports" element={<ReportsPage />} />

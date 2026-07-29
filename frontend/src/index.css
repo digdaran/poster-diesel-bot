@@ -286,6 +286,120 @@ tbody tr.row-just-confirmed {
   }
 }
 
+/* Мониторинг открывается отдельным окном/вкладкой (target=_blank из
+   сайдбара), поэтому сам себе задаёт отступы — вне .layout/.content. */
+.monitoring-standalone {
+  min-height: 100vh;
+  padding: 20px 28px;
+  display: flex;
+  flex-direction: column;
+}
+
+.monitoring-layout {
+  display: flex;
+  gap: 20px;
+  flex: 1;
+  min-height: 0;
+  margin-top: 8px;
+}
+
+.monitoring-main {
+  flex: 3 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.monitoring-main .table-wrapper {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* ~1/4 ширины экрана под ленту подтверждённых платежей */
+.monitoring-confirmed-panel {
+  flex: 1 1 0;
+  max-width: 28%;
+  min-width: 260px;
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.monitoring-confirmed-panel h2 {
+  margin: 0 0 12px;
+  font-size: 15px;
+}
+
+.monitoring-confirmed-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  position: relative;
+}
+
+/* Карточка-«призрак», перелетающая из основной ленты в правую панель при
+   подтверждении платежа (см. FlyingGhost в MonitoringPage.tsx) — стартовая
+   позиция ставится инлайн-стилем, дальше left/top анимирует transition. */
+.flying-payment-ghost {
+  position: fixed;
+  z-index: 2000;
+  width: 200px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-success);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-modal);
+  font-size: 12px;
+  pointer-events: none;
+  transition:
+    left 0.7s cubic-bezier(0.4, 0, 0.2, 1),
+    top 0.7s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.7s ease,
+    transform 0.7s ease;
+}
+
+.flying-payment-ghost-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flying-payment-ghost-amount {
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+/* Строка только что "приземлилась" в правой панели — анимация проигрывается
+   один раз при монтировании нового DOM-узла (у уже существующих строк ключ
+   не меняется, React их не размонтирует, поэтому не переигрывает). */
+.confirmed-feed-row {
+  animation: confirmed-row-enter 500ms ease-out;
+}
+
+@keyframes confirmed-row-enter {
+  from {
+    background: var(--color-success-bg);
+    transform: translateY(-6px);
+    opacity: 0;
+  }
+  to {
+    background: transparent;
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
 .cards {
   display: flex;
   flex-wrap: wrap;

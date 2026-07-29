@@ -10,6 +10,11 @@ const POLL_INTERVAL_MS = 3000;
 // запас на случай рассинхрона таймеров, саму анимацию это не продлевает.
 const HIGHLIGHT_DURATION_MS = 3000;
 const FEED_SIZE = 100;
+const CONFIRMED_FEED_SIZE = 30;
+// Длительность CSS-transition у летящей карточки — держим в одном месте с
+// таймаутом её удаления (см. FLY_DURATION_MS + запас ниже).
+const FLY_DURATION_MS = 700;
+const GHOST_WIDTH = 200;
 
 type MonitorKind = "online" | "manual";
 
@@ -27,6 +32,13 @@ interface MonitorRow {
   isConfirmed: boolean;
   createdAt: string;
   confirmedAt: string | null;
+}
+
+interface FlyingItem {
+  id: string;
+  row: MonitorRow;
+  from: DOMRect;
+  to: DOMRect;
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -82,8 +94,56 @@ function toRows(
   return [...online, ...manual].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
+function FlyingGhost({
+  item,
+  onDone,
+}: {
+  item: FlyingItem;
+  onDone: (item: FlyingItem) => void;
+}) {
+  const elRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    // Стартовая позиция уже выставлена в inline-style при монтировании
+    // (item.from) — на следующий кадр сдвигаем к цели, CSS-transition на
+    // left/top анимирует перелёт (FLIP-приём без сторонних библиотек).
+    const raf = requestAnimationFrame(() => {
+      const el = elRef.current;
+      if (!el) return;
+      el.style.left = `${item.to.left + 10}px`;
+      el.style.top = `${item.to.top + 10}px`;
+      el.style.opacity = "0.35";
+      el.style.transform = "scale(0.8)";
+    });
+    const timeoutId = window.setTimeout(() => onDone(item), FLY_DURATION_MS + 80);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.clearTimeout(timeoutId);
+    };
+  }, [item, onDone]);
+
+  const startLeft = item.from.right - GHOST_WIDTH;
+  const startTop = item.from.top + item.from.height / 2 - 16;
+
+  return (
+    <div
+      ref={elRef}
+      className="flying-payment-ghost"
+      style={{ left: startLeft, top: startTop }}
+    >
+      <Badge tone={item.row.kind === "online" ? "info" : "muted"}>
+        {item.row.kind === "online" ? "Онлайн" : "Ручная"}
+      </Badge>
+      <span className="flying-payment-ghost-name">{item.row.participantLabel}</span>
+      <span className="flying-payment-ghost-amount">{formatMoney(item.row.amount)}</span>
+    </div>
+  );
+}
+
 export function MonitoringPage() {
   const [rows, setRows] = useState<MonitorRow[]>([]);
+  const [confirmedFeed, setConfirmedFeed] = useState<MonitorRow[]>([]);
+  const [flyingItems, setFlyingItems] = useState<FlyingItem[]>([]);
   const [justConfirmed, setJustConfirmed] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
 
@@ -93,12 +153,18 @@ export function MonitoringPage() {
   const isFirstLoadRef = useRef(true);
   const rowRefs = useRef<Map<string, HTMLTableRowElement>>(new Map());
   const highlightTimeoutsRef = useRef<Set<number>>(new Set());
+  const confirmedListRef = useRef<HTMLDivElement>(null);
 
   const setRowRef = useCallback((key: string) => {
     return (el: HTMLTableRowElement | null) => {
       if (el) rowRefs.current.set(key, el);
       else rowRefs.current.delete(key);
     };
+  }, []);
+
+  const handleFlightDone = useCallback((item: FlyingItem) => {
+    setFlyingItems((prev) => prev.filter((f) => f.id !== item.id));
+    setConfirmedFeed((feed) => [item.row, ...feed].slice(0, CONFIRMED_FEED_SIZE));
   }, []);
 
   const fetchAndMerge = useCallback(async () => {
@@ -112,7 +178,7 @@ export function MonitoringPage() {
       // Новое подтверждение = строка, которая на прошлом опросе ещё не была
       // подтверждена, а сейчас — подтверждена. На самом первом опросе не
       // считаем ничего "новым" (иначе вся уже оплаченная история подсветится
-      // разом при открытии страницы).
+      // и улетит в правую панель разом при открытии страницы).
       const newlyConfirmed: string[] = [];
       if (!isFirstLoadRef.current) {
         for (const row of merged) {
@@ -120,6 +186,30 @@ export function MonitoringPage() {
           if (wasConfirmed === false && row.isConfirmed) {
             newlyConfirmed.push(row.key);
           }
+        }
+      }
+
+      // Координаты снимаем СЕЙЧАС, пока DOM ещё отражает предыдущий рендер
+      // (со старым статусом строки) — именно эта позиция и есть "откуда
+      // лететь". Сама раскладка (setRows) произойдёт чуть ниже.
+      const newGhosts: FlyingItem[] = [];
+      const directInserts: MonitorRow[] = [];
+      for (const key of newlyConfirmed) {
+        const row = merged.find((r) => r.key === key);
+        if (!row) continue;
+        const fromEl = rowRefs.current.get(key);
+        const toEl = confirmedListRef.current;
+        if (fromEl && toEl) {
+          newGhosts.push({
+            id: `${key}-${Date.now()}`,
+            row,
+            from: fromEl.getBoundingClientRect(),
+            to: toEl.getBoundingClientRect(),
+          });
+        } else {
+          // Не удалось получить координаты (строка вне экрана и т.п.) —
+          // добавляем сразу без анимации, чтобы платёж не потерялся.
+          directInserts.push(row);
         }
       }
 
@@ -135,19 +225,25 @@ export function MonitoringPage() {
       setRows(merged);
       setError(null);
 
-      if (newlyConfirmed.length > 0) {
+      if (directInserts.length > 0) {
+        setConfirmedFeed((feed) => [...directInserts, ...feed].slice(0, CONFIRMED_FEED_SIZE));
+      }
+
+      if (newGhosts.length > 0) {
+        setFlyingItems((prev) => [...prev, ...newGhosts]);
+        const keys = new Set(newGhosts.map((g) => g.row.key));
         setJustConfirmed((prev) => {
           const next = new Set(prev);
-          newlyConfirmed.forEach((k) => next.add(k));
+          keys.forEach((k) => next.add(k));
           return next;
         });
         // Фокус — только на первую (самую свежую) из подтвердившихся за этот
         // тик, чтобы экран не прыгал между несколькими строками разом.
-        rowRefs.current.get(newlyConfirmed[0])?.scrollIntoView({
+        rowRefs.current.get(newGhosts[0].row.key)?.scrollIntoView({
           behavior: "smooth",
           block: "center",
         });
-        newlyConfirmed.forEach((key) => {
+        keys.forEach((key) => {
           const timeoutId = window.setTimeout(() => {
             setJustConfirmed((prev) => {
               const next = new Set(prev);
@@ -185,64 +281,99 @@ export function MonitoringPage() {
   }, [fetchAndMerge]);
 
   return (
-    <div>
+    <div className="monitoring-standalone">
       <h1>
         Мониторинг продаж <span className="live-dot" title="Обновляется каждые 3 сек" />
       </h1>
-      <p className="muted-text">
-        Живая лента онлайн-платежей и ручных регистраций (последние {FEED_SIZE}). При подтверждении
-        оплаты строка подсвечивается и попадает в фокус.
-      </p>
       {error && <div className="error">{error}</div>}
-      <div className="table-wrapper">
-        <table>
-          <thead>
-            <tr>
-              <th>Тип</th>
-              <th>Коллекция</th>
-              <th>Участник</th>
-              <th>Канал</th>
-              <th>Оплата</th>
-              <th>Сумма</th>
-              <th>Кол-во</th>
-              <th>Статус</th>
-              <th>Создан</th>
-              <th>Подтверждён</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.length === 0 && <EmptyStateRow colSpan={10} />}
-            {rows.map((row) => (
-              <tr
-                key={row.key}
-                ref={setRowRef(row.key)}
-                className={justConfirmed.has(row.key) ? "row-just-confirmed" : undefined}
-              >
-                <td>
-                  <Badge tone={row.kind === "online" ? "info" : "muted"}>
-                    {row.kind === "online" ? "Онлайн" : "Ручная"}
-                  </Badge>
-                </td>
-                <td>{row.giveawayName}</td>
-                <td>{row.participantLabel}</td>
-                <td>
-                  <ChannelBadges channels={row.channels} />
-                </td>
-                <td>{row.paymentLabel}</td>
-                <td>{formatMoney(row.amount)}</td>
-                <td>{row.quantity}</td>
-                <td>
-                  <Badge tone={STATUS_TONE[row.status] ?? "muted"}>
-                    {STATUS_LABEL[row.status] ?? row.status}
-                  </Badge>
-                </td>
-                <td>{formatRelativeTime(row.createdAt)}</td>
-                <td>{row.confirmedAt ? formatRelativeTime(row.confirmedAt) : "—"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="monitoring-layout">
+        <div className="monitoring-main">
+          <div className="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Тип</th>
+                  <th>Коллекция</th>
+                  <th>Участник</th>
+                  <th>Канал</th>
+                  <th>Оплата</th>
+                  <th>Сумма</th>
+                  <th>Кол-во</th>
+                  <th>Статус</th>
+                  <th>Создан</th>
+                  <th>Подтверждён</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.length === 0 && <EmptyStateRow colSpan={10} />}
+                {rows.map((row) => (
+                  <tr
+                    key={row.key}
+                    ref={setRowRef(row.key)}
+                    className={justConfirmed.has(row.key) ? "row-just-confirmed" : undefined}
+                  >
+                    <td>
+                      <Badge tone={row.kind === "online" ? "info" : "muted"}>
+                        {row.kind === "online" ? "Онлайн" : "Ручная"}
+                      </Badge>
+                    </td>
+                    <td>{row.giveawayName}</td>
+                    <td>{row.participantLabel}</td>
+                    <td>
+                      <ChannelBadges channels={row.channels} />
+                    </td>
+                    <td>{row.paymentLabel}</td>
+                    <td>{formatMoney(row.amount)}</td>
+                    <td>{row.quantity}</td>
+                    <td>
+                      <Badge tone={STATUS_TONE[row.status] ?? "muted"}>
+                        {STATUS_LABEL[row.status] ?? row.status}
+                      </Badge>
+                    </td>
+                    <td>{formatRelativeTime(row.createdAt)}</td>
+                    <td>{row.confirmedAt ? formatRelativeTime(row.confirmedAt) : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <aside className="monitoring-confirmed-panel">
+          <h2>Подтверждённые платежи</h2>
+          <div className="monitoring-confirmed-list" ref={confirmedListRef}>
+            <table>
+              <thead>
+                <tr>
+                  <th>Тип</th>
+                  <th>Участник</th>
+                  <th>Сумма</th>
+                  <th>Кол-во</th>
+                </tr>
+              </thead>
+              <tbody>
+                {confirmedFeed.length === 0 && (
+                  <EmptyStateRow colSpan={4} message="Пока нет подтверждений" />
+                )}
+                {confirmedFeed.map((row) => (
+                  <tr key={row.key} className="confirmed-feed-row">
+                    <td>
+                      <Badge tone={row.kind === "online" ? "info" : "muted"}>
+                        {row.kind === "online" ? "Онлайн" : "Ручная"}
+                      </Badge>
+                    </td>
+                    <td>{row.participantLabel}</td>
+                    <td>{formatMoney(row.amount)}</td>
+                    <td>{row.quantity}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </aside>
       </div>
+      {flyingItems.map((item) => (
+        <FlyingGhost key={item.id} item={item} onDone={handleFlightDone} />
+      ))}
     </div>
   );
 }
