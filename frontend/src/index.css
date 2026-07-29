@@ -286,6 +286,27 @@ tbody tr.row-just-confirmed {
   }
 }
 
+/* Строка, впервые появившаяся в ленте (новый платёж/регистрация) — 5 секунд,
+   синий тон, чтобы визуально не путать с зелёной подсветкой подтверждения. */
+tbody tr.row-just-appeared {
+  animation: row-just-appeared-flash 5s ease-out;
+}
+
+@keyframes row-just-appeared-flash {
+  0% {
+    background: var(--color-info-bg);
+    box-shadow: inset 0 0 0 2px var(--color-info);
+  }
+  20% {
+    background: var(--color-info-bg);
+    box-shadow: inset 0 0 0 2px var(--color-info);
+  }
+  100% {
+    background: transparent;
+    box-shadow: inset 0 0 0 0 transparent;
+  }
+}
+
 /* Мониторинг открывается отдельным окном/вкладкой (target=_blank из
    сайдбара), поэтому сам себе задаёт отступы — вне .layout/.content. */
 .monitoring-standalone {
@@ -398,6 +419,14 @@ tbody tr.row-just-confirmed {
     transform: translateY(0);
     opacity: 1;
   }
+}
+
+/* Номера билетов в узкой правой панели — список может быть длинным
+   (несколько экземпляров за раз), поэтому переносим, а не обрезаем. */
+.confirmed-feed-tickets {
+  white-space: normal;
+  word-break: break-word;
+  font-size: 12px;
 }
 
 .cards {

@@ -11,6 +11,8 @@ from app.core.db import Database
 from app.models.channel_binding import ChannelBinding
 from app.models.enums import ChannelType, PaymentProviderType, PaymentStatus
 from app.models.payment import Payment
+from app.payments.requisites_qr import RequisitesQrProvider
+from app.services import payment_service
 from fastapi.testclient import TestClient
 
 from tests.integration.conftest import auth_headers, login
@@ -682,3 +684,66 @@ def test_participants_filter_by_channel(api_client: TestClient) -> None:
     ids = {p["id"] for p in resp.json()["items"]}
     assert vk_participant_id not in ids
     assert no_channel_id not in ids
+
+
+def test_tickets_filter_by_payment_id(api_client: TestClient) -> None:
+    """Мониторинг продаж (панель) достаёт номерки конкретного онлайн-платежа
+    через /api/tickets?payment_id=... — раньше такого фильтра не было, только
+    manual_registration_id для ручных регистраций. Платёж создаётся и
+    финализируется напрямую через payment_service (у панели нет HTTP-пути для
+    онлайн-оплаты — см. _seed_payments выше), тот же паттерн, что и в
+    tests/unit/test_payments.py."""
+    token = login(api_client, "admin", "admin-strong-pass-123")
+    headers = auth_headers(token)
+    giveaway_id = _create_open_giveaway(api_client, headers, prefix="TPI")
+
+    reg_resp = api_client.post(
+        "/api/manual-registrations",
+        json={
+            "giveaway_id": giveaway_id,
+            "participant_phone": "79990001234",
+            "participant_full_name": "Онлайн Плательщик",
+            "quantity": 1,
+        },
+        headers=headers,
+    )
+    reg_resp.raise_for_status()
+    participant_id = reg_resp.json()["participant_id"]
+
+    provider = RequisitesQrProvider(
+        recipient_name="ИП Тест",
+        recipient_inn="770101001770",
+        recipient_kpp="",
+        personal_acc="40802810000000000001",
+        bank_name="Тестбанк",
+        bic="044525225",
+        corresp_acc="30101810000000000225",
+        vat_rate_percent=0,
+    )
+    db = Database(get_settings())
+    outcome = payment_service.create_payment_safe(
+        db,
+        provider,
+        giveaway_id=giveaway_id,
+        participant_id=participant_id,
+        participant_phone="79990001234",
+        quantity=2,
+    )
+    assert outcome.ok
+    finalize = payment_service.finalize_payment(
+        db, order_id=outcome.order_id, new_status=PaymentStatus.SUCCEEDED
+    )
+    assert finalize.applied
+    db.engine.dispose()
+
+    resp = api_client.get(
+        "/api/tickets", params={"payment_id": outcome.payment_id}, headers=headers
+    )
+    body = resp.json()
+    assert body["total"] == 2
+    assert all(t["source"] == "online" for t in body["items"])
+
+    resp = api_client.get(
+        "/api/tickets", params={"payment_id": (outcome.payment_id or 0) + 999999}, headers=headers
+    )
+    assert resp.json()["total"] == 0

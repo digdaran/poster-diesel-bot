@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ManualRegistrationsApi, SalesApi } from "../api/resources";
+import { ManualRegistrationsApi, SalesApi, TicketsApi } from "../api/resources";
 import { Badge } from "../components/Badge";
 import { ChannelBadges } from "../components/ChannelBadges";
 import { EmptyStateRow } from "../components/EmptyState";
@@ -9,6 +9,8 @@ const POLL_INTERVAL_MS = 3000;
 // Держим подсветку на экране чуть дольше, чем длится CSS-анимация (2.5s) —
 // запас на случай рассинхрона таймеров, саму анимацию это не продлевает.
 const HIGHLIGHT_DURATION_MS = 3000;
+// Подсветка новых (ещё не встречавшихся) строк — ровно 5 секунд, как просили.
+const APPEAR_HIGHLIGHT_DURATION_MS = 5000;
 const FEED_SIZE = 100;
 const CONFIRMED_FEED_SIZE = 30;
 // Длительность CSS-transition у летящей карточки — держим в одном месте с
@@ -32,6 +34,9 @@ interface MonitorRow {
   isConfirmed: boolean;
   createdAt: string;
   confirmedAt: string | null;
+  // Заполняется только для строк, попадающих в правую панель (см.
+  // fetchTicketCodes) — в основной ленте не используется.
+  ticketCodes?: string[];
 }
 
 interface FlyingItem {
@@ -94,6 +99,21 @@ function toRows(
   return [...online, ...manual].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
+// Номера билетов конкретного платежа/регистрации — у Ticket своя связь на
+// каждый источник (payment_id для онлайна, manual_registration_id для ручных,
+// см. backend/api/tickets.py), поэтому запрос зависит от row.kind.
+async function fetchTicketCodes(row: MonitorRow): Promise<string[]> {
+  try {
+    const result =
+      row.kind === "online"
+        ? await TicketsApi.list({ payment_id: row.id, page_size: 500 })
+        : await TicketsApi.list({ manual_registration_id: row.id, page_size: 500 });
+    return result.items.map((t) => t.full_code).sort();
+  } catch {
+    return [];
+  }
+}
+
 function FlyingGhost({
   item,
   onDone,
@@ -126,11 +146,7 @@ function FlyingGhost({
   const startTop = item.from.top + item.from.height / 2 - 16;
 
   return (
-    <div
-      ref={elRef}
-      className="flying-payment-ghost"
-      style={{ left: startLeft, top: startTop }}
-    >
+    <div ref={elRef} className="flying-payment-ghost" style={{ left: startLeft, top: startTop }}>
       <Badge tone={item.row.kind === "online" ? "info" : "muted"}>
         {item.row.kind === "online" ? "Онлайн" : "Ручная"}
       </Badge>
@@ -145,10 +161,12 @@ export function MonitoringPage() {
   const [confirmedFeed, setConfirmedFeed] = useState<MonitorRow[]>([]);
   const [flyingItems, setFlyingItems] = useState<FlyingItem[]>([]);
   const [justConfirmed, setJustConfirmed] = useState<Set<string>>(new Set());
+  const [justAppeared, setJustAppeared] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
 
   // Состояние подтверждения по каждой строке на МОМЕНТ предыдущего опроса —
-  // не в useState, т.к. не должно вызывать перерисовку само по себе.
+  // не в useState, т.к. не должно вызывать перерисовку само по себе. Заодно
+  // это единственный способ отличить "видели уже" от "появилась впервые".
   const prevConfirmedRef = useRef<Map<string, boolean>>(new Map());
   const isFirstLoadRef = useRef(true);
   const rowRefs = useRef<Map<string, HTMLTableRowElement>>(new Map());
@@ -175,28 +193,43 @@ export function MonitoringPage() {
       ]);
       const merged = toRows(sales.items, registrations.items);
 
-      // Новое подтверждение = строка, которая на прошлом опросе ещё не была
-      // подтверждена, а сейчас — подтверждена. На самом первом опросе не
-      // считаем ничего "новым" (иначе вся уже оплаченная история подсветится
-      // и улетит в правую панель разом при открытии страницы).
+      // "Появилась впервые" = ключа вообще не было на прошлом опросе.
+      // "Подтверждена только что" = была на прошлом опросе, но неподтверждённой.
+      // На самом первом опросе не считаем ничего новым/подтверждённым — иначе
+      // вся история подсветится и улетит в правую панель разом при открытии.
+      const newlyAppeared: string[] = [];
       const newlyConfirmed: string[] = [];
       if (!isFirstLoadRef.current) {
         for (const row of merged) {
           const wasConfirmed = prevConfirmedRef.current.get(row.key);
-          if (wasConfirmed === false && row.isConfirmed) {
+          if (wasConfirmed === undefined) {
+            newlyAppeared.push(row.key);
+          } else if (wasConfirmed === false && row.isConfirmed) {
             newlyConfirmed.push(row.key);
           }
         }
       }
+
+      // Номера билетов тянем ДО того, как строка попадёт в правую панель —
+      // запросы идут параллельно, так что старт анимации задерживается на
+      // доли секунды, не более.
+      const confirmedEntries = await Promise.all(
+        newlyConfirmed.map(async (key) => {
+          const row = merged.find((r) => r.key === key);
+          if (!row) return null;
+          const ticketCodes = await fetchTicketCodes(row);
+          return { key, row: { ...row, ticketCodes } };
+        }),
+      );
 
       // Координаты снимаем СЕЙЧАС, пока DOM ещё отражает предыдущий рендер
       // (со старым статусом строки) — именно эта позиция и есть "откуда
       // лететь". Сама раскладка (setRows) произойдёт чуть ниже.
       const newGhosts: FlyingItem[] = [];
       const directInserts: MonitorRow[] = [];
-      for (const key of newlyConfirmed) {
-        const row = merged.find((r) => r.key === key);
-        if (!row) continue;
+      for (const entry of confirmedEntries) {
+        if (!entry) continue;
+        const { key, row } = entry;
         const fromEl = rowRefs.current.get(key);
         const toEl = confirmedListRef.current;
         if (fromEl && toEl) {
@@ -224,6 +257,25 @@ export function MonitoringPage() {
 
       setRows(merged);
       setError(null);
+
+      if (newlyAppeared.length > 0) {
+        setJustAppeared((prev) => {
+          const next = new Set(prev);
+          newlyAppeared.forEach((k) => next.add(k));
+          return next;
+        });
+        newlyAppeared.forEach((key) => {
+          const timeoutId = window.setTimeout(() => {
+            setJustAppeared((prev) => {
+              const next = new Set(prev);
+              next.delete(key);
+              return next;
+            });
+            highlightTimeoutsRef.current.delete(timeoutId);
+          }, APPEAR_HIGHLIGHT_DURATION_MS);
+          highlightTimeoutsRef.current.add(timeoutId);
+        });
+      }
 
       if (directInserts.length > 0) {
         setConfirmedFeed((feed) => [...directInserts, ...feed].slice(0, CONFIRMED_FEED_SIZE));
@@ -280,6 +332,12 @@ export function MonitoringPage() {
     };
   }, [fetchAndMerge]);
 
+  const rowClassName = (key: string) => {
+    if (justConfirmed.has(key)) return "row-just-confirmed";
+    if (justAppeared.has(key)) return "row-just-appeared";
+    return undefined;
+  };
+
   return (
     <div className="monitoring-standalone">
       <h1>
@@ -307,11 +365,7 @@ export function MonitoringPage() {
               <tbody>
                 {rows.length === 0 && <EmptyStateRow colSpan={10} />}
                 {rows.map((row) => (
-                  <tr
-                    key={row.key}
-                    ref={setRowRef(row.key)}
-                    className={justConfirmed.has(row.key) ? "row-just-confirmed" : undefined}
-                  >
+                  <tr key={row.key} ref={setRowRef(row.key)} className={rowClassName(row.key)}>
                     <td>
                       <Badge tone={row.kind === "online" ? "info" : "muted"}>
                         {row.kind === "online" ? "Онлайн" : "Ручная"}
@@ -346,8 +400,8 @@ export function MonitoringPage() {
                 <tr>
                   <th>Тип</th>
                   <th>Участник</th>
-                  <th>Сумма</th>
-                  <th>Кол-во</th>
+                  <th>Подтверждён</th>
+                  <th>Номера</th>
                 </tr>
               </thead>
               <tbody>
@@ -362,8 +416,12 @@ export function MonitoringPage() {
                       </Badge>
                     </td>
                     <td>{row.participantLabel}</td>
-                    <td>{formatMoney(row.amount)}</td>
-                    <td>{row.quantity}</td>
+                    <td>{row.confirmedAt ? formatRelativeTime(row.confirmedAt) : "—"}</td>
+                    <td className="confirmed-feed-tickets">
+                      {row.ticketCodes && row.ticketCodes.length > 0
+                        ? row.ticketCodes.join(", ")
+                        : "—"}
+                    </td>
                   </tr>
                 ))}
               </tbody>

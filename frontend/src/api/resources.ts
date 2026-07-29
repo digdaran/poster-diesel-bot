@@ -165,6 +165,7 @@ export interface TicketsFilter extends PageParams {
   participant_query?: string;
   source?: string;
   channel?: string;
+  payment_id?: number;
   manual_registration_id?: number;
   created_from?: string;
   created_to?: string;
