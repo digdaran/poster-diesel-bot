@@ -504,6 +504,6 @@ def test_audit_log_records_significant_actions(api_client: TestClient) -> None:
     )
     resp = api_client.get("/api/audit", headers=headers)
     assert resp.status_code == 200
-    actions = {row["action"] for row in resp.json()}
+    actions = {row["action"] for row in resp.json()["items"]}
     assert "panel_login_success" in actions
     assert "giveaway_create" in actions

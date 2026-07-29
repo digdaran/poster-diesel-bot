@@ -7,13 +7,14 @@ from typing import Any
 
 from app.core.permissions import Permission
 from app.models.enums import ChannelType, PaymentProviderType, PaymentStatus
+from app.models.giveaway import Giveaway
 from app.models.panel_user import PanelUser
 from app.models.participant import Participant
 from app.models.payment import Payment
 from app.models.payment_receipt import PaymentReceipt
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.responses import FileResponse
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, contains_eager, joinedload
 
 from backend.api.deps import get_session, require_permission
@@ -56,10 +57,13 @@ def list_payments(
     giveaway_id: int | None = None,
     status_filter: PaymentStatus | None = None,
     order_id: str | None = None,
+    invoice_no: str | None = None,
     provider: PaymentProviderType | None = None,
     channel: ChannelType | None = None,
     participant_id: int | None = None,
     participant_query: str | None = None,
+    amount_mismatch: bool | None = None,
+    oversold: bool | None = None,
     created_from: dt.date | None = None,
     created_to: dt.date | None = None,
     page: int = 1,
@@ -82,6 +86,10 @@ def list_payments(
         stmt = stmt.where(Payment.channel == channel)
     if participant_id is not None:
         stmt = stmt.where(Payment.participant_id == participant_id)
+    if amount_mismatch is not None:
+        stmt = stmt.where(Payment.amount_mismatch == amount_mismatch)
+    if oversold is not None:
+        stmt = stmt.where(Payment.oversold == oversold)
     if created_from is not None:
         stmt = stmt.where(Payment.created_at >= created_from)
     if created_to is not None:
@@ -91,15 +99,24 @@ def list_payments(
         stmt = stmt.join(Payment.participant).where(
             or_(Participant.phone.like(like), Participant.full_name.like(like))
         )
-    # Уже сделали .join(Payment.participant) выше ради фильтра — populate из тех
-    # же строк через contains_eager, а не отдельным joinedload (иначе два JOIN'а).
+    if invoice_no:
+        # invoice_no не хранится отдельной колонкой (см. Giveaway.format_invoice_number)
+        # — собираем ту же строку "PREFIX-NNNNN" на стороне БД и матчим подстрокой,
+        # это позволяет искать и по префиксу, и по номеру счёта, и по полному значению.
+        like = f"%{invoice_no}%"
+        stmt = stmt.join(Payment.giveaway).where(
+            (Giveaway.prefix + "-" + func.printf("%05d", Payment.payment_number)).like(like)
+        )
+    # Уже сделали .join(...) выше ради фильтров — populate из тех же строк через
+    # contains_eager, а не отдельным joinedload (иначе лишний JOIN).
     participant_load = (
         contains_eager(Payment.participant)
         if participant_query
         else joinedload(Payment.participant)
     )
+    giveaway_load = contains_eager(Payment.giveaway) if invoice_no else joinedload(Payment.giveaway)
 
-    eager_options = (participant_load, joinedload(Payment.giveaway), joinedload(Payment.receipts))
+    eager_options = (participant_load, giveaway_load, joinedload(Payment.receipts))
 
     if export is not None:
         eager_stmt = stmt.options(*eager_options).order_by(Payment.id.desc())

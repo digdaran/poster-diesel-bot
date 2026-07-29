@@ -427,7 +427,7 @@ section {
   color: var(--color-text-muted);
 }
 
-/* Статус фоновой сверки банковской выписки (панель «Продажи») */
+/* Статус фоновой сверки банковской выписки (панель «Продажи On-Line») */
 
 .reconciliation-bar {
   background: var(--color-surface);

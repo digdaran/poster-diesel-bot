@@ -20,8 +20,13 @@ export function ParticipantsPage() {
   const [query, setQuery] = useState("");
   const [phoneVerified, setPhoneVerified] = useState("");
   const [isBlocked, setIsBlocked] = useState("");
+  const [channel, setChannel] = useState("");
   const [createdFrom, setCreatedFrom] = useState("");
   const [createdTo, setCreatedTo] = useState("");
+  const [totalTicketsMin, setTotalTicketsMin] = useState("");
+  const [totalTicketsMax, setTotalTicketsMax] = useState("");
+  const [activeTicketsMin, setActiveTicketsMin] = useState("");
+  const [activeTicketsMax, setActiveTicketsMax] = useState("");
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingName, setEditingName] = useState("");
   const [pendingId, setPendingId] = useState<number | null>(null);
@@ -30,13 +35,27 @@ export function ParticipantsPage() {
 
   const debouncedQuery = useDebouncedValue(query);
 
+  const debouncedTotalTicketsMin = useDebouncedValue(totalTicketsMin);
+  const debouncedTotalTicketsMax = useDebouncedValue(totalTicketsMax);
+  const debouncedActiveTicketsMin = useDebouncedValue(activeTicketsMin);
+  const debouncedActiveTicketsMax = useDebouncedValue(activeTicketsMax);
+
   const load = () =>
     void ParticipantsApi.list({
       q: debouncedQuery || undefined,
       phone_verified: phoneVerified ? phoneVerified === "true" : undefined,
       is_blocked: isBlocked ? isBlocked === "true" : undefined,
+      channel: channel || undefined,
       created_from: createdFrom || undefined,
       created_to: createdTo || undefined,
+      total_tickets_min: debouncedTotalTicketsMin ? Number(debouncedTotalTicketsMin) : undefined,
+      total_tickets_max: debouncedTotalTicketsMax ? Number(debouncedTotalTicketsMax) : undefined,
+      active_tickets_min: debouncedActiveTicketsMin
+        ? Number(debouncedActiveTicketsMin)
+        : undefined,
+      active_tickets_max: debouncedActiveTicketsMax
+        ? Number(debouncedActiveTicketsMax)
+        : undefined,
       page,
       page_size: pageSize,
     }).then((result) => {
@@ -48,8 +67,13 @@ export function ParticipantsPage() {
     debouncedQuery,
     phoneVerified,
     isBlocked,
+    channel,
     createdFrom,
     createdTo,
+    debouncedTotalTicketsMin,
+    debouncedTotalTicketsMax,
+    debouncedActiveTicketsMin,
+    debouncedActiveTicketsMax,
     page,
     pageSize,
   ]);
@@ -127,6 +151,17 @@ export function ParticipantsPage() {
           <option value="true">Заблокирован</option>
           <option value="false">Не заблокирован</option>
         </select>
+        <select
+          value={channel}
+          onChange={(e) => {
+            setChannel(e.target.value);
+            setPage(1);
+          }}
+        >
+          <option value="">Все каналы</option>
+          <option value="telegram">Telegram</option>
+          <option value="vk">VK</option>
+        </select>
         <label>
           Регистрация с{" "}
           <input
@@ -149,6 +184,58 @@ export function ParticipantsPage() {
             }}
           />
         </label>
+        <label>
+          Всего билетов от{" "}
+          <input
+            type="number"
+            min={0}
+            style={{ width: "5em" }}
+            value={totalTicketsMin}
+            onChange={(e) => {
+              setTotalTicketsMin(e.target.value);
+              setPage(1);
+            }}
+          />
+        </label>
+        <label>
+          до{" "}
+          <input
+            type="number"
+            min={0}
+            style={{ width: "5em" }}
+            value={totalTicketsMax}
+            onChange={(e) => {
+              setTotalTicketsMax(e.target.value);
+              setPage(1);
+            }}
+          />
+        </label>
+        <label>
+          Билетов в активных акциях от{" "}
+          <input
+            type="number"
+            min={0}
+            style={{ width: "5em" }}
+            value={activeTicketsMin}
+            onChange={(e) => {
+              setActiveTicketsMin(e.target.value);
+              setPage(1);
+            }}
+          />
+        </label>
+        <label>
+          до{" "}
+          <input
+            type="number"
+            min={0}
+            style={{ width: "5em" }}
+            value={activeTicketsMax}
+            onChange={(e) => {
+              setActiveTicketsMax(e.target.value);
+              setPage(1);
+            }}
+          />
+        </label>
       </div>
       <div className="table-wrapper">
         <table>
@@ -160,12 +247,14 @@ export function ParticipantsPage() {
               <th>Заблокирован</th>
               <th>Каналы</th>
               <th>Регистрация</th>
+              <th>Всего билетов</th>
+              <th>Билетов в активных акциях</th>
               <th>Заказы</th>
               {showActions && <th>Действия</th>}
             </tr>
           </thead>
           <tbody>
-            {participants.length === 0 && <EmptyStateRow colSpan={showActions ? 8 : 7} />}
+            {participants.length === 0 && <EmptyStateRow colSpan={showActions ? 10 : 9} />}
             {participants.map((p) => (
               <tr key={p.id}>
                 <td>{p.phone}</td>
@@ -190,6 +279,8 @@ export function ParticipantsPage() {
                   <ChannelBadges channels={p.channels} />
                 </td>
                 <td>{formatDateTime(p.created_at)}</td>
+                <td>{p.total_tickets}</td>
+                <td>{p.active_tickets}</td>
                 <td>
                   <button onClick={() => setOrdersParticipant(p)}>Заказы</button>
                 </td>

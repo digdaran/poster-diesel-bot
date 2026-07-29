@@ -12,7 +12,7 @@ from app.services import audit_service, poster_service
 from app.services import ticket_pool_service as pool_svc
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from backend.api.deps import get_session, get_settings_dep, require_permission
@@ -28,10 +28,26 @@ router = APIRouter(prefix="/giveaways", tags=["giveaways"])
 
 @router.get("", response_model=list[GiveawayOut])
 def list_giveaways(
+    q: str | None = None,
+    is_registration_open: bool | None = None,
+    is_locked: bool | None = None,
     session: Session = Depends(get_session),
     _user: PanelUser = Depends(require_permission(Permission.VIEW_GIVEAWAYS)),
 ) -> list[Giveaway]:
-    return list(session.execute(select(Giveaway).order_by(Giveaway.id.desc())).scalars())
+    # Без пагинации/конверта items+total намеренно: этот же список используется
+    # как источник опций в select-фильтрах на других страницах (Продажи
+    # On-Line/Номера/Ручные регистрации/Отчёты), которые дергают его без
+    # параметров и ждут плоский массив — смена формы ответа сломала бы их все.
+    stmt = select(Giveaway)
+    if q:
+        like = f"%{q}%"
+        stmt = stmt.where(or_(Giveaway.name.like(like), Giveaway.prefix.like(like)))
+    if is_registration_open is not None:
+        stmt = stmt.where(Giveaway.is_registration_open == is_registration_open)
+    if is_locked is not None:
+        stmt = stmt.where(Giveaway.is_locked == is_locked)
+    stmt = stmt.order_by(Giveaway.id.desc())
+    return list(session.execute(stmt).scalars())
 
 
 @router.get("/{giveaway_id}", response_model=GiveawayOut)

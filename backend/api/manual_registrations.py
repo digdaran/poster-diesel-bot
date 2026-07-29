@@ -10,14 +10,19 @@ import qrcode
 from app.core.config import Settings
 from app.core.db import Database
 from app.core.permissions import PanelRole, Permission
-from app.models.enums import AuditActorType, ManualRegistrationStatus
+from app.models.enums import (
+    AuditActorType,
+    ManualRegistrationPaymentMethod,
+    ManualRegistrationStatus,
+)
+from app.models.giveaway import Giveaway
 from app.models.manual_registration import ManualRegistration
 from app.models.panel_user import PanelUser
 from app.models.participant import Participant
 from app.services import audit_service, notification_service, participant_service
 from app.services import manual_registration_service as svc
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, contains_eager, joinedload
 
 from backend.api.deps import (
@@ -42,6 +47,9 @@ def list_manual_registrations(
     giveaway_id: int | None = None,
     participant_id: int | None = None,
     participant_query: str | None = None,
+    operator_query: str | None = None,
+    payment_method: ManualRegistrationPaymentMethod | None = None,
+    invoice_no: str | None = None,
     status_filter: ManualRegistrationStatus | None = None,
     created_from: dt.date | None = None,
     created_to: dt.date | None = None,
@@ -60,6 +68,8 @@ def list_manual_registrations(
         stmt = stmt.where(ManualRegistration.giveaway_id == giveaway_id)
     if participant_id is not None:
         stmt = stmt.where(ManualRegistration.participant_id == participant_id)
+    if payment_method is not None:
+        stmt = stmt.where(ManualRegistration.payment_method == payment_method)
     if status_filter is not None:
         stmt = stmt.where(ManualRegistration.status == status_filter)
     if created_from is not None:
@@ -71,16 +81,39 @@ def list_manual_registrations(
         stmt = stmt.join(ManualRegistration.participant).where(
             or_(Participant.phone.like(like), Participant.full_name.like(like))
         )
+    if operator_query:
+        # Поиск текстом по логину, а не select по /api/panel-users — этот
+        # эндпоинт доступен только Super Admin (PANEL_USERS_MANAGE), а фильтровать
+        # по оператору нужно и Administrator'у, который видит все регистрации.
+        stmt = stmt.join(ManualRegistration.operator).where(
+            PanelUser.login.like(f"%{operator_query}%")
+        )
+    if invoice_no:
+        # Тот же приём, что и в /api/payments — invoice_no не хранится отдельной
+        # колонкой (см. Giveaway.format_invoice_number), собираем "PREFIX-NNNNN"
+        # на стороне БД и матчим подстрокой.
+        like = f"%{invoice_no}%"
+        stmt = stmt.join(ManualRegistration.giveaway).where(
+            (Giveaway.prefix + "-" + func.printf("%05d", ManualRegistration.payment_number)).like(
+                like
+            )
+        )
     participant_load = (
         contains_eager(ManualRegistration.participant)
         if participant_query
         else joinedload(ManualRegistration.participant)
     ).selectinload(Participant.channel_bindings)
-    eager_options = (
-        participant_load,
-        joinedload(ManualRegistration.giveaway),
-        joinedload(ManualRegistration.operator),
+    giveaway_load = (
+        contains_eager(ManualRegistration.giveaway)
+        if invoice_no
+        else joinedload(ManualRegistration.giveaway)
     )
+    operator_load = (
+        contains_eager(ManualRegistration.operator)
+        if operator_query
+        else joinedload(ManualRegistration.operator)
+    )
+    eager_options = (participant_load, giveaway_load, operator_load)
 
     if export is not None:
         eager_stmt = stmt.options(*eager_options).order_by(ManualRegistration.id.desc())

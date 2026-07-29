@@ -7,12 +7,15 @@ from typing import Any
 
 from app.core.permissions import Permission
 from app.core.phone import InvalidPhoneError
-from app.models.enums import AuditActorType
+from app.models.channel_binding import ChannelBinding
+from app.models.enums import AuditActorType, ChannelType
+from app.models.giveaway import Giveaway
 from app.models.panel_user import PanelUser
 from app.models.participant import Participant
+from app.models.ticket import Ticket
 from app.services import audit_service, participant_service
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from backend.api.deps import get_session, require_permission
@@ -27,15 +30,41 @@ def list_participants(
     q: str | None = None,
     phone_verified: bool | None = None,
     is_blocked: bool | None = None,
+    channel: ChannelType | None = None,
     created_from: dt.date | None = None,
     created_to: dt.date | None = None,
+    total_tickets_min: int | None = None,
+    total_tickets_max: int | None = None,
+    active_tickets_min: int | None = None,
+    active_tickets_max: int | None = None,
     page: int = 1,
     page_size: int = 50,
     session: Session = Depends(get_session),
     _user: PanelUser = Depends(require_permission(Permission.VIEW_PARTICIPANTS)),
 ) -> dict[str, Any]:
     validate_page_size(page_size)
-    stmt = select(Participant)
+    # Билеты за всё время / только в незаблокированных ("активных") акциях —
+    # коррелированные скалярные подзапросы, а не JOIN + GROUP BY, чтобы не
+    # плодить дубли строк участника при нескольких билетах/акциях.
+    total_tickets_subq = (
+        select(func.count(Ticket.id))
+        .where(Ticket.participant_id == Participant.id)
+        .correlate(Participant)
+        .scalar_subquery()
+    )
+    active_tickets_subq = (
+        select(func.count(Ticket.id))
+        .join(Giveaway, Ticket.giveaway_id == Giveaway.id)
+        .where(Ticket.participant_id == Participant.id, Giveaway.is_locked.is_(False))
+        .correlate(Participant)
+        .scalar_subquery()
+    )
+
+    stmt = select(
+        Participant,
+        total_tickets_subq.label("total_tickets"),
+        active_tickets_subq.label("active_tickets"),
+    )
     if q:
         like = f"%{q}%"
         stmt = stmt.where(or_(Participant.phone.like(like), Participant.full_name.like(like)))
@@ -43,10 +72,22 @@ def list_participants(
         stmt = stmt.where(Participant.phone_verified == phone_verified)
     if is_blocked is not None:
         stmt = stmt.where(Participant.is_blocked == is_blocked)
+    if channel is not None:
+        # .any(), не JOIN — участник может быть привязан к нескольким каналам,
+        # JOIN размножил бы строки участника (сломав total/пагинацию).
+        stmt = stmt.where(Participant.channel_bindings.any(ChannelBinding.channel == channel))
     if created_from is not None:
         stmt = stmt.where(Participant.created_at >= created_from)
     if created_to is not None:
         stmt = stmt.where(Participant.created_at < created_to + dt.timedelta(days=1))
+    if total_tickets_min is not None:
+        stmt = stmt.where(total_tickets_subq >= total_tickets_min)
+    if total_tickets_max is not None:
+        stmt = stmt.where(total_tickets_subq <= total_tickets_max)
+    if active_tickets_min is not None:
+        stmt = stmt.where(active_tickets_subq >= active_tickets_min)
+    if active_tickets_max is not None:
+        stmt = stmt.where(active_tickets_subq <= active_tickets_max)
 
     total = count_total(session, stmt)
     limit, offset = page_bounds(page=page, page_size=page_size)
@@ -56,9 +97,15 @@ def list_participants(
         .limit(limit)
         .offset(offset)
     )
-    items = session.execute(page_stmt).scalars().all()
+    rows = session.execute(page_stmt).all()
+    items = []
+    for participant, total_tickets, active_tickets in rows:
+        data = ParticipantOut.model_validate(participant).model_dump(mode="json")
+        data["total_tickets"] = total_tickets
+        data["active_tickets"] = active_tickets
+        items.append(data)
     return {
-        "items": [ParticipantOut.model_validate(p).model_dump(mode="json") for p in items],
+        "items": items,
         "total": total,
         "page": page,
         "page_size": page_size,

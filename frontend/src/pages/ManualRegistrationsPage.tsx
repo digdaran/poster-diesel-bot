@@ -64,10 +64,19 @@ export function ManualRegistrationsPage() {
 
   const [filterGiveawayId, setFilterGiveawayId] = useState("");
   const [participantQuery, setParticipantQuery] = useState("");
+  const [operatorQuery, setOperatorQuery] = useState("");
+  const [paymentMethodFilter, setPaymentMethodFilter] = useState("");
+  const [invoiceNo, setInvoiceNo] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [createdFrom, setCreatedFrom] = useState("");
   const [createdTo, setCreatedTo] = useState("");
   const debouncedParticipantQuery = useDebouncedValue(participantQuery);
+  const debouncedOperatorQuery = useDebouncedValue(operatorQuery);
+  const debouncedInvoiceNo = useDebouncedValue(invoiceNo);
+
+  // Operator и так видит только свои регистрации (сервер сам это применяет) —
+  // фильтр по оператору имеет смысл только для ролей, которые видят всех.
+  const canFilterByOperator = user?.role !== "operator";
 
   const load = () =>
     void ManualRegistrationsApi.list({
@@ -75,6 +84,9 @@ export function ManualRegistrationsPage() {
       page_size: pageSize,
       giveaway_id: filterGiveawayId ? Number(filterGiveawayId) : undefined,
       participant_query: debouncedParticipantQuery || undefined,
+      operator_query: debouncedOperatorQuery || undefined,
+      payment_method: paymentMethodFilter || undefined,
+      invoice_no: debouncedInvoiceNo || undefined,
       status_filter: statusFilter || undefined,
       created_from: createdFrom || undefined,
       created_to: createdTo || undefined,
@@ -87,6 +99,9 @@ export function ManualRegistrationsPage() {
     pageSize,
     filterGiveawayId,
     debouncedParticipantQuery,
+    debouncedOperatorQuery,
+    paymentMethodFilter,
+    debouncedInvoiceNo,
     statusFilter,
     createdFrom,
     createdTo,
@@ -126,6 +141,9 @@ export function ManualRegistrationsPage() {
       export: format,
       giveaway_id: filterGiveawayId ? Number(filterGiveawayId) : undefined,
       participant_query: debouncedParticipantQuery || undefined,
+      operator_query: debouncedOperatorQuery || undefined,
+      payment_method: paymentMethodFilter || undefined,
+      invoice_no: debouncedInvoiceNo || undefined,
       status_filter: statusFilter || undefined,
       created_from: createdFrom || undefined,
       created_to: createdTo || undefined,
@@ -338,6 +356,35 @@ export function ManualRegistrationsPage() {
           <option value="CONFIRMED">CONFIRMED</option>
           <option value="CANCELLED">CANCELLED</option>
         </select>
+        {canFilterByOperator && (
+          <input
+            placeholder="Оператор"
+            value={operatorQuery}
+            onChange={(e) => {
+              setOperatorQuery(e.target.value);
+              setPage(1);
+            }}
+          />
+        )}
+        <select
+          value={paymentMethodFilter}
+          onChange={(e) => {
+            setPaymentMethodFilter(e.target.value);
+            setPage(1);
+          }}
+        >
+          <option value="">Любая оплата</option>
+          <option value="CASH">Наличные</option>
+          <option value="CASHLESS">Безнал (QR)</option>
+        </select>
+        <input
+          placeholder="Счёт №"
+          value={invoiceNo}
+          onChange={(e) => {
+            setInvoiceNo(e.target.value);
+            setPage(1);
+          }}
+        />
         <label>
           Создан с{" "}
           <input

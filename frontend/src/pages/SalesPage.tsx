@@ -30,11 +30,15 @@ export function SalesPage() {
   const [provider, setProvider] = useState("");
   const [channel, setChannel] = useState("");
   const [orderId, setOrderId] = useState("");
+  const [invoiceNo, setInvoiceNo] = useState("");
   const [participantQuery, setParticipantQuery] = useState("");
+  const [amountMismatchOnly, setAmountMismatchOnly] = useState(false);
+  const [oversoldOnly, setOversoldOnly] = useState(false);
   const [createdFrom, setCreatedFrom] = useState("");
   const [createdTo, setCreatedTo] = useState("");
 
   const debouncedOrderId = useDebouncedValue(orderId);
+  const debouncedInvoiceNo = useDebouncedValue(invoiceNo);
   const debouncedParticipantQuery = useDebouncedValue(participantQuery);
 
   useEffect(() => {
@@ -50,7 +54,10 @@ export function SalesPage() {
       provider: provider || undefined,
       channel: channel || undefined,
       order_id: debouncedOrderId || undefined,
+      invoice_no: debouncedInvoiceNo || undefined,
       participant_query: debouncedParticipantQuery || undefined,
+      amount_mismatch: amountMismatchOnly || undefined,
+      oversold: oversoldOnly || undefined,
       created_from: createdFrom || undefined,
       created_to: createdTo || undefined,
     }).then((result) => {
@@ -65,7 +72,10 @@ export function SalesPage() {
     provider,
     channel,
     debouncedOrderId,
+    debouncedInvoiceNo,
     debouncedParticipantQuery,
+    amountMismatchOnly,
+    oversoldOnly,
     createdFrom,
     createdTo,
   ]);
@@ -88,7 +98,10 @@ export function SalesPage() {
       provider: provider || undefined,
       channel: channel || undefined,
       order_id: debouncedOrderId || undefined,
+      invoice_no: debouncedInvoiceNo || undefined,
       participant_query: debouncedParticipantQuery || undefined,
+      amount_mismatch: amountMismatchOnly || undefined,
+      oversold: oversoldOnly || undefined,
       created_from: createdFrom || undefined,
       created_to: createdTo || undefined,
     });
@@ -102,7 +115,7 @@ export function SalesPage() {
 
   return (
     <div>
-      <h1>Продажи (онлайн-платежи)</h1>
+      <h1>Продажи On-Line</h1>
 
       {hasPermission("view_bank_reconciliation") && <BankReconciliationStatusPanel />}
 
@@ -112,6 +125,14 @@ export function SalesPage() {
           value={orderId}
           onChange={(e) => {
             setOrderId(e.target.value);
+            setPage(1);
+          }}
+        />
+        <input
+          placeholder="Счёт №"
+          value={invoiceNo}
+          onChange={(e) => {
+            setInvoiceNo(e.target.value);
             setPage(1);
           }}
         />
@@ -194,6 +215,28 @@ export function SalesPage() {
               setPage(1);
             }}
           />
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={amountMismatchOnly}
+            onChange={(e) => {
+              setAmountMismatchOnly(e.target.checked);
+              setPage(1);
+            }}
+          />{" "}
+          Только с расхождением суммы
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={oversoldOnly}
+            onChange={(e) => {
+              setOversoldOnly(e.target.checked);
+              setPage(1);
+            }}
+          />{" "}
+          Только oversold
         </label>
       </div>
 

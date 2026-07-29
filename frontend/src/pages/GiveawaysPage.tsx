@@ -7,6 +7,7 @@ import { useAuth } from "../auth/AuthContext";
 import { useToast } from "../components/Toast";
 import { useConfirm } from "../components/ConfirmDialog";
 import { useAsyncAction } from "../hooks/useAsyncAction";
+import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { Badge } from "../components/Badge";
 import { EmptyStateRow } from "../components/EmptyState";
 import { formatMoney } from "../utils/format";
@@ -23,8 +24,18 @@ export function GiveawaysPage() {
   const [error, setError] = useState<string | null>(null);
   const [pendingId, setPendingId] = useState<number | null>(null);
 
-  const load = () => void GiveawaysApi.list().then(setGiveaways);
-  useEffect(load, []);
+  const [query, setQuery] = useState("");
+  const [registrationOpen, setRegistrationOpen] = useState("");
+  const [isLocked, setIsLocked] = useState("");
+  const debouncedQuery = useDebouncedValue(query);
+
+  const load = () =>
+    void GiveawaysApi.list({
+      q: debouncedQuery || undefined,
+      is_registration_open: registrationOpen ? registrationOpen === "true" : undefined,
+      is_locked: isLocked ? isLocked === "true" : undefined,
+    }).then(setGiveaways);
+  useEffect(load, [debouncedQuery, registrationOpen, isLocked]);
 
   const { run: onCreate, pending: creating } = useAsyncAction(async (e: FormEvent) => {
     e.preventDefault();
@@ -123,6 +134,23 @@ export function GiveawaysPage() {
         </form>
       )}
       {error && <div className="error">{error}</div>}
+      <div className="filters">
+        <input
+          placeholder="Поиск по названию/префиксу"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <select value={registrationOpen} onChange={(e) => setRegistrationOpen(e.target.value)}>
+          <option value="">Регистрация: любая</option>
+          <option value="true">Открыта</option>
+          <option value="false">Закрыта</option>
+        </select>
+        <select value={isLocked} onChange={(e) => setIsLocked(e.target.value)}>
+          <option value="">Блокировка: любая</option>
+          <option value="true">Заблокирована</option>
+          <option value="false">Не заблокирована</option>
+        </select>
+      </div>
       <div className="table-wrapper">
         <table>
           <thead>

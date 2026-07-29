@@ -8,7 +8,8 @@ import datetime as dt
 
 from app.core.config import get_settings
 from app.core.db import Database
-from app.models.enums import PaymentProviderType, PaymentStatus
+from app.models.channel_binding import ChannelBinding
+from app.models.enums import ChannelType, PaymentProviderType, PaymentStatus
 from app.models.payment import Payment
 from fastapi.testclient import TestClient
 
@@ -40,6 +41,39 @@ def _seed_payments(giveaway_id: int, participant_id: int) -> None:
                 amount=20000,
                 quantity=2,
                 status=PaymentStatus.SUCCEEDED,
+            )
+        )
+    db.engine.dispose()
+
+
+def _seed_custom_payment(
+    giveaway_id: int,
+    participant_id: int,
+    *,
+    order_id: str,
+    payment_number: int | None = None,
+    amount: int = 10000,
+    amount_mismatch: bool = False,
+    amount_mismatch_bank_amount: int | None = None,
+    oversold: bool = False,
+) -> None:
+    """Как `_seed_payments` — платежи с конкретными invoice_no/расхождением/oversold
+    для проверки новых фильтров /api/payments (нет HTTP-пути их создать)."""
+    db = Database(get_settings())
+    with db.session() as session:
+        session.add(
+            Payment(
+                order_id=order_id,
+                participant_id=participant_id,
+                giveaway_id=giveaway_id,
+                provider=PaymentProviderType.REQUISITES_QR,
+                payment_number=payment_number,
+                amount=amount,
+                quantity=1,
+                status=PaymentStatus.SUCCEEDED,
+                amount_mismatch=amount_mismatch,
+                amount_mismatch_bank_amount=amount_mismatch_bank_amount,
+                oversold=oversold,
             )
         )
     db.engine.dispose()
@@ -331,3 +365,320 @@ def test_participant_id_filter_scopes_payments_tickets_and_registrations(
     body = resp.json()
     assert body["total"] == 1
     assert body["items"][0]["participant_id"] == participant_a_id
+
+
+def test_audit_log_filters_and_pagination(api_client: TestClient) -> None:
+    """Журнал аудита: подстрочный поиск по action/actor_label/ip, точное
+    совпадение entity_type/entity_id, диапазон по created_at, и постраничная
+    выдача вместо жёсткого limit=100 (см. рекомендации по доработке поиска)."""
+    token = login(api_client, "admin", "admin-strong-pass-123")
+    headers = auth_headers(token)
+
+    create_resp = api_client.post(
+        "/api/giveaways",
+        json={"name": "AuditFilter", "prefix": "AFL", "ticket_price": 500, "max_tickets": 10},
+        headers=headers,
+    )
+    create_resp.raise_for_status()
+    giveaway_id = create_resp.json()["id"]
+
+    unfiltered = api_client.get("/api/audit", headers=headers).json()
+    create_row = next(
+        row
+        for row in unfiltered["items"]
+        if row["action"] == "giveaway_create" and row["entity_id"] == giveaway_id
+    )
+    assert create_row["entity_type"] == "giveaway"
+    ip_value = create_row["ip_address"]
+
+    # action ищется подстрокой — "giveaway_c" находит giveaway_create без
+    # точного значения enum'а (действий много и список постоянно растёт).
+    resp = api_client.get("/api/audit", params={"action": "giveaway_c"}, headers=headers)
+    assert any(row["id"] == create_row["id"] for row in resp.json()["items"])
+
+    resp = api_client.get(
+        "/api/audit",
+        params={"entity_type": "giveaway", "entity_id": giveaway_id},
+        headers=headers,
+    )
+    body = resp.json()
+    assert body["total"] >= 1
+    assert all(row["entity_type"] == "giveaway" for row in body["items"])
+    assert all(row["entity_id"] == giveaway_id for row in body["items"])
+
+    resp = api_client.get("/api/audit", params={"actor_query": "adm"}, headers=headers)
+    assert resp.json()["total"] >= 1
+    assert all("adm" in row["actor_label"].lower() for row in resp.json()["items"])
+
+    if ip_value:
+        resp = api_client.get("/api/audit", params={"ip_address": ip_value}, headers=headers)
+        assert resp.json()["total"] >= 1
+
+    today = dt.date.today()
+    resp = api_client.get(
+        "/api/audit",
+        params={"created_from": today.isoformat(), "created_to": today.isoformat()},
+        headers=headers,
+    )
+    assert any(row["id"] == create_row["id"] for row in resp.json()["items"])
+
+    resp = api_client.get(
+        "/api/audit",
+        params={"created_to": (today - dt.timedelta(days=1)).isoformat()},
+        headers=headers,
+    )
+    assert all(row["id"] != create_row["id"] for row in resp.json()["items"])
+
+    resp = api_client.get("/api/audit", params={"page_size": 10, "page": 1}, headers=headers)
+    body = resp.json()
+    assert len(body["items"]) <= 10
+    assert body["total"] >= len(body["items"])
+
+
+def test_giveaways_filter_by_name_prefix_and_status(api_client: TestClient) -> None:
+    """Раздел «Коллекции» раньше отдавался целиком без единого фильтра —
+    добавлены q (название/префикс) и is_registration_open/is_locked. Ответ
+    остаётся плоским списком (не items/total) — этот же эндпоинт без
+    параметров используется как источник select-опций на других страницах
+    (Продажи On-Line/Номера/Ручные регистрации/Отчёты)."""
+    token = login(api_client, "admin", "admin-strong-pass-123")
+    headers = auth_headers(token)
+
+    open_id = _create_open_giveaway(api_client, headers, name="Открытая Летняя", prefix="OPN")
+    closed_resp = api_client.post(
+        "/api/giveaways",
+        json={"name": "Закрытая Зимняя", "prefix": "CLS", "ticket_price": 100, "max_tickets": 5},
+        headers=headers,
+    )
+    closed_resp.raise_for_status()
+    closed_id = closed_resp.json()["id"]
+    api_client.post(f"/api/giveaways/{closed_id}/lock", headers=headers).raise_for_status()
+
+    resp = api_client.get("/api/giveaways", params={"q": "Летняя"}, headers=headers)
+    ids = {g["id"] for g in resp.json()}
+    assert open_id in ids
+    assert closed_id not in ids
+
+    resp = api_client.get("/api/giveaways", params={"q": "OPN"}, headers=headers)
+    assert any(g["id"] == open_id for g in resp.json())
+
+    resp = api_client.get("/api/giveaways", params={"is_registration_open": True}, headers=headers)
+    ids = {g["id"] for g in resp.json()}
+    assert open_id in ids
+    assert closed_id not in ids
+
+    resp = api_client.get("/api/giveaways", params={"is_locked": True}, headers=headers)
+    ids = {g["id"] for g in resp.json()}
+    assert closed_id in ids
+    assert open_id not in ids
+
+    resp = api_client.get("/api/giveaways", headers=headers)
+    assert isinstance(resp.json(), list)
+
+
+def test_sales_filter_by_invoice_no_amount_mismatch_and_oversold(api_client: TestClient) -> None:
+    """Раздел «Продажи On-Line»: столбец «Счёт №» раньше не участвовал ни в
+    каком фильтре (только order_id) — добавлен invoice_no; плюс чекбоксы
+    "только с расхождением суммы"/"только oversold" поверх уже отображаемых
+    бейджей."""
+    token = login(api_client, "admin", "admin-strong-pass-123")
+    headers = auth_headers(token)
+    giveaway_id = _create_open_giveaway(api_client, headers, prefix="SLI")
+
+    reg_resp = api_client.post(
+        "/api/manual-registrations",
+        json={
+            "giveaway_id": giveaway_id,
+            "participant_phone": "79990001122",
+            "participant_full_name": "Продажи Фильтр",
+            "quantity": 1,
+        },
+        headers=headers,
+    )
+    reg_resp.raise_for_status()
+    participant_id = reg_resp.json()["participant_id"]
+
+    _seed_custom_payment(
+        giveaway_id, participant_id, order_id="sli-plain", payment_number=1, amount=10000
+    )
+    _seed_custom_payment(
+        giveaway_id,
+        participant_id,
+        order_id="sli-mismatch",
+        payment_number=2,
+        amount=10000,
+        amount_mismatch=True,
+        amount_mismatch_bank_amount=12000,
+    )
+    _seed_custom_payment(
+        giveaway_id, participant_id, order_id="sli-oversold", payment_number=3, oversold=True
+    )
+
+    resp = api_client.get("/api/payments", params={"invoice_no": "SLI-00002"}, headers=headers)
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["order_id"] == "sli-mismatch"
+
+    resp = api_client.get("/api/payments", params={"invoice_no": "SLI"}, headers=headers)
+    assert resp.json()["total"] == 3
+
+    resp = api_client.get("/api/payments", params={"invoice_no": "00003"}, headers=headers)
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["order_id"] == "sli-oversold"
+
+    resp = api_client.get("/api/payments", params={"amount_mismatch": True}, headers=headers)
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["order_id"] == "sli-mismatch"
+
+    resp = api_client.get("/api/payments", params={"oversold": True}, headers=headers)
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["order_id"] == "sli-oversold"
+
+
+def test_manual_registrations_filter_by_operator_payment_method_and_invoice_no(
+    api_client: TestClient,
+) -> None:
+    """Раздел «Ручные регистрации»: столбцы «Оператор»/«Оплата»/«Счёт №»
+    отображались, но не участвовали ни в каком фильтре — добавлены
+    operator_query, payment_method, invoice_no."""
+    token = login(api_client, "admin", "admin-strong-pass-123")
+    headers = auth_headers(token)
+    giveaway_id = _create_open_giveaway(api_client, headers, prefix="MRO")
+
+    resp = api_client.post(
+        "/api/panel-users",
+        json={"login": "operator-mro", "password": "operator-strong-pass", "role": "operator"},
+        headers=headers,
+    )
+    resp.raise_for_status()
+
+    reg_admin = api_client.post(
+        "/api/manual-registrations",
+        json={
+            "giveaway_id": giveaway_id,
+            "participant_phone": "79990006666",
+            "participant_full_name": "Регистрация Админа",
+            "quantity": 1,
+        },
+        headers=headers,
+    )
+    reg_admin.raise_for_status()
+    admin_reg_id = reg_admin.json()["id"]
+
+    op_token = login(api_client, "operator-mro", "operator-strong-pass")
+    op_headers = auth_headers(op_token)
+    reg_operator = api_client.post(
+        "/api/manual-registrations",
+        json={
+            "giveaway_id": giveaway_id,
+            "participant_phone": "79990007777",
+            "participant_full_name": "Регистрация Оператора",
+            "quantity": 1,
+        },
+        headers=op_headers,
+    )
+    reg_operator.raise_for_status()
+    operator_reg_id = reg_operator.json()["id"]
+
+    # Переводим регистрацию оператора на безнал по QR — только тогда
+    # заполняются payment_method=CASHLESS и invoice_no.
+    qr_resp = api_client.post(
+        f"/api/manual-registrations/{operator_reg_id}/generate-qr", headers=headers
+    )
+    qr_resp.raise_for_status()
+    invoice_no = qr_resp.json()["invoice_no"]
+    assert invoice_no is not None
+
+    resp = api_client.get(
+        "/api/manual-registrations", params={"operator_query": "operator-mro"}, headers=headers
+    )
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["id"] == operator_reg_id
+
+    resp = api_client.get(
+        "/api/manual-registrations", params={"operator_query": "admin"}, headers=headers
+    )
+    ids = {r["id"] for r in resp.json()["items"]}
+    assert admin_reg_id in ids
+    assert operator_reg_id not in ids
+
+    resp = api_client.get(
+        "/api/manual-registrations", params={"payment_method": "CASHLESS"}, headers=headers
+    )
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["id"] == operator_reg_id
+
+    resp = api_client.get(
+        "/api/manual-registrations", params={"payment_method": "CASH"}, headers=headers
+    )
+    ids = {r["id"] for r in resp.json()["items"]}
+    assert admin_reg_id in ids
+    assert operator_reg_id not in ids
+
+    resp = api_client.get(
+        "/api/manual-registrations", params={"invoice_no": invoice_no}, headers=headers
+    )
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["id"] == operator_reg_id
+
+
+def test_participants_filter_by_channel(api_client: TestClient) -> None:
+    """Раздел «Участники»: столбец «Каналы» отображался, но фильтра по каналу
+    привязки не было (в отличие от Продаж On-Line/Номеров)."""
+    token = login(api_client, "admin", "admin-strong-pass-123")
+    headers = auth_headers(token)
+    giveaway_id = _create_open_giveaway(api_client, headers, prefix="PCH")
+
+    resp = api_client.post(
+        "/api/manual-registrations",
+        json={
+            "giveaway_id": giveaway_id,
+            "participant_phone": "79990008888",
+            "participant_full_name": "Без Привязки Канала",
+            "quantity": 1,
+        },
+        headers=headers,
+    )
+    resp.raise_for_status()
+    no_channel_id = resp.json()["participant_id"]
+
+    resp = api_client.post(
+        "/api/manual-registrations",
+        json={
+            "giveaway_id": giveaway_id,
+            "participant_phone": "79990009999",
+            "participant_full_name": "С Привязкой VK",
+            "quantity": 1,
+        },
+        headers=headers,
+    )
+    resp.raise_for_status()
+    vk_participant_id = resp.json()["participant_id"]
+
+    db = Database(get_settings())
+    with db.session() as session:
+        session.add(
+            ChannelBinding(
+                participant_id=vk_participant_id,
+                channel=ChannelType.VK,
+                external_user_id="vk-12345",
+            )
+        )
+    db.engine.dispose()
+
+    resp = api_client.get("/api/participants", params={"channel": "vk"}, headers=headers)
+    body = resp.json()
+    ids = {p["id"] for p in body["items"]}
+    assert vk_participant_id in ids
+    assert no_channel_id not in ids
+
+    resp = api_client.get("/api/participants", params={"channel": "telegram"}, headers=headers)
+    ids = {p["id"] for p in resp.json()["items"]}
+    assert vk_participant_id not in ids
+    assert no_channel_id not in ids

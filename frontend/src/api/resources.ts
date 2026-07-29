@@ -41,8 +41,13 @@ export interface ParticipantsFilter extends PageParams {
   q?: string;
   phone_verified?: boolean;
   is_blocked?: boolean;
+  channel?: string;
   created_from?: string;
   created_to?: string;
+  total_tickets_min?: number;
+  total_tickets_max?: number;
+  active_tickets_min?: number;
+  active_tickets_max?: number;
 }
 
 export const ParticipantsApi = {
@@ -59,8 +64,15 @@ export const ParticipantsApi = {
     apiRequest<Participant>(`/api/participants/${id}/unblock`, { method: "POST" }),
 };
 
+export interface GiveawaysFilter {
+  q?: string;
+  is_registration_open?: boolean;
+  is_locked?: boolean;
+}
+
 export const GiveawaysApi = {
-  list: () => apiRequest<Giveaway[]>("/api/giveaways"),
+  list: (params: GiveawaysFilter = {}) =>
+    apiRequest<Giveaway[]>("/api/giveaways", { query: { ...params } }),
   get: (id: number) => apiRequest<Giveaway>(`/api/giveaways/${id}`),
   create: (payload: {
     name: string;
@@ -88,6 +100,9 @@ export interface ManualRegistrationsFilter extends PageParams {
   giveaway_id?: number;
   participant_id?: number;
   participant_query?: string;
+  operator_query?: string;
+  payment_method?: string;
+  invoice_no?: string;
   status_filter?: string;
   created_from?: string;
   created_to?: string;
@@ -123,10 +138,13 @@ export interface SalesFilter extends PageParams {
   giveaway_id?: number;
   status_filter?: string;
   order_id?: string;
+  invoice_no?: string;
   provider?: string;
   channel?: string;
   participant_id?: number;
   participant_query?: string;
+  amount_mismatch?: boolean;
+  oversold?: boolean;
   created_from?: string;
   created_to?: string;
 }
@@ -179,8 +197,19 @@ export const SettingsApi = {
     }),
 };
 
+export interface AuditFilter extends PageParams {
+  action?: string;
+  entity_type?: string;
+  entity_id?: number;
+  actor_query?: string;
+  ip_address?: string;
+  created_from?: string;
+  created_to?: string;
+}
+
 export const AuditApi = {
-  list: () => apiRequest<AuditLogEntry[]>("/api/audit"),
+  list: (params: AuditFilter = {}) =>
+    apiRequest<Page<AuditLogEntry>>("/api/audit", { query: { ...params } }),
 };
 
 export const BroadcastsApi = {

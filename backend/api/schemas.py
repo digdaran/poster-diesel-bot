@@ -43,6 +43,11 @@ class ParticipantOut(BaseModel):
     is_blocked: bool
     channels: list[str]
     created_at: dt.datetime
+    # Агрегаты считаются в list_participants (не хранятся на модели) и
+    # проставляются поверх model_validate — дефолты нужны, чтобы
+    # model_validate(participant) не падал на отсутствующем атрибуте.
+    total_tickets: int = 0
+    active_tickets: int = 0
 
     model_config = {"from_attributes": True}
 

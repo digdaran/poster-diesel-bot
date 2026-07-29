@@ -13,6 +13,8 @@ export interface Participant {
   is_blocked: boolean;
   channels: string[];
   created_at: string;
+  total_tickets: number;
+  active_tickets: number;
 }
 
 export interface Giveaway {
