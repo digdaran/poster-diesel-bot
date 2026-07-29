@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import mimetypes
 import uuid
 from pathlib import Path
 
@@ -32,6 +33,12 @@ def save_receipt(
 ) -> PaymentReceipt:
     payment_dir = settings.receipts_path / str(payment_id)
     payment_dir.mkdir(parents=True, exist_ok=True)
+
+    # Telegram-документы не всегда содержат mime_type, а VK-документы не отдают его
+    # вовсе (см. channels/*/handlers.py) — без этого панель отдаёт
+    # application/octet-stream и браузер вместо просмотра скачивает файл.
+    if content_type is None and original_filename:
+        content_type = mimetypes.guess_type(original_filename)[0]
 
     extension = _guess_extension(content_type=content_type, original_filename=original_filename)
     file_name = f"{uuid.uuid4().hex}{extension}"

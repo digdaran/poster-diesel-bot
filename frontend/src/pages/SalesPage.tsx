@@ -9,6 +9,7 @@ import { Badge } from "../components/Badge";
 import { BankReconciliationStatusPanel } from "../components/BankReconciliationStatusPanel";
 import { ChannelBadges } from "../components/ChannelBadges";
 import { EmptyStateRow } from "../components/EmptyState";
+import { ReceiptViewerModal } from "../components/ReceiptViewerModal";
 import { formatMoney, formatDateTime } from "../utils/format";
 import type { Giveaway, Payment } from "../api/types";
 
@@ -36,6 +37,7 @@ export function SalesPage() {
   const [oversoldOnly, setOversoldOnly] = useState(false);
   const [createdFrom, setCreatedFrom] = useState("");
   const [createdTo, setCreatedTo] = useState("");
+  const [receiptPaymentId, setReceiptPaymentId] = useState<number | null>(null);
 
   const debouncedOrderId = useDebouncedValue(orderId);
   const debouncedInvoiceNo = useDebouncedValue(invoiceNo);
@@ -79,16 +81,6 @@ export function SalesPage() {
     createdFrom,
     createdTo,
   ]);
-
-  const viewReceipt = async (paymentId: number) => {
-    const receipts = await SalesApi.listReceipts(paymentId);
-    const latest = receipts[0];
-    if (!latest) return;
-    const { blob } = await SalesApi.downloadReceipt(paymentId, latest.id);
-    const url = URL.createObjectURL(blob);
-    window.open(url, "_blank");
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
-  };
 
   const downloadReport = async (format: "csv" | "xlsx") => {
     const { blob, filename } = await apiDownload("/api/payments", {
@@ -305,7 +297,7 @@ export function SalesPage() {
                 </td>
                 <td>
                   {p.receipt_count > 0 ? (
-                    <button onClick={() => void viewReceipt(p.id)}>
+                    <button onClick={() => setReceiptPaymentId(p.id)}>
                       Посмотреть{p.receipt_count > 1 ? ` (${p.receipt_count})` : ""}
                     </button>
                   ) : (
@@ -326,6 +318,13 @@ export function SalesPage() {
         onPageChange={setPage}
         onPageSizeChange={setPageSize}
       />
+
+      {receiptPaymentId !== null && (
+        <ReceiptViewerModal
+          paymentId={receiptPaymentId}
+          onClose={() => setReceiptPaymentId(null)}
+        />
+      )}
     </div>
   );
 }

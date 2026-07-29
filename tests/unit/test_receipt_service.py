@@ -112,6 +112,28 @@ def test_save_receipt_writes_audit_log(db: Database, settings: Settings, tmp_pat
         assert entries[0].details["receipt_id"] == receipt.id
 
 
+def test_save_receipt_guesses_content_type_from_filename_when_missing(
+    db: Database, settings: Settings, tmp_path: Path
+) -> None:
+    settings.receipts_dir = str(tmp_path / "receipts")  # type: ignore[misc]
+    payment_id = make_payment(db)
+
+    receipt = receipt_service.save_receipt(
+        db,
+        settings,
+        payment_id=payment_id,
+        content=b"%PDF-fake",
+        content_type=None,
+        original_filename="receipt.pdf",
+    )
+
+    # VK-документы никогда не отдают mime_type (см. channels/vk/handlers.py) — без
+    # угадывания по расширению файла панель отдавала бы application/octet-stream и
+    # браузер вместо просмотра скачивал бы файл.
+    assert receipt.content_type == "application/pdf"
+    assert Path(receipt.file_path).suffix == ".pdf"
+
+
 def test_save_receipt_multiple_uploads_for_same_payment(
     db: Database, settings: Settings, tmp_path: Path
 ) -> None:

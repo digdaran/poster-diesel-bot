@@ -27,7 +27,11 @@ def _create_open_giveaway(api_client: TestClient, headers: dict[str, str], **kwa
 
 
 def _seed_payment_with_receipt(
-    giveaway_id: int, participant_id: int, *, with_receipt: bool
+    giveaway_id: int,
+    participant_id: int,
+    *,
+    with_receipt: bool,
+    content_type: str | None = "image/jpeg",
 ) -> tuple[int, int | None]:
     db = Database(get_settings())
     with db.session() as session:
@@ -53,7 +57,7 @@ def _seed_payment_with_receipt(
                 payment_id=payment_id,
                 file_path=str(file_path),
                 original_filename="receipt.jpg",
-                content_type="image/jpeg",
+                content_type=content_type,
             )
             session.add(receipt)
             session.flush()
@@ -125,6 +129,37 @@ def test_download_receipt_returns_file_content(api_client: TestClient) -> None:
     )
     file_resp.raise_for_status()
     assert file_resp.content == b"fake-jpeg-content"
+    assert file_resp.headers["content-type"] == "image/jpeg"
+
+
+def test_download_receipt_guesses_content_type_when_missing(api_client: TestClient) -> None:
+    # Квитанции от VK-документов сохраняются без content_type в БД (VK не отдаёт
+    # mime_type для вложений-документов, см. channels/vk/handlers.py) — раньше это
+    # приводило к application/octet-stream и браузер вместо просмотра скачивал файл.
+    token = login(api_client, "admin", "admin-strong-pass-123")
+    headers = auth_headers(token)
+    giveaway_id = _create_open_giveaway(api_client, headers)
+    participant_resp = api_client.post(
+        "/api/manual-registrations",
+        json={
+            "giveaway_id": giveaway_id,
+            "participant_phone": "79991112277",
+            "participant_full_name": "Получатель",
+            "quantity": 1,
+        },
+        headers=headers,
+    )
+    participant_resp.raise_for_status()
+    participant_id = participant_resp.json()["participant_id"]
+    payment_id, receipt_id = _seed_payment_with_receipt(
+        giveaway_id, participant_id, with_receipt=True, content_type=None
+    )
+    assert receipt_id is not None
+
+    file_resp = api_client.get(
+        f"/api/payments/{payment_id}/receipts/{receipt_id}/file", headers=headers
+    )
+    file_resp.raise_for_status()
     assert file_resp.headers["content-type"] == "image/jpeg"
 
 

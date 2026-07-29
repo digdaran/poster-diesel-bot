@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import mimetypes
 from typing import Any
 
 from app.core.permissions import Permission
@@ -167,8 +168,17 @@ def download_payment_receipt(
     ).scalar_one_or_none()
     if receipt is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Квитанция не найдена")
+    # content_type в БД может отсутствовать для квитанций, сохранённых до фикса
+    # определения mime-типа (см. receipt_service.save_receipt) — угадываем по
+    # расширению файла на диске, иначе браузер получает application/octet-stream
+    # и вместо просмотра скачивает файл.
+    media_type = (
+        receipt.content_type
+        or mimetypes.guess_type(receipt.file_path)[0]
+        or "application/octet-stream"
+    )
     return FileResponse(
         receipt.file_path,
-        media_type=receipt.content_type or "application/octet-stream",
+        media_type=media_type,
         filename=receipt.original_filename or f"receipt_{receipt.id}",
     )
