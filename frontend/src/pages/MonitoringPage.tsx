@@ -6,11 +6,13 @@ import { EmptyStateRow } from "../components/EmptyState";
 import { formatMoney, formatRelativeTime } from "../utils/format";
 
 const POLL_INTERVAL_MS = 3000;
-// Держим подсветку на экране чуть дольше, чем длится CSS-анимация (2.5s) —
-// запас на случай рассинхрона таймеров, саму анимацию это не продлевает.
-const HIGHLIGHT_DURATION_MS = 3000;
-// Подсветка новых (ещё не встречавшихся) строк — ровно 5 секунд, как просили.
-const APPEAR_HIGHLIGHT_DURATION_MS = 5000;
+// CSS-класс "row-just-confirmed" запускает ДВЕ анимации подряд (см. index.css):
+// вспышку (2.5s) и следующее за ней 10-секундное мигание (итого 12.5s) — этот
+// таймаут держит класс навешенным ровно на всю их суммарную длительность,
+// плюс небольшой запас на рассинхрон таймеров.
+const HIGHLIGHT_DURATION_MS = 12800;
+// Аналогично "row-just-appeared": вспышка 5s + мигание 10s = 15s.
+const APPEAR_HIGHLIGHT_DURATION_MS = 15200;
 const FEED_SIZE = 100;
 const CONFIRMED_FEED_SIZE = 30;
 // Длительность CSS-transition у летящей карточки — держим в одном месте с
@@ -194,9 +196,15 @@ export function MonitoringPage() {
       const merged = toRows(sales.items, registrations.items);
 
       // "Появилась впервые" = ключа вообще не было на прошлом опросе.
-      // "Подтверждена только что" = была на прошлом опросе, но неподтверждённой.
-      // На самом первом опросе не считаем ничего новым/подтверждённым — иначе
-      // вся история подсветится и улетит в правую панель разом при открытии.
+      // "Подтверждена только что" = на прошлом опросе НЕ была подтверждена
+      // (включая случай, когда её вообще не было — платёж/регистрация могли
+      // создать и тут же подтвердить в рамках одного 3-секундного цикла
+      // опроса, тогда wasConfirmed === undefined, а не false; раньше это был
+      // отдельный "else if"-ветвь, из-за чего такая строка никогда не
+      // проверялась на подтверждение и не улетала в правую панель).
+      // На самом первом опросе не считаем ничего новым/подтверждённым —
+      // иначе вся история подсветится и улетит в правую панель разом при
+      // открытии страницы.
       const newlyAppeared: string[] = [];
       const newlyConfirmed: string[] = [];
       if (!isFirstLoadRef.current) {
@@ -204,7 +212,8 @@ export function MonitoringPage() {
           const wasConfirmed = prevConfirmedRef.current.get(row.key);
           if (wasConfirmed === undefined) {
             newlyAppeared.push(row.key);
-          } else if (wasConfirmed === false && row.isConfirmed) {
+          }
+          if (wasConfirmed !== true && row.isConfirmed) {
             newlyConfirmed.push(row.key);
           }
         }

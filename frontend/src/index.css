@@ -267,8 +267,13 @@ tbody tr.row-amount-mismatch:hover {
   }
 }
 
+/* Вспышка (2.5s), сразу за которой — 10 секунд мигания (второй анимацией с
+   задержкой = длительности первой). JS держит класс навешенным ровно на
+   суммарную длительность обеих (см. HIGHLIGHT_DURATION_MS в MonitoringPage.tsx). */
 tbody tr.row-just-confirmed {
-  animation: row-just-confirmed-flash 2.5s ease-out;
+  animation:
+    row-just-confirmed-flash 2.5s ease-out,
+    row-blink-success 1s ease-in-out 2.5s 10;
 }
 
 @keyframes row-just-confirmed-flash {
@@ -286,10 +291,23 @@ tbody tr.row-just-confirmed {
   }
 }
 
-/* Строка, впервые появившаяся в ленте (новый платёж/регистрация) — 5 секунд,
-   синий тон, чтобы визуально не путать с зелёной подсветкой подтверждения. */
+@keyframes row-blink-success {
+  0%,
+  100% {
+    background: transparent;
+  }
+  50% {
+    background: var(--color-success-bg);
+  }
+}
+
+/* Строка, впервые появившаяся в ленте (новый платёж/регистрация) — 5 секунд
+   вспышки синим тоном (не путать с зелёной подсветкой подтверждения), затем
+   те же 10 секунд мигания (см. APPEAR_HIGHLIGHT_DURATION_MS). */
 tbody tr.row-just-appeared {
-  animation: row-just-appeared-flash 5s ease-out;
+  animation:
+    row-just-appeared-flash 5s ease-out,
+    row-blink-info 1s ease-in-out 5s 10;
 }
 
 @keyframes row-just-appeared-flash {
@@ -304,6 +322,16 @@ tbody tr.row-just-appeared {
   100% {
     background: transparent;
     box-shadow: inset 0 0 0 0 transparent;
+  }
+}
+
+@keyframes row-blink-info {
+  0%,
+  100% {
+    background: transparent;
+  }
+  50% {
+    background: var(--color-info-bg);
   }
 }
 
@@ -403,9 +431,13 @@ tbody tr.row-just-appeared {
 
 /* Строка только что "приземлилась" в правой панели — анимация проигрывается
    один раз при монтировании нового DOM-узла (у уже существующих строк ключ
-   не меняется, React их не размонтирует, поэтому не переигрывает). */
+   не меняется, React их не размонтирует, поэтому не переигрывает), сразу за
+   ней — те же 10 секунд мигания, что и в основной таблице. Чистый CSS, без
+   JS-таймеров: и появление, и мигание запускаются самим фактом монтирования. */
 .confirmed-feed-row {
-  animation: confirmed-row-enter 500ms ease-out;
+  animation:
+    confirmed-row-enter 500ms ease-out,
+    row-blink-success 1s ease-in-out 500ms 10;
 }
 
 @keyframes confirmed-row-enter {
