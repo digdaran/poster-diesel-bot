@@ -12,6 +12,7 @@ import { GiveawaysPage } from "./pages/GiveawaysPage";
 import { GiveawayDetailPage } from "./pages/GiveawayDetailPage";
 import { ManualRegistrationsPage } from "./pages/ManualRegistrationsPage";
 import { SalesPage } from "./pages/SalesPage";
+import { MonitoringPage } from "./pages/MonitoringPage";
 import { TicketsPage } from "./pages/TicketsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { PanelUsersPage } from "./pages/PanelUsersPage";
@@ -41,6 +42,7 @@ export default function App() {
                 <Route path="giveaways/:id" element={<GiveawayDetailPage />} />
                 <Route path="manual-registrations" element={<ManualRegistrationsPage />} />
                 <Route path="sales" element={<SalesPage />} />
+                <Route path="monitoring" element={<MonitoringPage />} />
                 <Route path="tickets" element={<TicketsPage />} />
                 <Route path="broadcasts" element={<BroadcastsPage />} />
                 <Route path="reports" element={<ReportsPage />} />

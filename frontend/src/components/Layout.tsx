@@ -13,6 +13,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/", label: "Dashboard", permission: "view_dashboard" },
   { to: "/participants", label: "Участники", permission: "view_participants" },
   { to: "/sales", label: "Продажи On-Line", permission: "view_sales" },
+  { to: "/monitoring", label: "Мониторинг", permission: "view_sales" },
   {
     to: "/manual-registrations",
     label: "Ручные регистрации",
