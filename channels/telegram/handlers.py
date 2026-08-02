@@ -606,17 +606,16 @@ async def _create_and_offer_payment(
         participant = session.get(Participant, participant_id)
         phone = participant.phone if participant else ""
 
-    async with channel.typing_action(chat_id=str(message.chat.id)):
-        outcome = payment_svc.create_payment_safe(
-            db,
-            provider,
-            giveaway_id=giveaway_id,
-            participant_id=participant_id,
-            participant_phone=phone,
-            quantity=quantity,
-            channel=ChannelType.TELEGRAM,
-            initiating_external_user_id=str(message.chat.id),
-        )
+    outcome = payment_svc.create_payment_safe(
+        db,
+        provider,
+        giveaway_id=giveaway_id,
+        participant_id=participant_id,
+        participant_phone=phone,
+        quantity=quantity,
+        channel=ChannelType.TELEGRAM,
+        initiating_external_user_id=str(message.chat.id),
+    )
     if not outcome.ok:
         if outcome.participant_blocked:
             await message.answer(
