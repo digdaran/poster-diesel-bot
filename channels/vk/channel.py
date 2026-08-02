@@ -62,27 +62,6 @@ def _format_ticket_codes(codes: list[str]) -> list[str]:
     return chunks
 
 
-class _TypingAction:
-    """Показывает "печатает…" на время сетевого запроса к банку/провайдеру.
-
-    В отличие от `TelegramChannel.typing_action` (aiogram `ChatActionSender`
-    повторяет вызов каждые ~5с на всё время `async with`), здесь один вызов на
-    вход в контекст — статус "печатает" у VK и так держится ~10с, что покрывает
-    типичную длительность запроса к банку без необходимости фонового повтора.
-    """
-
-    def __init__(self, bot: Bot, peer_id: int) -> None:
-        self._bot = bot
-        self._peer_id = peer_id
-
-    async def __aenter__(self) -> _TypingAction:
-        await self._bot.api.messages.set_activity(peer_id=self._peer_id, type="typing")
-        return self
-
-    async def __aexit__(self, *exc_info: object) -> None:
-        return None
-
-
 class VkChannel(BaseMessengerChannel):
     channel_type = ChannelType.VK
     capabilities = ChannelCapabilities(
@@ -165,9 +144,6 @@ class VkChannel(BaseMessengerChannel):
         keyboard = Keyboard(inline=True)
         keyboard.add(OpenLink(url, "💬 Написать в поддержку"))
         return keyboard.get_json()
-
-    def typing_action(self, peer_id: str) -> _TypingAction:
-        return _TypingAction(self.bot, int(peer_id))
 
     async def send_qr_code(
         self, external_user_id: str, qr_code_payload: str, *, caption: str | None = None
