@@ -175,8 +175,8 @@ class VkChannel(BaseMessengerChannel):
         """QR-код для оплаты (СБП-ссылка либо ST00012 по реквизитам, п.9.1 ТЗ,
         ГОСТ Р 56042-2014) как изображение для оплаты с другого устройства —
         см. `channels.telegram.channel.TelegramChannel.send_qr_code` про
-        Windows-1251-кодирование payload'а перед рендером (DECISIONS.md)."""
-        img = qrcode.make(qr_code_payload.encode("cp1251"))
+        UTF-8-кодирование payload'а перед рендером (DECISIONS.md)."""
+        img = qrcode.make(qr_code_payload.encode("utf-8"))
         buffer = io.BytesIO()
         img.save(buffer, format="PNG")  # type: ignore[call-arg]
         buffer.name = "sbp_qr.png"

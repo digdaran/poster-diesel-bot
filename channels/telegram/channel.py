@@ -148,11 +148,13 @@ class TelegramChannel(BaseMessengerChannel):
         """QR-код для оплаты (СБП-ссылка либо ST00012 по реквизитам, п.9.1 ТЗ,
         ГОСТ Р 56042-2014) как изображение для оплаты с другого устройства.
 
-        Кодируем payload в байты Windows-1251 перед рендером — общепринятая
-        практика для банковских приложений, сканирующих такие QR (см.
-        DECISIONS.md; для ASCII-only payload'ов старых провайдеров результат не
-        отличается от UTF-8/latin1, так что это безопасно и для них)."""
-        img = qrcode.make(qr_code_payload.encode("cp1251"))
+        Кодируем payload в байты UTF-8 перед рендером — по ГОСТ Р 56042-2014
+        префикс "ST00012" сам является декларацией кодировки текста (версия "2"
+        = UTF-8, версия "1" = Windows-1251), так что байты обязаны ей
+        соответствовать (см. DECISIONS.md; для ASCII-only payload'ов старых
+        провайдеров результат не отличается от cp1251/latin1, так что это
+        безопасно и для них)."""
+        img = qrcode.make(qr_code_payload.encode("utf-8"))
         buffer = io.BytesIO()
         img.save(buffer, format="PNG")  # type: ignore[call-arg]
         photo = BufferedInputFile(buffer.getvalue(), filename="sbp_qr.png")
