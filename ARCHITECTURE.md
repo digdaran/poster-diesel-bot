@@ -94,7 +94,7 @@ WHERE id = :id AND status = 'PENDING';
 
 `app/payments/requisites_qr.py` — единственный способ приёма оплаты (интернет-эквайринг удалён, см. DECISIONS_LOG.md №44):
 
-- `create_payment` — без сети: собирает QR-payload по ГОСТ Р 56042-2014 (формат ST00012, `app/payments/qr_requisites.py::build_st00012_payload`) из реквизитов получателя (`.env`, `REQUISITES_*`) и назначения платежа `"Оплата по счету № {PREFIX}-{NNNNN} от {дата}, в т.ч. НДС..."` (номер счёта — `Giveaway.format_invoice_number`, ставка НДС — `.env REQUISITES_VAT_RATE_PERCENT`). QR рендерится в канале (`channels/*/channel.py::send_qr_code`) как байты **Windows-1251** — общепринятая практика для банковских QR-сканеров (риск для проверки на реальных приложениях, см. DECISIONS.md).
+- `create_payment` — без сети: собирает QR-payload по ГОСТ Р 56042-2014 (формат ST00012, `app/payments/qr_requisites.py::build_st00012_payload`) из реквизитов получателя (`.env`, `REQUISITES_*`) и назначения платежа `"Оплата по счету № {PREFIX}-{NNNNN} от {дата}, в т.ч. НДС..."` (номер счёта — `Giveaway.format_invoice_number`, ставка НДС — `.env REQUISITES_VAT_RATE_PERCENT`). QR рендерится в канале (`channels/*/channel.py::send_qr_code`) как байты **UTF-8** — версия "2" в префиксе "ST00012" по ГОСТ Р 56042-2014 сама декларирует эту кодировку (риск для проверки на реальных приложениях, см. DECISIONS.md).
 - `reserves_tickets_on_create=False` (см. §3) — нет резерва при создании, `payment_url=None` (нет ссылки на оплату, только QR).
 - `verify_and_parse_webhook` не поддерживается (нет вебхука у этого провайдера).
 - `check_status` — разовая сверка по запросу участника: ищет совпадение по номеру счёта в свежей выписке (та же логика, что и в фоновой сверке ниже), не полагаясь на ожидание следующего тика.

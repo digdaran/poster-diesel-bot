@@ -45,9 +45,9 @@ def test_build_st00012_payload_omits_kpp_when_absent() -> None:
     assert "Sum=5000" in payload
 
 
-def test_st00012_payload_encodes_as_windows_1251() -> None:
-    """QR должен кодироваться в cp1251 (см. DECISIONS.md) — payload обязан быть
-    представим в этой кодировке без потерь (кириллица, стандартные символы)."""
+def test_st00012_payload_encodes_as_utf8() -> None:
+    """QR должен кодироваться в UTF-8 (см. DECISIONS.md) — префикс "ST00012" по
+    ГОСТ Р 56042-2014 сам декларирует эту кодировку (версия "2" = UTF-8)."""
     payload = build_st00012_payload(
         name="ООО «Ромашка»",
         personal_acc="40702810900000000000",
@@ -59,8 +59,8 @@ def test_st00012_payload_encodes_as_windows_1251() -> None:
         sum_kopecks=150000,
         purpose="Оплата по счету № ABC-00001 от 22.07.2026",
     )
-    encoded = payload.encode("cp1251")
-    assert encoded.decode("cp1251") == payload
+    encoded = payload.encode("utf-8")
+    assert encoded.decode("utf-8") == payload
 
 
 def test_vat_clause_zero_rate_means_not_taxed() -> None:

@@ -306,7 +306,7 @@ def get_manual_registration_qr_png(
     db: Database = Depends(get_database),
     user: PanelUser = Depends(require_permission(Permission.MANUAL_REGISTRATION_CREATE)),
 ) -> Response:
-    """PNG для показа покупателю на экране — тот же способ рендера (Windows-1251),
+    """PNG для показа покупателю на экране — тот же способ рендера (UTF-8),
     что и `channels/*/channel.py::send_qr_code` для онлайн-оплаты по QR."""
     with db.session() as session:
         registration = session.get(ManualRegistration, registration_id)
@@ -317,7 +317,7 @@ def get_manual_registration_qr_png(
             )
         payload = registration.qr_code_payload
 
-    img = qrcode.make(payload.encode("cp1251"))
+    img = qrcode.make(payload.encode("utf-8"))
     buffer = io.BytesIO()
     img.save(buffer, format="PNG")  # type: ignore[call-arg]
     return Response(content=buffer.getvalue(), media_type="image/png")
