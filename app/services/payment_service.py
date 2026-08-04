@@ -14,6 +14,7 @@ import structlog
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.config import Settings
 from app.core.db import Database
 from app.models.base import utcnow
 from app.models.enums import AuditActorType, ChannelType, PaymentStatus, TicketSource
@@ -270,6 +271,17 @@ class FinalizeOutcome:
     (подарочная покупка на неподтверждённый номер, см. DECISIONS_LOG.md №56)."""
     initiating_external_user_id: str | None = None
     """См. `initiating_channel` — ID чата/пользователя в этом канале."""
+    amount: int | None = None
+    """`Payment.amount` — используется `notification_service` для конкретизации
+    уведомления об отказе (какой именно из НЕСКОЛЬКИХ платежей участника не
+    прошёл), чтобы не путать его с уже оплаченным счётом."""
+    invoice_no: str | None = None
+    """`Giveaway.format_invoice_number(payment_number)` — тот же номер счёта,
+    что показывался участнику при создании платежа (см. `channels/*/handlers.py`).
+    None для платежей без `payment_number` (провайдеры с резервированием "на
+    лету" — Т-Банк/ВТБ/mock, см. `Payment.payment_number`)."""
+    giveaway_name: str | None = None
+    """`Giveaway.name` — тот же контекст, что и `invoice_no`."""
 
 
 def _reserve_and_issue_now(
@@ -428,12 +440,12 @@ def finalize_payment(
             return FinalizeOutcome(applied=False)
 
         payment = session.execute(select(Payment).where(Payment.order_id == order_id)).scalar_one()
+        giveaway = session.execute(
+            select(Giveaway).where(Giveaway.id == payment.giveaway_id)
+        ).scalar_one()
 
         tickets: list[Ticket] = []
         if new_status == PaymentStatus.SUCCEEDED:
-            giveaway = session.execute(
-                select(Giveaway).where(Giveaway.id == payment.giveaway_id)
-            ).scalar_one()
             issued_rows = repo.issue_reserved(session, payment_id=payment.id, issued_at=now)
             if not issued_rows:
                 # Ничего не было зарезервировано под этот платёж заранее — провайдер
@@ -463,6 +475,11 @@ def finalize_payment(
         else:
             repo.release_reservation(session, payment_id=payment.id)
 
+        invoice_no = (
+            giveaway.format_invoice_number(payment.payment_number)
+            if payment.payment_number is not None
+            else None
+        )
         return FinalizeOutcome(
             applied=True,
             payment_id=payment.id,
@@ -472,6 +489,9 @@ def finalize_payment(
             tickets=tickets,
             initiating_channel=payment.channel,
             initiating_external_user_id=payment.initiating_external_user_id,
+            amount=payment.amount,
+            invoice_no=invoice_no,
+            giveaway_name=giveaway.name,
         )
 
 
@@ -629,9 +649,20 @@ class PendingPaymentInfo:
     amount: int
     invoice_no: str | None
     has_receipt: bool
+    expires_at: dt.datetime | None
+    """Момент, после которого фоновая сверка (`bank_reconciliation_service.reconcile`)
+    аннулирует неоплаченный счёт по TTL (`Payment.created_at` +
+    `settings.requisites_invoice_ttl_days`) — для показа участнику срока действия
+    счёта в «Мои покупки». None вместе с `invoice_no` для платежей без
+    `payment_number` (провайдеры с резервированием "на лету", см. `invoice_no`),
+    у которых TTL совсем другой (секунды/минуты, `ONLINE_RESERVATION_TTL_SEC`) и
+    к моменту, когда участник откроет «Мои покупки», такой платёж уже давно
+    финализирован фоновой сверкой."""
 
 
-def list_pending_payments(db: Database, *, participant_id: int) -> list[PendingPaymentInfo]:
+def list_pending_payments(
+    db: Database, settings: Settings, *, participant_id: int
+) -> list[PendingPaymentInfo]:
     """PENDING-платежи участника, самые новые первыми — для раздела «Мои покупки»."""
     with db.session() as session:
         payments = list(
@@ -657,6 +688,11 @@ def list_pending_payments(db: Database, *, participant_id: int) -> list[PendingP
                     else None
                 ),
                 has_receipt=bool(p.receipts),
+                expires_at=(
+                    p.created_at + dt.timedelta(days=settings.requisites_invoice_ttl_days)
+                    if p.payment_number is not None
+                    else None
+                ),
             )
             for p in payments
         ]

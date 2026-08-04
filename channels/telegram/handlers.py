@@ -252,8 +252,9 @@ async def on_receipt_upload(message: Message, state: FSMContext) -> None:
     if selected_payment_id is not None:
         await state.clear()
     await message.answer(
-        "Квитанция получена, спасибо! Номера придут после зачисления денег на "
-        "расчётный счёт — это может занять несколько дней."
+        "Квитанция получена, спасибо! Больше ничего делать не нужно — оплачивать повторно "
+        "не надо. Номера придут после зачисления денег на расчётный счёт (как правило, до "
+        "30 минут, в редких случаях — до 3 дней)."
     )
 
 
@@ -722,7 +723,11 @@ async def on_my_tickets(message: Message) -> None:
             session.execute(select(Ticket).where(Ticket.participant_id == participant_id)).scalars()
         )
 
-    pending_payments = payment_svc.list_pending_payments(db, participant_id=participant_id)
+    from app.core.config import get_settings
+
+    pending_payments = payment_svc.list_pending_payments(
+        db, get_settings(), participant_id=participant_id
+    )
 
     if not tickets and not pending_payments:
         await message.answer("У вас пока нет покупок.")
@@ -749,9 +754,12 @@ async def _send_pending_payments(
     for p in payments:
         invoice_line = f", счёт № {p.invoice_no}" if p.invoice_no else ""
         receipt_line = "квитанция получена ✅" if p.has_receipt else "квитанция не прислана ⏳"
+        expiry_line = (
+            f", действителен до {p.expires_at:%d.%m.%Y}" if p.expires_at is not None else ""
+        )
         lines.append(
             f"«{p.giveaway_name}»: {p.quantity} экз. на {p.amount / 100:.2f} ₽{invoice_line} "
-            f"— {receipt_line}"
+            f"— {receipt_line}{expiry_line}"
         )
         if not p.has_receipt:
             rows.append(
@@ -762,6 +770,12 @@ async def _send_pending_payments(
                     )
                 ]
             )
+    if any(p.has_receipt for p in payments):
+        lines.append(
+            "\nСчета с отметкой «квитанция получена ✅» уже проверяются — платить повторно "
+            "не нужно, дождитесь зачисления (как правило, до 30 минут, в редких случаях — "
+            "до 3 дней)."
+        )
     keyboard = InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
     await message.answer("\n".join(lines), reply_markup=keyboard)
 

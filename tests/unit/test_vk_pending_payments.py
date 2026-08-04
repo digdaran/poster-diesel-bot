@@ -29,6 +29,7 @@ async def test_vk_receipt_button_label_stays_within_vk_40_char_limit() -> None:
         amount=99999999,
         invoice_no="A" * 20 + "-00001",  # максимальная длина префикса розыгрыша
         has_receipt=False,
+        expires_at=None,
     )
 
     msg = _FakeMessage(peer_id=123)
@@ -54,6 +55,7 @@ async def test_vk_receipt_button_added_only_for_missing_receipt(count: int) -> N
             amount=10000,
             invoice_no=f"TST-{i:05d}",
             has_receipt=(i % 2 == 0),
+            expires_at=None,
         )
         for i in range(1, count + 1)
     ]

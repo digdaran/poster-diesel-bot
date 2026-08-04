@@ -258,7 +258,9 @@ async def test_notify_failure_falls_back_to_initiating_chat_without_binding(db: 
     )
 
     assert not channel.deliver_purchase_calls
-    assert channel.send_message_calls == [("buyer-chat-2", notification_service._FAILURE_TEXT)]
+    assert channel.send_message_calls == [
+        ("buyer-chat-2", notification_service._failure_text(finalize))
+    ]
 
 
 async def test_notify_prefers_binding_over_initiating_chat_fallback(db: Database) -> None:

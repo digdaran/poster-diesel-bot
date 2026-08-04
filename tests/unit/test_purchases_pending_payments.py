@@ -7,9 +7,11 @@ tests/unit/test_telegram_navigation.py."""
 
 from __future__ import annotations
 
+import datetime as dt
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from app.core.config import Settings
 from app.core.db import Database
 from app.models.enums import ChannelType, PaymentProviderType, PaymentStatus
 from app.models.giveaway import Giveaway
@@ -69,7 +71,9 @@ def _make_payment(
         return payment.id
 
 
-def test_list_pending_payments_reports_receipt_status_and_invoice(db: Database) -> None:
+def test_list_pending_payments_reports_receipt_status_and_invoice(
+    db: Database, settings: Settings
+) -> None:
     giveaway_id = _make_giveaway(db, prefix="PND")
     participant_id = _make_participant(db, phone="79990000001")
     with_receipt = _make_payment(
@@ -91,7 +95,7 @@ def test_list_pending_payments_reports_receipt_status_and_invoice(db: Database) 
     with db.session() as session:
         session.add(PaymentReceipt(payment_id=with_receipt, file_path="/tmp/r.jpg"))
 
-    result = payment_svc.list_pending_payments(db, participant_id=participant_id)
+    result = payment_svc.list_pending_payments(db, settings, participant_id=participant_id)
 
     by_id = {p.payment_id: p for p in result}
     assert by_id[with_receipt].has_receipt is True
@@ -99,12 +103,22 @@ def test_list_pending_payments_reports_receipt_status_and_invoice(db: Database) 
     assert by_id[without_receipt].amount == 20000
     assert by_id[without_receipt].quantity == 2
     assert by_id[without_receipt].invoice_no is not None
+    # expires_at = created_at + TTL — считается даже для счёта с уже присланной
+    # квитанцией: счёт остаётся PENDING (и подверженным TTL) до подтверждения
+    # сверкой выписки, наличие квитанции на это не влияет.
+    with db.session() as session:
+        payment = session.get(Payment, without_receipt)
+        assert payment is not None
+        expected_expiry = payment.created_at + dt.timedelta(
+            days=settings.requisites_invoice_ttl_days
+        )
+    assert by_id[without_receipt].expires_at == expected_expiry
     # Самые новые счета — первыми.
     assert [p.payment_id for p in result] == [without_receipt, with_receipt]
 
 
 def test_list_pending_payments_excludes_other_participants_and_non_pending(
-    db: Database,
+    db: Database, settings: Settings
 ) -> None:
     giveaway_id = _make_giveaway(db, prefix="EXC")
     participant_id = _make_participant(db, phone="79990000002")
@@ -126,7 +140,7 @@ def test_list_pending_payments_excludes_other_participants_and_non_pending(
         status=PaymentStatus.SUCCEEDED,
     )
 
-    result = payment_svc.list_pending_payments(db, participant_id=participant_id)
+    result = payment_svc.list_pending_payments(db, settings, participant_id=participant_id)
 
     assert result == []
 
