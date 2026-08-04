@@ -8,6 +8,7 @@ from __future__ import annotations
 import csv
 import io
 from collections.abc import Sequence
+from datetime import date
 from typing import Any
 
 from openpyxl import Workbook
@@ -28,9 +29,18 @@ from app.models.ticket import Ticket
 
 
 def sales_by_period(
-    session: Session, *, granularity: str = "day", giveaway_id: int | None = None
+    session: Session,
+    *,
+    granularity: str = "day",
+    giveaway_id: int | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
 ) -> list[dict[str, Any]]:
-    """Динамика продаж (успешных онлайн-платежей) по дням/месяцам (п.16 ТЗ)."""
+    """Динамика продаж (успешных онлайн-платежей) по дням/месяцам (п.16 ТЗ).
+
+    `date_from`/`date_to` — включительно, фильтруют по той же дате (confirmed_at,
+    иначе created_at), что используется для группировки, чтобы график и диапазон
+    не расходились."""
     fmt = "%Y-%m-%d" if granularity == "day" else "%Y-%m"
     stmt = select(Payment).where(Payment.status == PaymentStatus.SUCCEEDED)
     if giveaway_id is not None:
@@ -39,7 +49,12 @@ def sales_by_period(
 
     buckets: dict[str, dict[str, int]] = {}
     for p in payments:
-        key = p.confirmed_at.strftime(fmt) if p.confirmed_at else p.created_at.strftime(fmt)
+        dt = p.confirmed_at or p.created_at
+        if date_from is not None and dt.date() < date_from:
+            continue
+        if date_to is not None and dt.date() > date_to:
+            continue
+        key = dt.strftime(fmt)
         bucket = buckets.setdefault(key, {"count": 0, "amount": 0})
         bucket["count"] += 1
         bucket["amount"] += p.amount

@@ -212,6 +212,12 @@ export interface ChannelSalesRow {
   amount: number;
 }
 
+export interface SalesByPeriodRow {
+  period: string;
+  count: number;
+  amount: number;
+}
+
 export interface Page<T> {
   items: T[];
   total: number;

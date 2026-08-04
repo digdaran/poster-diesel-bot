@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime as dt
+
 from app.models.enums import (
     ChannelType,
     ManualRegistrationPaymentMethod,
@@ -85,6 +87,68 @@ def test_sales_by_provider_and_financial_summary(session: Session) -> None:
     assert summary["revenue_total"] == 30000
     assert summary["successful_payments_count"] == 2
     assert summary["average_check"] == 15000
+
+
+def test_sales_by_period_date_range_filter(session: Session) -> None:
+    g = make_giveaway(session)
+    p = make_participant(session, "79990001112")
+    session.add(
+        Payment(
+            order_id="range-old",
+            participant_id=p.id,
+            giveaway_id=g.id,
+            provider=PaymentProviderType.MOCK,
+            amount=10000,
+            quantity=1,
+            status=PaymentStatus.SUCCEEDED,
+            confirmed_at=dt.datetime(2026, 1, 1, 12, 0, 0),
+        )
+    )
+    session.add(
+        Payment(
+            order_id="range-in",
+            participant_id=p.id,
+            giveaway_id=g.id,
+            provider=PaymentProviderType.MOCK,
+            amount=20000,
+            quantity=2,
+            status=PaymentStatus.SUCCEEDED,
+            confirmed_at=dt.datetime(2026, 3, 15, 12, 0, 0),
+        )
+    )
+    session.add(
+        Payment(
+            order_id="range-new",
+            participant_id=p.id,
+            giveaway_id=g.id,
+            provider=PaymentProviderType.MOCK,
+            amount=30000,
+            quantity=1,
+            status=PaymentStatus.SUCCEEDED,
+            confirmed_at=dt.datetime(2026, 6, 1, 12, 0, 0),
+        )
+    )
+    session.flush()
+
+    rows = svc.sales_by_period(
+        session,
+        granularity="day",
+        date_from=dt.date(2026, 3, 1),
+        date_to=dt.date(2026, 3, 31),
+    )
+    assert rows == [{"period": "2026-03-15", "count": 1, "amount": 20000}]
+
+    # Границы диапазона включительны.
+    rows_boundary = svc.sales_by_period(
+        session,
+        granularity="day",
+        date_from=dt.date(2026, 1, 1),
+        date_to=dt.date(2026, 1, 1),
+    )
+    assert rows_boundary == [{"period": "2026-01-01", "count": 1, "amount": 10000}]
+
+    rows_all = svc.sales_by_period(session, granularity="day")
+    assert len(rows_all) == 3
 
 
 def test_sales_by_channel(session: Session) -> None:

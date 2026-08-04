@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 from app.core.permissions import Permission
@@ -26,11 +27,19 @@ def _maybe_export(
 def sales_by_period(
     granularity: str = "day",
     giveaway_id: int | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
     export: ExportFormat | None = None,
     session: Session = Depends(get_session),
     user: PanelUser = Depends(require_permission(Permission.REPORTS_VIEW)),
 ) -> list[dict[str, Any]] | Response:
-    rows = svc.sales_by_period(session, granularity=granularity, giveaway_id=giveaway_id)
+    rows = svc.sales_by_period(
+        session,
+        granularity=granularity,
+        giveaway_id=giveaway_id,
+        date_from=date_from,
+        date_to=date_to,
+    )
     return _maybe_export(rows, export, user, "sales_by_period")
 
 

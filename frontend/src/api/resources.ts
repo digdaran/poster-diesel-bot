@@ -16,6 +16,7 @@ import type {
   PaymentReceipt,
   PlatformSettings,
   RevenueByGiveawayRow,
+  SalesByPeriodRow,
   Ticket,
 } from "./types";
 
@@ -248,4 +249,10 @@ export const ReportsApi = {
   revenueByGiveaway: () => apiRequest<RevenueByGiveawayRow[]>("/api/reports/revenue-by-giveaway"),
   salesByChannel: (giveaway_id?: number) =>
     apiRequest<ChannelSalesRow[]>("/api/reports/by-channel", { query: { giveaway_id } }),
+  salesByPeriod: (params: {
+    granularity?: "day" | "month";
+    giveaway_id?: number;
+    date_from?: string;
+    date_to?: string;
+  }) => apiRequest<SalesByPeriodRow[]>("/api/reports/sales-by-period", { query: { ...params } }),
 };
