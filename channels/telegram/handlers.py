@@ -44,6 +44,13 @@ _MAIN_KEYBOARD_BUTTONS = [
     ["💬 Написать в поддержку", "ℹ️ Помощь"],
 ]
 
+# Кнопки главного меню должны работать как глобальная навигация, даже если
+# участник застрял посреди диалога покупки (не долистал выбор количества/ввод
+# номера получателя) — см. DECISIONS_LOG.md. Используется, чтобы исключить эти
+# тексты из хендлеров, привязанных к состоянию FSM (иначе перехватывают текст
+# кнопки как невалидный ввод количества/телефона).
+_MAIN_MENU_TEXTS = frozenset(text for row in _MAIN_KEYBOARD_BUTTONS for text in row)
+
 _channel: TelegramChannel | None = None  # устанавливается через set_channel() в main.py
 
 
@@ -361,6 +368,9 @@ async def _prompt_giveaway_choice(
 
 @router.message(F.text == "🖼 Купить постер")
 async def on_buy(message: Message, state: FSMContext) -> None:
+    # Глобальная кнопка меню — молча сбрасывает любой незавершённый диалог
+    # (покупку/регистрацию) и начинает выбор постера заново.
+    await state.clear()
     db = get_channel_db()
     with db.session() as session:
         giveaways = _open_giveaways(session)
@@ -493,7 +503,7 @@ async def on_quantity_chosen(callback: CallbackQuery, state: FSMContext) -> None
     await callback.answer()
 
 
-@router.message(PurchaseStates.choosing_quantity)
+@router.message(PurchaseStates.choosing_quantity, F.text.not_in(_MAIN_MENU_TEXTS))
 async def on_quantity_typed(message: Message, state: FSMContext) -> None:
     text = (message.text or "").strip()
     if not text.isdigit() or int(text) == 0:
@@ -505,7 +515,7 @@ async def on_quantity_typed(message: Message, state: FSMContext) -> None:
     await _handle_quantity_selected(message, _uid(message), state, giveaway_id, int(text))
 
 
-@router.message(PurchaseStates.awaiting_phone_for_gift)
+@router.message(PurchaseStates.awaiting_phone_for_gift, F.text.not_in(_MAIN_MENU_TEXTS))
 async def on_phone_entered(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     giveaway_id, quantity = data["giveaway_id"], data["quantity"]
@@ -706,7 +716,10 @@ async def _deliver_tickets(message: Message, outcome: payment_svc.FinalizeOutcom
 
 
 @router.message(F.text == "📋 Мои покупки")
-async def on_my_tickets(message: Message) -> None:
+async def on_my_tickets(message: Message, state: FSMContext) -> None:
+    # Глобальная кнопка меню — доступна и посреди незавершённой покупки, молча
+    # сбрасывая её (см. _MAIN_MENU_TEXTS).
+    await state.clear()
     db = get_channel_db()
     with db.session() as session:
         binding = participant_service.get_binding(
@@ -819,14 +832,17 @@ async def on_select_payment_for_receipt(callback: CallbackQuery, state: FSMConte
 
 @router.message(F.text == "💬 Написать в поддержку")
 @router.message(Command("support"))
-async def on_support_contact(message: Message) -> None:
+async def on_support_contact(message: Message, state: FSMContext) -> None:
+    # Глобальная кнопка меню — доступна и посреди незавершённой покупки, молча
+    # сбрасывая её (см. _MAIN_MENU_TEXTS).
+    await state.clear()
     db = get_channel_db()
     with db.session() as session:
         platform_settings = settings_service.get_or_create_settings(session)
     contacts = platform_settings.support_contacts or {}
     url = settings_service.support_contact_url(contacts, "telegram")
     if url is None:
-        await on_help(message)
+        await on_help(message, state)
         return
     keyboard = _get_channel().render_support_prompt(url=url)
     await message.answer(
@@ -836,7 +852,10 @@ async def on_support_contact(message: Message) -> None:
 
 @router.message(F.text == "ℹ️ Помощь")
 @router.message(Command("help"))
-async def on_help(message: Message) -> None:
+async def on_help(message: Message, state: FSMContext) -> None:
+    # Глобальная кнопка меню — доступна и посреди незавершённой покупки, молча
+    # сбрасывая её (см. _MAIN_MENU_TEXTS).
+    await state.clear()
     db = get_channel_db()
     with db.session() as session:
         platform_settings = settings_service.get_or_create_settings(session)

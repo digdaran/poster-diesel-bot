@@ -50,6 +50,14 @@ _BUY_TEXT = "🖼 Купить постер"
 _MY_TICKETS_TEXT = "📋 Мои покупки"
 _SUPPORT_CONTACT_TEXT = "💬 Написать в поддержку"
 
+# Кнопки главного меню должны работать как глобальная навигация, даже если
+# участник застрял посреди диалога покупки (не долистал выбор количества/ввод
+# номера получателя) — см. DECISIONS_LOG.md, аналогично Telegram-каналу.
+# Используется, чтобы исключить эти тексты из хендлеров, привязанных к
+# состоянию FSM (иначе перехватывают текст кнопки как невалидный ввод
+# количества/телефона).
+_MAIN_MENU_TEXTS = frozenset(text for row in _MAIN_KEYBOARD_BUTTONS for text in row)
+
 _channel: VkChannel | None = None  # устанавливается через set_channel() в main.py
 
 
@@ -105,6 +113,12 @@ def _is_help(message: Message) -> bool:
 
 def _is_receipt_upload(message: Message) -> bool:
     return any(a.photo is not None or a.doc is not None for a in (message.attachments or []))
+
+
+def _is_not_main_menu_text(message: Message) -> bool:
+    """Отсекает нажатия кнопок главного меню от FSM-хендлеров, привязанных к
+    состоянию покупки, — см. _MAIN_MENU_TEXTS."""
+    return (message.text or "") not in _MAIN_MENU_TEXTS
 
 
 @labeler.message(func=_is_start)
@@ -357,6 +371,9 @@ async def _prompt_giveaway_choice(
 
 @labeler.message(text=_BUY_TEXT)
 async def on_buy(message: Message) -> None:
+    # Глобальная кнопка меню — молча сбрасывает любой незавершённый диалог
+    # (покупку/регистрацию) и начинает выбор постера заново.
+    await _clear_state(message.peer_id)
     db = get_channel_db()
     with db.session() as session:
         giveaways = _open_giveaways(session)
@@ -433,7 +450,7 @@ async def _handle_quantity_selected(
     )
 
 
-@labeler.message(state=PurchaseStates.CHOOSING_QUANTITY)
+@labeler.message(state=PurchaseStates.CHOOSING_QUANTITY, func=_is_not_main_menu_text)
 async def on_quantity_typed(message: Message) -> None:
     text = (message.text or "").strip()
     if not text.isdigit() or int(text) == 0:
@@ -446,7 +463,7 @@ async def on_quantity_typed(message: Message) -> None:
     )
 
 
-@labeler.message(state=PurchaseStates.AWAITING_PHONE_FOR_GIFT)
+@labeler.message(state=PurchaseStates.AWAITING_PHONE_FOR_GIFT, func=_is_not_main_menu_text)
 async def on_phone_entered(message: Message) -> None:
     data = await _get_state_payload(message.peer_id)
     giveaway_id, quantity = data["giveaway_id"], data["quantity"]
@@ -641,6 +658,9 @@ async def _deliver_tickets(peer_id: int, outcome: payment_svc.FinalizeOutcome) -
 
 @labeler.message(text=_MY_TICKETS_TEXT)
 async def on_my_tickets(message: Message) -> None:
+    # Глобальная кнопка меню — доступна и посреди незавершённой покупки, молча
+    # сбрасывая её (см. _MAIN_MENU_TEXTS).
+    await _clear_state(message.peer_id)
     db = get_channel_db()
     with db.session() as session:
         binding = participant_service.get_binding(
@@ -733,6 +753,9 @@ async def _send_pending_payments(
 
 @labeler.message(text=_SUPPORT_CONTACT_TEXT)
 async def on_support_contact(message: Message) -> None:
+    # Глобальная кнопка меню — доступна и посреди незавершённой покупки, молча
+    # сбрасывая её (см. _MAIN_MENU_TEXTS).
+    await _clear_state(message.peer_id)
     channel = _get_channel()
     db = get_channel_db()
     with db.session() as session:
@@ -752,6 +775,9 @@ async def on_support_contact(message: Message) -> None:
 
 @labeler.message(func=_is_help)
 async def on_help(message: Message) -> None:
+    # Глобальная кнопка меню — доступна и посреди незавершённой покупки, молча
+    # сбрасывая её (см. _MAIN_MENU_TEXTS).
+    await _clear_state(message.peer_id)
     db = get_channel_db()
     with db.session() as session:
         platform_settings = settings_service.get_or_create_settings(session)

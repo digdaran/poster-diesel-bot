@@ -203,6 +203,15 @@ class _FakeChannel:
         self.send_ticket_codes = AsyncMock()
 
 
+class _FakeState:
+    """Заглушка aiogram FSMContext — проверяем только вызов `clear()`, которым
+    хендлеры главного меню молча сбрасывают незавершённый диалог покупки/
+    регистрации (см. DECISIONS_LOG.md)."""
+
+    def __init__(self) -> None:
+        self.clear = AsyncMock()
+
+
 async def test_on_my_tickets_lists_pending_payments_with_button_only_for_missing_receipt(
     db: Database, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -242,8 +251,10 @@ async def test_on_my_tickets_lists_pending_payments_with_button_only_for_missing
         session.add(PaymentReceipt(payment_id=with_receipt, file_path="/tmp/r.jpg"))
 
     message = _FakeMessage(uid=301)
-    await handlers_module.on_my_tickets(message)  # type: ignore[arg-type]
+    state = _FakeState()
+    await handlers_module.on_my_tickets(message, state)  # type: ignore[arg-type]
 
+    state.clear.assert_awaited_once()
     message.answer.assert_awaited_once()
     text, kwargs = message.answer.await_args.args, message.answer.await_args.kwargs
     assert "Неоплаченные счета" in text[0]
