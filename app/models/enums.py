@@ -37,12 +37,22 @@ class PaymentStatus(str, enum.Enum):
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
+    # Уже ОПЛАЧЕННЫЙ (SUCCEEDED) платёж аннулирован супер-админом постфактум
+    # (см. DECISIONS.md, DECISIONS_LOG.md №69) — не путать с CANCELLED
+    # (отмена ДО оплаты, денег не было). Возврат денег — вручную вне системы;
+    # номерки при переходе в этот статус возвращаются в пул (issued -> free).
+    # Отчёты по выручке (report_service) фильтруют строго по SUCCEEDED/
+    # CONFIRMED, поэтому REFUNDED автоматически выпадает из выручки.
+    REFUNDED = "REFUNDED"
 
 
 class ManualRegistrationStatus(str, enum.Enum):
     PENDING = "PENDING"
     CONFIRMED = "CONFIRMED"
     CANCELLED = "CANCELLED"
+    # См. PaymentStatus.REFUNDED — тот же смысл для офлайн-регистрации:
+    # уже подтверждённая (CONFIRMED) регистрация аннулирована постфактум.
+    REFUNDED = "REFUNDED"
 
 
 class ManualRegistrationPaymentMethod(str, enum.Enum):

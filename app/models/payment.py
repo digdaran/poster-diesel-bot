@@ -14,6 +14,7 @@ from app.models.enums import ChannelType, PaymentProviderType, PaymentStatus
 
 if TYPE_CHECKING:
     from app.models.giveaway import Giveaway
+    from app.models.panel_user import PanelUser
     from app.models.participant import Participant
     from app.models.payment_receipt import PaymentReceipt
     from app.models.ticket import Ticket
@@ -110,6 +111,16 @@ class Payment(Base):
     amount_mismatch: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     amount_mismatch_bank_amount: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
+    # Аннулирование уже ОПЛАЧЕННОЙ покупки супер-админом (см. DECISIONS.md,
+    # DECISIONS_LOG.md №69) — не путать с cancelled_at (отмена ДО оплаты).
+    # Возврат денег участнику происходит вручную вне системы; заполняются
+    # только при переходе SUCCEEDED -> REFUNDED (payment_service.refund_payment).
+    refunded_at: Mapped[dt.datetime | None] = mapped_column(nullable=True)
+    refund_reason: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    refunded_by_panel_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("panel_users.id"), nullable=True
+    )
+
     participant: Mapped[Participant] = relationship(back_populates="payments")
     giveaway: Mapped[Giveaway] = relationship(back_populates="payments")
     pool_rows: Mapped[list[TicketPool]] = relationship(back_populates="payment")
@@ -117,3 +128,4 @@ class Payment(Base):
     receipts: Mapped[list[PaymentReceipt]] = relationship(
         back_populates="payment", cascade="all, delete-orphan"
     )
+    refunded_by: Mapped[PanelUser | None] = relationship(foreign_keys=[refunded_by_panel_user_id])

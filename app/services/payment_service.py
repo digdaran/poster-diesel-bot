@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import datetime as dt
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import structlog
 from sqlalchemy import select, update
@@ -574,6 +574,94 @@ def cancel_payment(
     return CancelOutcome(
         applied=True, payment_id=payment_id, current_status=PaymentStatus.CANCELLED
     )
+
+
+@dataclass(frozen=True)
+class RefundOutcome:
+    applied: bool
+    """False — платёж на момент вызова уже не был SUCCEEDED (гонка/повторное
+    нажатие/платёж и так уже REFUNDED) — аннулирование не состоялось."""
+    payment_id: int | None = None
+    current_status: PaymentStatus | None = None
+    """Актуальный статус на момент вызова — заполняется всегда."""
+    participant_id: int | None = None
+    giveaway_id: int | None = None
+    giveaway_name: str | None = None
+    quantity: int = 0
+    amount: int | None = None
+    invoice_no: str | None = None
+    released_codes: list[str] = field(default_factory=list)
+    """Коды номерков, возвращённых в пул — для уведомления участника/аудит-лога."""
+
+
+def refund_payment(
+    db: Database,
+    *,
+    payment_id: int,
+    reason: str,
+    panel_user_id: int,
+    now: dt.datetime | None = None,
+) -> RefundOutcome:
+    """Аннулирует уже ОПЛАЧЕННЫЙ (`SUCCEEDED`) платёж по решению Super Admin
+    (см. DECISIONS.md, DECISIONS_LOG.md №69) — не путать с `cancel_payment`
+    (тот отменяет ещё НЕ оплаченный `PENDING`-счёт). Возврат денег участнику
+    происходит вручную вне системы: здесь только перевод статуса в `REFUNDED`
+    и возврат выданных номерков в оборот (issued -> free), включая удаление
+    самих строк `Ticket` — без этого повторная выдача того же номера позже была
+    бы невозможна из-за уникальности `Ticket.pool_id`/`(giveaway_id, number)`.
+    """
+    now = now or utcnow()
+    with db.immediate_session() as session:
+        result = session.execute(
+            update(Payment)
+            .where(Payment.id == payment_id, Payment.status == PaymentStatus.SUCCEEDED)
+            .values(
+                status=PaymentStatus.REFUNDED,
+                refunded_at=now,
+                refund_reason=reason,
+                refunded_by_panel_user_id=panel_user_id,
+            )
+        )
+        if result.rowcount == 0:  # type: ignore[attr-defined]
+            payment = session.get(Payment, payment_id)
+            return RefundOutcome(
+                applied=False,
+                payment_id=payment_id,
+                current_status=payment.status if payment is not None else None,
+            )
+
+        payment = session.execute(select(Payment).where(Payment.id == payment_id)).scalar_one()
+        giveaway = session.execute(
+            select(Giveaway).where(Giveaway.id == payment.giveaway_id)
+        ).scalar_one()
+
+        tickets = list(
+            session.execute(select(Ticket).where(Ticket.payment_id == payment_id)).scalars()
+        )
+        released_codes = [t.full_code for t in tickets]
+        for ticket in tickets:
+            session.delete(ticket)
+        session.flush()
+
+        repo.release_issued_tickets(session, payment_id=payment_id)
+
+        invoice_no = (
+            giveaway.format_invoice_number(payment.payment_number)
+            if payment.payment_number is not None
+            else None
+        )
+        return RefundOutcome(
+            applied=True,
+            payment_id=payment_id,
+            current_status=PaymentStatus.REFUNDED,
+            participant_id=payment.participant_id,
+            giveaway_id=payment.giveaway_id,
+            giveaway_name=giveaway.name,
+            quantity=payment.quantity,
+            amount=payment.amount,
+            invoice_no=invoice_no,
+            released_codes=released_codes,
+        )
 
 
 @dataclass(frozen=True)

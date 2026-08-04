@@ -50,6 +50,10 @@ class Permission(str, Enum):
     # Только Super Admin
     PANEL_USERS_MANAGE = "panel_users_manage"
     IGNORE_PHONE_VERIFICATION_TOGGLE = "ignore_phone_verification_toggle"
+    # Аннулирование уже завершённой (оплаченной/подтверждённой) покупки —
+    # см. DECISIONS.md, DECISIONS_LOG.md №69. Возврат денег происходит вручную
+    # вне системы, поэтому право ограничено Super Admin.
+    PURCHASE_REFUND = "purchase_refund"
 
 
 _VIEW_ALL = {
@@ -82,6 +86,7 @@ _ADMINISTRATOR_EXTRA = {
 _SUPER_ADMIN_EXTRA = {
     Permission.PANEL_USERS_MANAGE,
     Permission.IGNORE_PHONE_VERIFICATION_TOGGLE,
+    Permission.PURCHASE_REFUND,
 }
 
 ROLE_PERMISSIONS: dict[PanelRole, frozenset[Permission]] = {

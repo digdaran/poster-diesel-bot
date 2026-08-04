@@ -50,7 +50,7 @@ export interface ManualRegistration {
   giveaway_name: string;
   quantity: number;
   revenue: number;
-  status: "PENDING" | "CONFIRMED" | "CANCELLED";
+  status: "PENDING" | "CONFIRMED" | "CANCELLED" | "REFUNDED";
   operator_id: number;
   operator_login: string;
   comment: string | null;
@@ -59,6 +59,9 @@ export interface ManualRegistration {
   created_at: string;
   confirmed_at: string | null;
   cancelled_at: string | null;
+  refunded_at: string | null;
+  refund_reason: string | null;
+  refunded_by_login: string | null;
 }
 
 export interface Payment {
@@ -73,7 +76,7 @@ export interface Payment {
   channel: string | null;
   amount: number;
   quantity: number;
-  status: "PENDING" | "SUCCEEDED" | "FAILED";
+  status: "PENDING" | "SUCCEEDED" | "FAILED" | "REFUNDED";
   created_at: string;
   confirmed_at: string | null;
   invoice_no: string | null;
@@ -81,6 +84,9 @@ export interface Payment {
   amount_mismatch: boolean;
   amount_mismatch_bank_amount: number | null;
   receipt_count: number;
+  refunded_at: string | null;
+  refund_reason: string | null;
+  refunded_by_login: string | null;
 }
 
 export interface PaymentReceipt {

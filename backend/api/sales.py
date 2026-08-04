@@ -6,22 +6,33 @@ import datetime as dt
 import mimetypes
 from typing import Any
 
+from app.core.db import Database
 from app.core.permissions import Permission
-from app.models.enums import ChannelType, PaymentProviderType, PaymentStatus
+from app.models.enums import AuditActorType, ChannelType, PaymentProviderType, PaymentStatus
 from app.models.giveaway import Giveaway
 from app.models.panel_user import PanelUser
 from app.models.participant import Participant
 from app.models.payment import Payment
 from app.models.payment_receipt import PaymentReceipt
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from app.services import audit_service, notification_service
+from app.services import payment_service as svc
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, contains_eager, joinedload
 
-from backend.api.deps import get_session, require_permission
+from backend.api.deps import (
+    get_database,
+    get_session,
+    get_telegram_channel,
+    get_vk_channel,
+    require_permission,
+)
 from backend.api.export_utils import ExportFormat, maybe_export
 from backend.api.pagination import count_total, page_bounds, validate_page_size
-from backend.api.schemas import PaymentOut, PaymentReceiptOut
+from backend.api.schemas import PaymentOut, PaymentReceiptOut, RefundRequest
+from channels.telegram.channel import TelegramChannel
+from channels.vk.channel import VkChannel
 
 router = APIRouter(prefix="/payments", tags=["sales"])
 
@@ -50,6 +61,9 @@ def _to_dict(p: Payment) -> dict[str, Any]:
         amount_mismatch=p.amount_mismatch,
         amount_mismatch_bank_amount=p.amount_mismatch_bank_amount,
         receipt_count=len(p.receipts),
+        refunded_at=p.refunded_at,
+        refund_reason=p.refund_reason,
+        refunded_by_login=p.refunded_by.login if p.refunded_by else None,
     ).model_dump(mode="json")
 
 
@@ -117,7 +131,12 @@ def list_payments(
     )
     giveaway_load = contains_eager(Payment.giveaway) if invoice_no else joinedload(Payment.giveaway)
 
-    eager_options = (participant_load, giveaway_load, joinedload(Payment.receipts))
+    eager_options = (
+        participant_load,
+        giveaway_load,
+        joinedload(Payment.receipts),
+        joinedload(Payment.refunded_by),
+    )
 
     if export is not None:
         eager_stmt = stmt.options(*eager_options).order_by(Payment.id.desc())
@@ -136,6 +155,80 @@ def list_payments(
         "page": page,
         "page_size": page_size,
     }
+
+
+@router.post("/{payment_id}/refund", response_model=None)
+async def refund_payment(
+    payment_id: int,
+    payload: RefundRequest,
+    request: Request,
+    db: Database = Depends(get_database),
+    user: PanelUser = Depends(require_permission(Permission.PURCHASE_REFUND)),
+    telegram_channel: TelegramChannel | None = Depends(get_telegram_channel),
+    vk_channel: VkChannel | None = Depends(get_vk_channel),
+) -> dict[str, Any]:
+    """Аннулирует уже оплаченный (`SUCCEEDED`) платёж — см. DECISIONS.md,
+    DECISIONS_LOG.md №69. Доступно только Super Admin (`PURCHASE_REFUND`).
+    Возврат денег происходит вручную вне системы — сюда не входит."""
+    outcome = svc.refund_payment(
+        db, payment_id=payment_id, reason=payload.reason, panel_user_id=user.id
+    )
+    if not outcome.applied:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Платёж {payment_id} в статусе "
+            f"{outcome.current_status.value if outcome.current_status else 'не найден'} — "
+            "аннулировать можно только оплаченный (SUCCEEDED) платёж",
+        )
+
+    with db.session() as session:
+        audit_service.log(
+            session,
+            action="payment_refund",
+            actor_type=AuditActorType.PANEL_USER,
+            actor_id=user.id,
+            actor_label=user.login,
+            entity_type="payment",
+            entity_id=payment_id,
+            details={
+                "reason": payload.reason,
+                "released_codes": outcome.released_codes,
+                "quantity": outcome.quantity,
+                "amount": outcome.amount,
+            },
+            ip_address=request.client.host if request.client else None,
+        )
+        payment = (
+            session.execute(
+                select(Payment)
+                .where(Payment.id == payment_id)
+                .options(
+                    joinedload(Payment.participant),
+                    joinedload(Payment.giveaway),
+                    joinedload(Payment.receipts),
+                    joinedload(Payment.refunded_by),
+                )
+            )
+            .unique()
+            .scalar_one()
+        )
+        out = _to_dict(payment)
+
+    if outcome.participant_id is not None and (
+        telegram_channel is not None or vk_channel is not None
+    ):
+        await notification_service.notify_purchase_refunded(
+            db,
+            participant_id=outcome.participant_id,
+            giveaway_name=outcome.giveaway_name or "",
+            quantity=outcome.quantity,
+            amount=outcome.amount,
+            invoice_no=outcome.invoice_no,
+            released_codes=outcome.released_codes,
+            telegram_channel=telegram_channel,
+            vk_channel=vk_channel,
+        )
+    return out
 
 
 @router.get("/{payment_id}/receipts", response_model=list[PaymentReceiptOut])

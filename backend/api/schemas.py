@@ -119,6 +119,11 @@ class ManualRegistrationOut(BaseModel):
     created_at: dt.datetime
     confirmed_at: dt.datetime | None
     cancelled_at: dt.datetime | None
+    refunded_at: dt.datetime | None
+    refund_reason: str | None
+    refunded_by_login: str | None
+    """Логин Super Admin, аннулировавшего уже подтверждённую регистрацию —
+    см. DECISIONS_LOG.md №69."""
 
     model_config = {"from_attributes": True}
 
@@ -159,8 +164,27 @@ class PaymentOut(BaseModel):
     amount_mismatch: bool
     amount_mismatch_bank_amount: int | None
     receipt_count: int
+    refunded_at: dt.datetime | None
+    refund_reason: str | None
+    refunded_by_login: str | None
+    """Логин Super Admin, аннулировавшего уже оплаченный платёж — см. DECISIONS_LOG.md №69."""
 
     model_config = {"from_attributes": True}
+
+
+class RefundRequest(BaseModel):
+    """Причина аннулирования уже завершённой покупки — обязательна, попадает в
+    AuditLog и хранится на самой покупке (см. DECISIONS_LOG.md №69)."""
+
+    reason: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("reason")
+    @classmethod
+    def _strip_reason(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("Причина аннулирования не может быть пустой")
+        return stripped
 
 
 class PaymentReceiptOut(BaseModel):

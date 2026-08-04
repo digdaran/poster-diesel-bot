@@ -35,7 +35,11 @@ from backend.api.deps import (
 )
 from backend.api.export_utils import ExportFormat, maybe_export
 from backend.api.pagination import count_total, page_bounds, validate_page_size
-from backend.api.schemas import ManualRegistrationCreateRequest, ManualRegistrationOut
+from backend.api.schemas import (
+    ManualRegistrationCreateRequest,
+    ManualRegistrationOut,
+    RefundRequest,
+)
 from channels.telegram.channel import TelegramChannel
 from channels.vk.channel import VkChannel
 
@@ -113,7 +117,12 @@ def list_manual_registrations(
         if operator_query
         else joinedload(ManualRegistration.operator)
     )
-    eager_options = (participant_load, giveaway_load, operator_load)
+    eager_options = (
+        participant_load,
+        giveaway_load,
+        operator_load,
+        joinedload(ManualRegistration.refunded_by),
+    )
 
     if export is not None:
         eager_stmt = stmt.options(*eager_options).order_by(ManualRegistration.id.desc())
@@ -166,6 +175,9 @@ def _to_out(session: Session, registration: ManualRegistration) -> ManualRegistr
         created_at=registration.created_at,
         confirmed_at=registration.confirmed_at,
         cancelled_at=registration.cancelled_at,
+        refunded_at=registration.refunded_at,
+        refund_reason=registration.refund_reason,
+        refunded_by_login=registration.refunded_by.login if registration.refunded_by else None,
     )
 
 
@@ -394,3 +406,65 @@ def cancel_manual_registration(
             ip_address=request.client.host if request.client else None,
         )
         return _to_out(session, registration)
+
+
+@router.post("/{registration_id}/refund", response_model=ManualRegistrationOut)
+async def refund_manual_registration(
+    registration_id: int,
+    payload: RefundRequest,
+    request: Request,
+    db: Database = Depends(get_database),
+    user: PanelUser = Depends(require_permission(Permission.PURCHASE_REFUND)),
+    telegram_channel: TelegramChannel | None = Depends(get_telegram_channel),
+    vk_channel: VkChannel | None = Depends(get_vk_channel),
+) -> ManualRegistrationOut:
+    """Аннулирует уже подтверждённую (`CONFIRMED`) офлайн-регистрацию — см.
+    DECISIONS.md, DECISIONS_LOG.md №69. Доступно только Super Admin
+    (`PURCHASE_REFUND`). Возврат денег — вручную вне системы, сюда не входит."""
+    try:
+        outcome = svc.refund_manual_registration(
+            db, manual_registration_id=registration_id, reason=payload.reason, panel_user_id=user.id
+        )
+    except svc.ManualRegistrationStateError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    with db.session() as session:
+        registration = session.get(ManualRegistration, registration_id)
+        assert registration is not None
+        audit_service.log(
+            session,
+            action="manual_registration_refund",
+            actor_type=AuditActorType.PANEL_USER,
+            actor_id=user.id,
+            actor_label=user.login,
+            entity_type="manual_registration",
+            entity_id=registration_id,
+            details={
+                "reason": payload.reason,
+                "released_codes": outcome.released_codes,
+                "quantity": outcome.quantity,
+            },
+            ip_address=request.client.host if request.client else None,
+        )
+        out = _to_out(session, registration)
+        giveaway_name = registration.giveaway.name
+        amount = registration.quantity * registration.giveaway.ticket_price
+        invoice_no = (
+            registration.giveaway.format_invoice_number(registration.payment_number)
+            if registration.payment_number is not None
+            else None
+        )
+
+    if telegram_channel is not None or vk_channel is not None:
+        await notification_service.notify_purchase_refunded(
+            db,
+            participant_id=outcome.participant_id,
+            giveaway_name=giveaway_name,
+            quantity=outcome.quantity,
+            amount=amount,
+            invoice_no=invoice_no,
+            released_codes=outcome.released_codes,
+            telegram_channel=telegram_channel,
+            vk_channel=vk_channel,
+        )
+    return out

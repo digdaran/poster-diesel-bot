@@ -72,8 +72,22 @@ class ManualRegistration(Base):
     qr_code_payload: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     qr_generated_at: Mapped[dt.datetime | None] = mapped_column(nullable=True)
 
+    # Аннулирование уже ПОДТВЕРЖДЁННОЙ (CONFIRMED) регистрации супер-админом
+    # (см. DECISIONS.md, DECISIONS_LOG.md №69) — не путать с cancelled_at
+    # (отмена ДО подтверждения). Возврат денег — вручную вне системы;
+    # заполняются только при переходе CONFIRMED -> REFUNDED
+    # (manual_registration_service.refund_manual_registration).
+    refunded_at: Mapped[dt.datetime | None] = mapped_column(nullable=True)
+    refund_reason: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    refunded_by_panel_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("panel_users.id"), nullable=True
+    )
+
     participant: Mapped[Participant] = relationship(back_populates="manual_registrations")
     giveaway: Mapped[Giveaway] = relationship(back_populates="manual_registrations")
-    operator: Mapped[PanelUser] = relationship(back_populates="manual_registrations")
+    operator: Mapped[PanelUser] = relationship(
+        back_populates="manual_registrations", foreign_keys=[operator_id]
+    )
+    refunded_by: Mapped[PanelUser | None] = relationship(foreign_keys=[refunded_by_panel_user_id])
     pool_rows: Mapped[list[TicketPool]] = relationship(back_populates="manual_registration")
     tickets: Mapped[list[Ticket]] = relationship(back_populates="manual_registration")

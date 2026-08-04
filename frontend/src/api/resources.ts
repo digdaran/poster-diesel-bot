@@ -133,6 +133,11 @@ export const ManualRegistrationsApi = {
     apiRequest<ManualRegistration>(`/api/manual-registrations/${id}/switch-to-cash`, {
       method: "POST",
     }),
+  refund: (id: number, reason: string) =>
+    apiRequest<ManualRegistration>(`/api/manual-registrations/${id}/refund`, {
+      method: "POST",
+      body: { reason },
+    }),
 };
 
 export interface SalesFilter extends PageParams {
@@ -157,6 +162,8 @@ export const SalesApi = {
     apiRequest<PaymentReceipt[]>(`/api/payments/${paymentId}/receipts`),
   downloadReceipt: (paymentId: number, receiptId: number) =>
     apiDownload(`/api/payments/${paymentId}/receipts/${receiptId}/file`),
+  refund: (id: number, reason: string) =>
+    apiRequest<Payment>(`/api/payments/${id}/refund`, { method: "POST", body: { reason } }),
 };
 
 export interface TicketsFilter extends PageParams {

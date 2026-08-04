@@ -29,4 +29,9 @@ class PanelUser(Base):
     last_login_at: Mapped[dt.datetime | None] = mapped_column(nullable=True)
     created_at: Mapped[dt.datetime] = created_at_column()
 
-    manual_registrations: Mapped[list[ManualRegistration]] = relationship(back_populates="operator")
+    # Явный foreign_keys обязателен с тех пор, как у ManualRegistration появилась
+    # вторая FK на panel_users (refunded_by_panel_user_id, см. DECISIONS_LOG.md
+    # №69) — иначе SQLAlchemy не может однозначно выбрать колонку join'а.
+    manual_registrations: Mapped[list[ManualRegistration]] = relationship(
+        back_populates="operator", foreign_keys="ManualRegistration.operator_id"
+    )

@@ -10,21 +10,27 @@ import { BankReconciliationStatusPanel } from "../components/BankReconciliationS
 import { ChannelBadges } from "../components/ChannelBadges";
 import { EmptyStateRow } from "../components/EmptyState";
 import { ReceiptViewerModal } from "../components/ReceiptViewerModal";
+import { RefundDialog } from "../components/RefundDialog";
+import { useToast } from "../components/Toast";
 import { formatMoney, formatDateTime } from "../utils/format";
 import type { Giveaway, Payment } from "../api/types";
 
-const STATUS_TONE: Record<string, "success" | "danger" | "muted"> = {
+const STATUS_TONE: Record<string, "success" | "danger" | "info" | "muted"> = {
   SUCCEEDED: "success",
   FAILED: "danger",
   PENDING: "muted",
+  REFUNDED: "info",
 };
 
 export function SalesPage() {
   const { hasPermission } = useAuth();
+  const { showToast } = useToast();
   const [payments, setPayments] = useState<Payment[]>([]);
   const [total, setTotal] = useState(0);
   const [giveaways, setGiveaways] = useState<Giveaway[]>([]);
   const { page, pageSize, setPage, setPageSize } = usePagination();
+  const [refundTarget, setRefundTarget] = useState<Payment | null>(null);
+  const [refundPending, setRefundPending] = useState(false);
 
   const [giveawayId, setGiveawayId] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -47,7 +53,7 @@ export function SalesPage() {
     void GiveawaysApi.list().then(setGiveaways);
   }, []);
 
-  useEffect(() => {
+  const load = () =>
     void SalesApi.list({
       page,
       page_size: pageSize,
@@ -66,7 +72,7 @@ export function SalesPage() {
       setPayments(result.items);
       setTotal(result.total);
     });
-  }, [
+  useEffect(load, [
     page,
     pageSize,
     giveawayId,
@@ -103,6 +109,21 @@ export function SalesPage() {
     a.download = filename;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  const onRefund = (reason: string) => {
+    if (!refundTarget) return;
+    setRefundPending(true);
+    SalesApi.refund(refundTarget.id, reason)
+      .then(() => {
+        showToast("Покупка аннулирована, номера возвращены в оборот");
+        setRefundTarget(null);
+        load();
+      })
+      .catch((err) => {
+        showToast(err instanceof Error ? err.message : "Не удалось аннулировать покупку", "error");
+      })
+      .finally(() => setRefundPending(false));
   };
 
   return (
@@ -185,6 +206,7 @@ export function SalesPage() {
           <option value="PENDING">PENDING</option>
           <option value="SUCCEEDED">SUCCEEDED</option>
           <option value="FAILED">FAILED</option>
+          <option value="REFUNDED">REFUNDED</option>
         </select>
         <label>
           Создан с{" "}
@@ -254,10 +276,13 @@ export function SalesPage() {
               <th>Квитанция</th>
               <th>Создан</th>
               <th>Подтверждён</th>
+              {hasPermission("purchase_refund") && <th>Действия</th>}
             </tr>
           </thead>
           <tbody>
-            {payments.length === 0 && <EmptyStateRow colSpan={12} />}
+            {payments.length === 0 && (
+              <EmptyStateRow colSpan={hasPermission("purchase_refund") ? 13 : 12} />
+            )}
             {payments.map((p) => (
               <tr key={p.id} className={p.amount_mismatch ? "row-amount-mismatch" : undefined}>
                 <td>{p.order_id}</td>
@@ -294,6 +319,12 @@ export function SalesPage() {
                       <Badge tone="danger">нет номерков</Badge>
                     </>
                   )}
+                  {p.status === "REFUNDED" && p.refunded_at && (
+                    <div className="muted-text" title={p.refund_reason ?? undefined}>
+                      {formatDateTime(p.refunded_at)}
+                      {p.refunded_by_login ? ` · ${p.refunded_by_login}` : ""}
+                    </div>
+                  )}
                 </td>
                 <td>
                   {p.receipt_count > 0 ? (
@@ -306,6 +337,15 @@ export function SalesPage() {
                 </td>
                 <td>{formatDateTime(p.created_at)}</td>
                 <td>{p.confirmed_at ? formatDateTime(p.confirmed_at) : "—"}</td>
+                {hasPermission("purchase_refund") && (
+                  <td className="actions">
+                    {p.status === "SUCCEEDED" && (
+                      <button className="button-danger" onClick={() => setRefundTarget(p)}>
+                        Аннулировать
+                      </button>
+                    )}
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
@@ -323,6 +363,19 @@ export function SalesPage() {
         <ReceiptViewerModal
           paymentId={receiptPaymentId}
           onClose={() => setReceiptPaymentId(null)}
+        />
+      )}
+      {refundTarget && (
+        <RefundDialog
+          message={
+            `Аннулировать оплаченную покупку ${refundTarget.invoice_no ?? refundTarget.order_id} ` +
+            `(${refundTarget.participant_full_name ?? refundTarget.participant_phone}, ` +
+            `${refundTarget.quantity} шт. на ${formatMoney(refundTarget.amount)})? ` +
+            "Номера вернутся в оборот, деньги нужно будет вернуть вручную."
+          }
+          pending={refundPending}
+          onConfirm={onRefund}
+          onClose={() => setRefundTarget(null)}
         />
       )}
     </div>

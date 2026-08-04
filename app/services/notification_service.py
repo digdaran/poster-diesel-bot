@@ -258,6 +258,80 @@ async def notify_late_success_no_tickets(
             )
 
 
+def _refund_text(
+    *,
+    giveaway_name: str,
+    quantity: int,
+    amount: int | None,
+    invoice_no: str | None,
+    released_codes: list[str],
+) -> str:
+    """Уведомление об аннулировании уже завершённой покупки супер-админом (см.
+    payment_service.refund_payment/manual_registration_service.refund_manual_registration,
+    DECISIONS_LOG.md №69). Явно называет покупку и говорит, что возврат денег —
+    вручную, а не автоматически, чтобы участник не ждал зачисления сам по
+    себе."""
+    invoice_line = f" (счёт №{invoice_no})" if invoice_no else ""
+    amount_line = f" на {amount / 100:.2f} ₽" if amount is not None else ""
+    codes_line = ", ".join(released_codes) if released_codes else ""
+    codes_block = f"\n\nНомера, которые были у вас: {codes_line}." if codes_line else ""
+    return (
+        f"Ваша покупка «{giveaway_name}»{invoice_line}{amount_line} ({quantity} шт.) "
+        "аннулирована администратором, номера возвращены в оборот и могут быть куплены "
+        "другим участником.\n\n"
+        "Возврат денежных средств будет произведён вручную — если у вас есть вопросы, "
+        "пожалуйста, обратитесь в поддержку." + codes_block
+    )
+
+
+async def notify_purchase_refunded(
+    db: Database,
+    *,
+    participant_id: int,
+    giveaway_name: str,
+    quantity: int,
+    amount: int | None,
+    invoice_no: str | None,
+    released_codes: list[str],
+    telegram_channel: NotifiableChannel | None,
+    vk_channel: NotifiableChannel | None,
+) -> None:
+    """Уведомляет участника об аннулировании супер-админом уже завершённой
+    покупки (см. `payment_service.refund_payment`/
+    `manual_registration_service.refund_manual_registration`, DECISIONS_LOG.md
+    №69). Уходит во ВСЕ каналы с подходящей привязкой одновременно, как и
+    `notify_manual_registration_confirmed` (см. `_resolve_notify_targets`) —
+    без fallback на инициирующий чат: аннулирование, как и подтверждение
+    ручной регистрации, инициирует оператор/супер-админ в панели, а не
+    участник в боте, так что "чата-инициатора" здесь нет. Если у участника нет
+    ни одной привязки каналов — тихо ничего не делает."""
+    targets = _resolve_notify_targets(db, participant_id)
+    if not targets:
+        return
+    text = _refund_text(
+        giveaway_name=giveaway_name,
+        quantity=quantity,
+        amount=amount,
+        invoice_no=invoice_no,
+        released_codes=released_codes,
+    )
+
+    for channel_type, external_user_id in targets:
+        channel = _channel_for(
+            channel_type, telegram_channel=telegram_channel, vk_channel=vk_channel
+        )
+        if channel is None:
+            continue
+        try:
+            await channel.send_message(external_user_id, text)
+        except Exception:
+            logger.exception(
+                "notify_purchase_refunded_channel_failed",
+                channel=channel_type.value,
+                participant_id=participant_id,
+            )
+
+
 async def notify_manual_registration_confirmed(
     db: Database,
     *,

@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import datetime as dt
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from sqlalchemy import select, update
 
@@ -416,3 +416,85 @@ def cancel_manual_registration(
                 "отмена возможна только до подтверждения (PENDING)"
             )
         repo.release_reservation(session, manual_registration_id=manual_registration_id)
+
+
+@dataclass(frozen=True)
+class RefundOutcome:
+    manual_registration_id: int
+    participant_id: int
+    giveaway_id: int
+    quantity: int
+    released_codes: list[str] = field(default_factory=list)
+    """Коды номерков, возвращённых в пул — для уведомления участника/аудит-лога."""
+
+
+def refund_manual_registration(
+    db: Database,
+    *,
+    manual_registration_id: int,
+    reason: str,
+    panel_user_id: int,
+    now: dt.datetime | None = None,
+) -> RefundOutcome:
+    """Аннулирует уже ПОДТВЕРЖДЁННУЮ (`CONFIRMED`) офлайн-регистрацию по решению
+    Super Admin (см. DECISIONS.md, DECISIONS_LOG.md №69) — не путать с
+    `cancel_manual_registration` (та отменяет ещё не подтверждённую `PENDING`).
+    Возврат денег покупателю — вручную вне системы; здесь только перевод
+    статуса в `REFUNDED` и возврат выданных номерков в оборот (issued -> free),
+    включая удаление строк `Ticket` (см. `payment_service.refund_payment` —
+    та же причина: уникальность `Ticket.pool_id`/`(giveaway_id, number)`).
+
+    Повторная попытка аннулировать уже не-CONFIRMED регистрацию ПОДНИМАЕТ
+    `ManualRegistrationStateError`, как и `confirm_manual_registration`/
+    `cancel_manual_registration` — та же намеренная асимметрия с
+    `payment_service` (см. ARCHITECTURE.md §4), не баг.
+    """
+    now = now or utcnow()
+    with db.immediate_session() as session:
+        result = session.execute(
+            update(ManualRegistration)
+            .where(
+                ManualRegistration.id == manual_registration_id,
+                ManualRegistration.status == ManualRegistrationStatus.CONFIRMED,
+            )
+            .values(
+                status=ManualRegistrationStatus.REFUNDED,
+                refunded_at=now,
+                refund_reason=reason,
+                refunded_by_panel_user_id=panel_user_id,
+            )
+        )
+        if result.rowcount == 0:  # type: ignore[attr-defined]
+            registration = session.get(ManualRegistration, manual_registration_id)
+            if registration is None:
+                raise ManualRegistrationStateError(
+                    f"Регистрация {manual_registration_id} не найдена"
+                )
+            raise ManualRegistrationStateError(
+                f"Регистрация {manual_registration_id} в статусе {registration.status} — "
+                "аннулировать можно только подтверждённую (CONFIRMED) регистрацию"
+            )
+
+        registration = session.execute(
+            select(ManualRegistration).where(ManualRegistration.id == manual_registration_id)
+        ).scalar_one()
+
+        tickets = list(
+            session.execute(
+                select(Ticket).where(Ticket.manual_registration_id == manual_registration_id)
+            ).scalars()
+        )
+        released_codes = [t.full_code for t in tickets]
+        for ticket in tickets:
+            session.delete(ticket)
+        session.flush()
+
+        repo.release_issued_tickets(session, manual_registration_id=manual_registration_id)
+
+        return RefundOutcome(
+            manual_registration_id=manual_registration_id,
+            participant_id=registration.participant_id,
+            giveaway_id=registration.giveaway_id,
+            quantity=registration.quantity,
+            released_codes=released_codes,
+        )

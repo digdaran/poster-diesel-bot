@@ -14,17 +14,19 @@ import { useAsyncAction } from "../hooks/useAsyncAction";
 import { PaginationControls } from "../components/PaginationControls";
 import { useToast } from "../components/Toast";
 import { useConfirm } from "../components/ConfirmDialog";
+import { RefundDialog } from "../components/RefundDialog";
 import { Badge } from "../components/Badge";
 import { ChannelBadges } from "../components/ChannelBadges";
 import { EmptyStateRow } from "../components/EmptyState";
-import { formatMoney } from "../utils/format";
+import { formatMoney, formatDateTime } from "../utils/format";
 import { PAGE_SIZES } from "../api/types";
 import type { Giveaway, ManualRegistration, Ticket } from "../api/types";
 
-const STATUS_TONE: Record<string, "success" | "danger" | "muted"> = {
+const STATUS_TONE: Record<string, "success" | "danger" | "info" | "muted"> = {
   CONFIRMED: "success",
   CANCELLED: "danger",
   PENDING: "muted",
+  REFUNDED: "info",
 };
 
 const PAYMENT_METHOD_LABEL: Record<string, string> = {
@@ -61,6 +63,8 @@ export function ManualRegistrationsPage() {
     registration: ManualRegistration;
     tickets: Ticket[];
   } | null>(null);
+  const [refundTarget, setRefundTarget] = useState<ManualRegistration | null>(null);
+  const [refundPending, setRefundPending] = useState(false);
 
   const [filterGiveawayId, setFilterGiveawayId] = useState("");
   const [participantQuery, setParticipantQuery] = useState("");
@@ -205,6 +209,24 @@ export function ManualRegistrationsPage() {
     );
     if (!confirmed) return;
     void runRowAction(r.id, () => ManualRegistrationsApi.cancel(r.id), "Регистрация отменена");
+  };
+
+  const onRefund = (reason: string) => {
+    if (!refundTarget) return;
+    setRefundPending(true);
+    ManualRegistrationsApi.refund(refundTarget.id, reason)
+      .then(() => {
+        showToast("Регистрация аннулирована, номера возвращены в оборот");
+        setRefundTarget(null);
+        load();
+      })
+      .catch((err) => {
+        showToast(
+          err instanceof Error ? err.message : "Не удалось аннулировать регистрацию",
+          "error",
+        );
+      })
+      .finally(() => setRefundPending(false));
   };
 
   const closeQrModal = () => {
@@ -355,6 +377,7 @@ export function ManualRegistrationsPage() {
           <option value="PENDING">PENDING</option>
           <option value="CONFIRMED">CONFIRMED</option>
           <option value="CANCELLED">CANCELLED</option>
+          <option value="REFUNDED">REFUNDED</option>
         </select>
         {canFilterByOperator && (
           <input
@@ -450,6 +473,12 @@ export function ManualRegistrationsPage() {
                 <td>{r.operator_login}</td>
                 <td>
                   <Badge tone={STATUS_TONE[r.status] ?? "muted"}>{r.status}</Badge>
+                  {r.status === "REFUNDED" && r.refunded_at && (
+                    <div className="muted-text" title={r.refund_reason ?? undefined}>
+                      {formatDateTime(r.refunded_at)}
+                      {r.refunded_by_login ? ` · ${r.refunded_by_login}` : ""}
+                    </div>
+                  )}
                 </td>
                 <td className="actions">
                   {r.status === "PENDING" && (
@@ -484,12 +513,19 @@ export function ManualRegistrationsPage() {
                     </>
                   )}
                   {r.status === "CONFIRMED" && (
-                    <button
-                      disabled={pendingId === r.id}
-                      onClick={() => void showAssignedTickets(r)}
-                    >
-                      Показать номерки
-                    </button>
+                    <>
+                      <button
+                        disabled={pendingId === r.id}
+                        onClick={() => void showAssignedTickets(r)}
+                      >
+                        Показать номерки
+                      </button>
+                      {hasPermission("purchase_refund") && (
+                        <button className="button-danger" onClick={() => setRefundTarget(r)}>
+                          Аннулировать
+                        </button>
+                      )}
+                    </>
                   )}
                 </td>
               </tr>
@@ -542,6 +578,19 @@ export function ManualRegistrationsPage() {
             </div>
           </div>
         </div>
+      )}
+      {refundTarget && (
+        <RefundDialog
+          message={
+            `Аннулировать подтверждённую регистрацию №${refundTarget.id} ` +
+            `(${refundTarget.participant_full_name ?? refundTarget.participant_phone}, ` +
+            `${refundTarget.quantity} шт. на ${formatMoney(refundTarget.revenue)})? ` +
+            "Номера вернутся в оборот, деньги нужно будет вернуть вручную."
+          }
+          pending={refundPending}
+          onConfirm={onRefund}
+          onClose={() => setRefundTarget(null)}
+        />
       )}
     </div>
   );
