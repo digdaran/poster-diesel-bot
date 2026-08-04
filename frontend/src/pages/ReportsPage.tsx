@@ -6,6 +6,7 @@ import { LoadingState, EmptyStateRow } from "../components/EmptyState";
 import { LineChart } from "../components/charts/LineChart";
 import { BarChart, type BarGroupDatum, type BarSeriesSpec } from "../components/charts/BarChart";
 import { DateRangePicker } from "../components/charts/DateRangePicker";
+import { TimelineBrush } from "../components/charts/TimelineBrush";
 import { formatMoney } from "../utils/format";
 import type {
   ChannelSalesRow,
@@ -40,17 +41,36 @@ const REVENUE_SERIES: BarSeriesSpec[] = [
 
 const ONLINE_OFFLINE_CHART_KEYS = ["online", "offline_cash", "offline_cashless"] as const;
 
+// Таймлайн-обзор под графиком продаж всегда рисуется по дням за это окно,
+// независимо от выбранной гранулярности/диапазона основного графика — это
+// просто «карта местности», по которой перетаскиванием выбирается диапазон.
+const BRUSH_WINDOW_DAYS = 180;
+
+type Granularity = "hour" | "day" | "month";
+
 function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
-function defaultDateFrom(): string {
+function daysAgo(days: number): string {
   const d = new Date();
-  d.setDate(d.getDate() - 29);
+  d.setDate(d.getDate() - days);
   return isoDate(d);
 }
 
-function formatPeriodLabel(period: string, granularity: "day" | "month"): string {
+function defaultDateFrom(): string {
+  return daysAgo(29);
+}
+
+function formatPeriodLabel(period: string, granularity: Granularity): string {
+  if (granularity === "hour") {
+    const [datePart, hourPart] = period.split("T");
+    const dateParts = datePart?.split("-") ?? [];
+    if (dateParts.length === 3 && hourPart) {
+      return `${dateParts[2]}.${dateParts[1]} ${hourPart}:00`;
+    }
+    return period;
+  }
   const parts = period.split("-");
   if (granularity === "day" && parts.length === 3) {
     return `${parts[2]}.${parts[1]}`;
@@ -83,9 +103,10 @@ export function ReportsPage() {
 
   const [dateFrom, setDateFrom] = useState(defaultDateFrom());
   const [dateTo, setDateTo] = useState(isoDate(new Date()));
-  const [granularity, setGranularity] = useState<"day" | "month">("day");
+  const [granularity, setGranularity] = useState<Granularity>("day");
   const [metric, setMetric] = useState<"amount" | "count">("amount");
   const [salesByPeriod, setSalesByPeriod] = useState<SalesByPeriodRow[] | null>(null);
+  const [brushOverview, setBrushOverview] = useState<SalesByPeriodRow[] | null>(null);
 
   useEffect(() => {
     void GiveawaysApi.list().then(setGiveaways);
@@ -108,6 +129,15 @@ export function ReportsPage() {
     }).then(setSalesByPeriod);
   }, [giveawayId, granularity, dateFrom, dateTo]);
 
+  useEffect(() => {
+    void ReportsApi.salesByPeriod({
+      granularity: "day",
+      giveaway_id: giveawayId,
+      date_from: daysAgo(BRUSH_WINDOW_DAYS - 1),
+      date_to: isoDate(new Date()),
+    }).then(setBrushOverview);
+  }, [giveawayId]);
+
   const trendData = useMemo(
     () =>
       (salesByPeriod ?? []).map((row) => ({
@@ -115,6 +145,15 @@ export function ReportsPage() {
         y: metric === "amount" ? row.amount : row.count,
       })),
     [salesByPeriod, metric],
+  );
+
+  const brushData = useMemo(
+    () =>
+      (brushOverview ?? []).map((row) => ({
+        x: row.period,
+        y: metric === "amount" ? row.amount : row.count,
+      })),
+    [brushOverview, metric],
   );
 
   const revenueByGiveawayGroups: BarGroupDatum[] = useMemo(
@@ -224,6 +263,13 @@ export function ReportsPage() {
           <div className="segmented" role="group" aria-label="Группировка">
             <button
               type="button"
+              className={granularity === "hour" ? "active" : ""}
+              onClick={() => setGranularity("hour")}
+            >
+              По часам
+            </button>
+            <button
+              type="button"
               className={granularity === "day" ? "active" : ""}
               onClick={() => setGranularity("day")}
             >
@@ -244,9 +290,21 @@ export function ReportsPage() {
               data={trendData}
               formatValue={metric === "amount" ? formatMoney : (v) => String(Math.round(v))}
               formatX={(x) => formatPeriodLabel(x, granularity)}
+              height={180}
             />
           ) : (
             <LoadingState />
+          )}
+          {brushData.length > 0 && (
+            <TimelineBrush
+              data={brushData}
+              from={dateFrom}
+              to={dateTo}
+              onChange={(f, t) => {
+                setDateFrom(f);
+                setDateTo(t);
+              }}
+            />
           )}
         </div>
       </section>
@@ -260,6 +318,7 @@ export function ReportsPage() {
               series={REVENUE_SERIES}
               stacked
               formatValue={formatMoney}
+              height={160}
             />
           ) : (
             <LoadingState />
@@ -324,6 +383,7 @@ export function ReportsPage() {
               stacked={false}
               showLegend={false}
               formatValue={formatMoney}
+              height={160}
             />
           ) : (
             <LoadingState />
@@ -365,6 +425,7 @@ export function ReportsPage() {
               stacked={false}
               showLegend={false}
               formatValue={formatMoney}
+              height={160}
             />
           ) : (
             <LoadingState />

@@ -1047,6 +1047,7 @@ section {
   box-shadow: var(--shadow-card);
   padding: 16px 20px 8px;
   margin-top: 12px;
+  max-width: 640px;
 }
 
 .viz-chart-header {
@@ -1164,6 +1165,14 @@ section {
 .viz-bar-wrapper rect:focus-visible {
   stroke: var(--color-primary);
   stroke-width: 2;
+}
+
+.viz-brush-wrapper {
+  margin-top: 4px;
+}
+
+.viz-brush-svg {
+  cursor: default;
 }
 
 .segmented {

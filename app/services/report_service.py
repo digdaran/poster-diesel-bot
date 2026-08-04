@@ -27,6 +27,8 @@ from app.models.participant import Participant
 from app.models.payment import Payment
 from app.models.ticket import Ticket
 
+_PERIOD_FORMATS = {"hour": "%Y-%m-%dT%H", "day": "%Y-%m-%d", "month": "%Y-%m"}
+
 
 def sales_by_period(
     session: Session,
@@ -36,12 +38,12 @@ def sales_by_period(
     date_from: date | None = None,
     date_to: date | None = None,
 ) -> list[dict[str, Any]]:
-    """Динамика продаж (успешных онлайн-платежей) по дням/месяцам (п.16 ТЗ).
+    """Динамика продаж (успешных онлайн-платежей) по часам/дням/месяцам (п.16 ТЗ).
 
     `date_from`/`date_to` — включительно, фильтруют по той же дате (confirmed_at,
     иначе created_at), что используется для группировки, чтобы график и диапазон
     не расходились."""
-    fmt = "%Y-%m-%d" if granularity == "day" else "%Y-%m"
+    fmt = _PERIOD_FORMATS.get(granularity, _PERIOD_FORMATS["day"])
     stmt = select(Payment).where(Payment.status == PaymentStatus.SUCCEEDED)
     if giveaway_id is not None:
         stmt = stmt.where(Payment.giveaway_id == giveaway_id)

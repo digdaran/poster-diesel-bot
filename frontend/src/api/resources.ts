@@ -250,7 +250,7 @@ export const ReportsApi = {
   salesByChannel: (giveaway_id?: number) =>
     apiRequest<ChannelSalesRow[]>("/api/reports/by-channel", { query: { giveaway_id } }),
   salesByPeriod: (params: {
-    granularity?: "day" | "month";
+    granularity?: "hour" | "day" | "month";
     giveaway_id?: number;
     date_from?: string;
     date_to?: string;

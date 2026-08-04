@@ -151,6 +151,52 @@ def test_sales_by_period_date_range_filter(session: Session) -> None:
     assert len(rows_all) == 3
 
 
+def test_sales_by_period_hour_granularity(session: Session) -> None:
+    g = make_giveaway(session)
+    p = make_participant(session, "79990001113")
+    session.add(
+        Payment(
+            order_id="hour-1",
+            participant_id=p.id,
+            giveaway_id=g.id,
+            provider=PaymentProviderType.MOCK,
+            amount=10000,
+            quantity=1,
+            status=PaymentStatus.SUCCEEDED,
+            confirmed_at=dt.datetime(2026, 3, 15, 9, 20, 0),
+        )
+    )
+    session.add(
+        Payment(
+            order_id="hour-2",
+            participant_id=p.id,
+            giveaway_id=g.id,
+            provider=PaymentProviderType.MOCK,
+            amount=20000,
+            quantity=2,
+            status=PaymentStatus.SUCCEEDED,
+            confirmed_at=dt.datetime(2026, 3, 15, 9, 45, 0),
+        )
+    )
+    session.add(
+        Payment(
+            order_id="hour-3",
+            participant_id=p.id,
+            giveaway_id=g.id,
+            provider=PaymentProviderType.MOCK,
+            amount=5000,
+            quantity=1,
+            status=PaymentStatus.SUCCEEDED,
+            confirmed_at=dt.datetime(2026, 3, 15, 10, 5, 0),
+        )
+    )
+    session.flush()
+
+    rows = {row["period"]: row for row in svc.sales_by_period(session, granularity="hour")}
+    assert rows["2026-03-15T09"] == {"period": "2026-03-15T09", "count": 2, "amount": 30000}
+    assert rows["2026-03-15T10"] == {"period": "2026-03-15T10", "count": 1, "amount": 5000}
+
+
 def test_sales_by_channel(session: Session) -> None:
     g = make_giveaway(session)
     p = make_participant(session, "79990002222")
