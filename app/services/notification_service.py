@@ -202,7 +202,7 @@ async def notify_payment_outcome(
                     external_user_id,
                     poster_path=poster_path,
                     codes=codes,
-                    intro="Оплата прошла успешно! Ваши постеры куплены, номера:",
+                    intro="✅ Оплата прошла успешно! Ваши постеры куплены, номера:",
                 )
             else:
                 await channel.send_message(external_user_id, _failure_text(outcome))
@@ -372,7 +372,7 @@ async def notify_manual_registration_confirmed(
                 external_user_id,
                 poster_path=poster_path,
                 codes=codes,
-                intro="Ваша регистрация подтверждена! Ваши постеры куплены, номера:",
+                intro="✅ Ваша регистрация подтверждена! Ваши постеры куплены, номера:",
             )
         except Exception:
             logger.exception(

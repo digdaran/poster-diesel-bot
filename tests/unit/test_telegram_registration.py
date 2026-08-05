@@ -91,7 +91,7 @@ async def test_on_phone_typed_for_registration_binds_participant_and_asks_name(
         assert participant.phone_verified is False
 
     state.set_state.assert_awaited_once_with(RegistrationStates.awaiting_name)
-    message.answer.assert_awaited_with("Номер принят! Как вас зовут?")
+    message.answer.assert_awaited_with("Номер принят ✅! Как вас зовут? 🙂")
 
 
 async def test_on_phone_typed_for_registration_invalid_phone_stays_on_step(

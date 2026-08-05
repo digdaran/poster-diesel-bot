@@ -119,7 +119,7 @@ class VkChannel(BaseMessengerChannel):
         как того требует контракт `BaseMessengerChannel.request_contact`."""
         await self.send_message(
             external_user_id,
-            "Для продолжения, пожалуйста, напишите свой номер телефона.",
+            "📱 Для продолжения, пожалуйста, напишите свой номер телефона.",
         )
 
     def render_keyboard(self, buttons: list[list[str]]) -> str:

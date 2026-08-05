@@ -143,7 +143,7 @@ async def on_start(message: Message) -> None:
         ).ignore_phone_verification
 
     if participant is None:
-        await message.answer("Добро пожаловать в бот продажи цифровых постеров!")
+        await message.answer("👋 Добро пожаловать в бот продажи цифровых постеров!")
         await channel.request_contact(_uid(message.peer_id))
         if ignore_verification:
             # П.7.1 ТЗ: при включённом флаге ручной ввод номера открывает доступ —
@@ -153,13 +153,13 @@ async def on_start(message: Message) -> None:
         return
 
     if participant.full_name is None:
-        await message.answer("Добро пожаловать в бот продажи цифровых постеров!")
-        await message.answer("Как вас зовут?")
+        await message.answer("👋 Добро пожаловать в бот продажи цифровых постеров!")
+        await message.answer("Как вас зовут? 🙂")
         await _set_state(message.peer_id, RegistrationStates.AWAITING_NAME)
         return
 
     keyboard = channel.render_keyboard(_MAIN_KEYBOARD_BUTTONS)
-    await message.answer("Добро пожаловать в бот продажи цифровых постеров!", keyboard=keyboard)
+    await message.answer("👋 Добро пожаловать в бот продажи цифровых постеров!", keyboard=keyboard)
 
 
 @labeler.message(func=_is_receipt_upload)
@@ -268,7 +268,7 @@ async def on_receipt_upload(message: Message) -> None:
     if selected_payment_id is not None:
         await _clear_state(message.peer_id)
     await message.answer(
-        "Квитанция получена, спасибо! Больше ничего делать не нужно — оплачивать повторно "
+        "📎 Квитанция получена, спасибо! Больше ничего делать не нужно — оплачивать повторно "
         "не надо. Номера придут после зачисления денег на расчётный счёт (как правило, до "
         "30 минут, в редких случаях — до 3 дней). " + _BUY_MORE_HINT
     )
@@ -298,7 +298,7 @@ async def on_phone_typed_for_registration(message: Message) -> None:
                 phone=message.text,
             )
             await message.answer(
-                "Этот аккаунт ВКонтакте уже привязан к другому номеру. Обратитесь к оператору."
+                "⚠️ Этот аккаунт ВКонтакте уже привязан к другому номеру. Обратитесь к оператору."
             )
             return
         has_name = bool(result.participant.full_name)
@@ -308,11 +308,11 @@ async def on_phone_typed_for_registration(message: Message) -> None:
         keyboard = channel.render_keyboard(_MAIN_KEYBOARD_BUTTONS)
         await _clear_state(message.peer_id)
         await message.answer(
-            "Номер принят! Теперь вам доступна история покупок.", keyboard=keyboard
+            "Номер принят ✅! Теперь вам доступна история покупок.", keyboard=keyboard
         )
         return
 
-    await message.answer("Номер принят! Как вас зовут?")
+    await message.answer("Номер принят ✅! Как вас зовут? 🙂")
     await _set_state(message.peer_id, RegistrationStates.AWAITING_NAME)
 
 
@@ -335,7 +335,7 @@ async def on_name_entered(message: Message) -> None:
     channel = _get_channel()
     keyboard = channel.render_keyboard(_MAIN_KEYBOARD_BUTTONS)
     await message.answer(
-        f"Приятно познакомиться, {name}! Регистрация завершена. Теперь вы можете покупать "
+        f"Приятно познакомиться, {name}! Регистрация завершена ✅. Теперь вы можете покупать "
         "постеры и в любой момент смотреть историю покупок и статус счетов — просто "
         "воспользуйтесь кнопками меню ниже.",
         keyboard=keyboard,
@@ -368,7 +368,7 @@ async def _prompt_giveaway_choice(
         )
     keyboard.row()
     keyboard.add(Callback("◀️ Назад", payload={"a": "nav", "to": "menu"}))
-    text = "Выберите постер:"
+    text = "🖼 Выберите постер:"
     if answer_target is not None:
         await answer_target.answer(text, keyboard=keyboard.get_json())
     else:
@@ -445,7 +445,7 @@ async def _handle_quantity_selected(
     keyboard = Keyboard(inline=True)
     keyboard.add(Callback("◀️ Назад", payload={"a": "nav", "to": "quantity", "id": giveaway_id}))
     text = (
-        "Введите номер телефона получателя постеров (формат: +7XXXXXXXXXX). "
+        "📱 Введите номер телефона получателя постеров (формат: +7XXXXXXXXXX). "
         "Постеры и номера придут в этот чат."
     )
     if answer_target is not None:
@@ -575,7 +575,7 @@ async def _create_and_offer_payment(
         if outcome.participant_blocked:
             await channel.send_message(
                 _uid(peer_id),
-                "Ваш аккаунт заблокирован, покупка недоступна. Обратитесь в поддержку.",
+                "🚫 Ваш аккаунт заблокирован, покупка недоступна. Обратитесь в поддержку.",
             )
         elif outcome.pending_limit_exceeded:
             await channel.send_message(
@@ -610,7 +610,7 @@ async def _create_and_offer_payment(
                     _uid(peer_id),
                     qr_payload,
                     caption=(
-                        "Отсканируйте QR-код в банковском приложении и оплатите по реквизитам.\n"
+                        "📷 Отсканируйте QR-код в банковском приложении и оплатите по реквизитам.\n"
                         "Этот QR-код действителен только для данного счёта: не используйте его "
                         "повторно для оплаты другого заказа и не меняйте сумму или назначение "
                         "платежа — иначе оплата не будет засчитана автоматически.\n"
@@ -634,7 +634,7 @@ async def _create_and_offer_payment(
         instruction = "Оплатите QR-код выше в банковском приложении по реквизитам."
     else:
         instruction = (
-            "Не удалось отправить QR-код для оплаты. Пожалуйста, воспользуйтесь кнопкой "
+            "⚠️ Не удалось отправить QR-код для оплаты. Пожалуйста, воспользуйтесь кнопкой "
             "«💬 Написать в поддержку», чтобы получить реквизиты для оплаты вручную."
         )
     await channel.send_message(
@@ -660,7 +660,7 @@ async def _deliver_tickets(peer_id: int, outcome: payment_svc.FinalizeOutcome) -
         _uid(peer_id),
         poster_path=poster_path,
         codes=codes,
-        intro="Оплата прошла успешно! Ваши постеры куплены, номера:",
+        intro="✅ Оплата прошла успешно! Ваши постеры куплены, номера:",
     )
 
 
@@ -699,7 +699,7 @@ async def on_my_tickets(message: Message) -> None:
         return
 
     if tickets:
-        await message.answer(f"Ваши постеры ({len(tickets)} шт.), номера:")
+        await message.answer(f"🖼 Ваши постеры ({len(tickets)} шт.), номера:")
         await _get_channel().send_ticket_codes(
             _uid(message.peer_id), [t.full_code for t in tickets]
         )
@@ -722,7 +722,7 @@ async def _send_pending_payments(
     """Список неоплаченных счетов участника (раздел «Мои покупки») — для тех, у
     которых ещё нет квитанции, добавляется кнопка выбора счёта для её
     прикрепления (см. `_dispatch_message_event`, action `select_payment_receipt`)."""
-    lines = ["Неоплаченные счета:"]
+    lines = ["🧾 Неоплаченные счета:"]
     keyboard = Keyboard(inline=True)
     has_buttons = False
     for index, p in enumerate(payments):
@@ -785,7 +785,7 @@ async def on_support_contact(message: Message) -> None:
     keyboard = channel.render_support_prompt(url=url)
     await channel.send_message(
         _uid(message.peer_id),
-        "Нажмите кнопку ниже, чтобы открыть чат с поддержкой.",
+        "💬 Нажмите кнопку ниже, чтобы открыть чат с поддержкой.",
         keyboard=keyboard,
     )
 
@@ -800,7 +800,7 @@ async def on_help(message: Message) -> None:
         platform_settings = settings_service.get_or_create_settings(session)
     contacts = platform_settings.support_contacts or {}
     lines = [
-        "Справка по боту:",
+        "ℹ️ Справка по боту:",
         "",
         "Как оформить покупку:",
         "— «Купить постер» — выберите количество и получите счёт с QR-кодом для оплаты по "
@@ -841,7 +841,7 @@ async def on_unhandled_message(message: Message) -> None:
     if participant is not None and participant.full_name is not None:
         keyboard = channel.render_keyboard(_MAIN_KEYBOARD_BUTTONS)
         await message.answer(
-            "Не понял команду. Воспользуйтесь кнопками ниже или напишите «Помощь».",
+            "🤔 Не понял команду. Воспользуйтесь кнопками ниже или напишите «Помощь».",
             keyboard=keyboard,
         )
     else:
@@ -970,7 +970,7 @@ async def _dispatch_message_event(event: GroupTypes.MessageEvent) -> None:
         )
         await _get_channel().send_message(
             _uid(peer_id),
-            f"Пришлите фото или документ с квитанцией к счёту на {payment.amount / 100:.2f} ₽"
+            f"📎 Пришлите фото или документ с квитанцией к счёту на {payment.amount / 100:.2f} ₽"
             f"{invoice_line}.",
         )
         await _answer_event(event)

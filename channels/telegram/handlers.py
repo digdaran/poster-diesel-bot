@@ -101,7 +101,7 @@ async def on_start(message: Message, state: FSMContext) -> None:
         ).ignore_phone_verification
 
     if participant is None:
-        await message.answer("Добро пожаловать в бот продажи цифровых постеров!")
+        await message.answer("👋 Добро пожаловать в бот продажи цифровых постеров!")
         await channel.request_contact(_uid(message))
         if ignore_verification:
             # П.7.1 ТЗ: при включённом флаге ручной ввод номера тоже открывает
@@ -113,13 +113,15 @@ async def on_start(message: Message, state: FSMContext) -> None:
     if participant.full_name is None:
         # Номер подтверждён ещё до появления сбора имени — доспрашиваем при
         # следующем /start, а не только сразу после on_contact.
-        await message.answer("Добро пожаловать в бот продажи цифровых постеров!")
-        await message.answer("Как вас зовут?")
+        await message.answer("👋 Добро пожаловать в бот продажи цифровых постеров!")
+        await message.answer("Как вас зовут? 🙂")
         await state.set_state(RegistrationStates.awaiting_name)
         return
 
     keyboard = channel.render_keyboard(_MAIN_KEYBOARD_BUTTONS)
-    await message.answer("Добро пожаловать в бот продажи цифровых постеров!", reply_markup=keyboard)
+    await message.answer(
+        "👋 Добро пожаловать в бот продажи цифровых постеров!", reply_markup=keyboard
+    )
 
 
 @router.message(F.contact)
@@ -149,7 +151,7 @@ async def on_contact(message: Message, state: FSMContext) -> None:
                 phone=contact.phone_number,
             )
             await message.answer(
-                "Этот телеграм-аккаунт уже привязан к другому номеру. Обратитесь к оператору."
+                "⚠️ Этот телеграм-аккаунт уже привязан к другому номеру. Обратитесь к оператору."
             )
             return
         has_name = bool(result.participant.full_name)
@@ -158,12 +160,12 @@ async def on_contact(message: Message, state: FSMContext) -> None:
         channel = _get_channel()
         keyboard = channel.render_keyboard(_MAIN_KEYBOARD_BUTTONS)
         await message.answer(
-            "Номер принят! Теперь вам доступна история покупок.",
+            "Номер принят ✅! Теперь вам доступна история покупок.",
             reply_markup=keyboard,
         )
         return
 
-    await message.answer("Номер принят! Как вас зовут?")
+    await message.answer("Номер принят ✅! Как вас зовут? 🙂")
     await state.set_state(RegistrationStates.awaiting_name)
 
 
@@ -264,7 +266,7 @@ async def on_receipt_upload(message: Message, state: FSMContext) -> None:
     if selected_payment_id is not None:
         await state.clear()
     await message.answer(
-        "Квитанция получена, спасибо! Больше ничего делать не нужно — оплачивать повторно "
+        "📎 Квитанция получена, спасибо! Больше ничего делать не нужно — оплачивать повторно "
         "не надо. Номера придут после зачисления денег на расчётный счёт (как правило, до "
         "30 минут, в редких случаях — до 3 дней). " + _BUY_MORE_HINT
     )
@@ -295,7 +297,7 @@ async def on_phone_typed_for_registration(message: Message, state: FSMContext) -
                 phone=message.text,
             )
             await message.answer(
-                "Этот телеграм-аккаунт уже привязан к другому номеру. Обратитесь к оператору."
+                "⚠️ Этот телеграм-аккаунт уже привязан к другому номеру. Обратитесь к оператору."
             )
             return
         has_name = bool(result.participant.full_name)
@@ -305,12 +307,12 @@ async def on_phone_typed_for_registration(message: Message, state: FSMContext) -
         keyboard = channel.render_keyboard(_MAIN_KEYBOARD_BUTTONS)
         await state.clear()
         await message.answer(
-            "Номер принят! Теперь вам доступна история покупок.",
+            "Номер принят ✅! Теперь вам доступна история покупок.",
             reply_markup=keyboard,
         )
         return
 
-    await message.answer("Номер принят! Как вас зовут?")
+    await message.answer("Номер принят ✅! Как вас зовут? 🙂")
     await state.set_state(RegistrationStates.awaiting_name)
 
 
@@ -335,7 +337,7 @@ async def on_name_entered(message: Message, state: FSMContext) -> None:
     channel = _get_channel()
     keyboard = channel.render_keyboard(_MAIN_KEYBOARD_BUTTONS)
     await message.answer(
-        f"Приятно познакомиться, {name}! Регистрация завершена. Теперь вы можете покупать "
+        f"Приятно познакомиться, {name}! Регистрация завершена ✅. Теперь вы можете покупать "
         "постеры и в любой момент смотреть историю покупок и статус счетов — просто "
         "воспользуйтесь кнопками меню ниже.",
         reply_markup=keyboard,
@@ -368,7 +370,7 @@ async def _prompt_giveaway_choice(
     ]
     rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="nav:back:menu")])
     await message.answer(
-        "Выберите постер:", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+        "🖼 Выберите постер:", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
     )
     await state.set_state(PurchaseStates.choosing_giveaway)
 
@@ -487,7 +489,7 @@ async def _handle_quantity_selected(
     await state.update_data(giveaway_id=giveaway_id, quantity=quantity)
     await state.set_state(PurchaseStates.awaiting_phone_for_gift)
     await reply_target.answer(
-        "Введите номер телефона получателя постеров (формат: +7XXXXXXXXXX). "
+        "📱 Введите номер телефона получателя постеров (формат: +7XXXXXXXXXX). "
         "Постеры и номера придут в этот чат.",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
@@ -637,7 +639,7 @@ async def _create_and_offer_payment(
     if not outcome.ok:
         if outcome.participant_blocked:
             await message.answer(
-                "Ваш аккаунт заблокирован, покупка недоступна. Обратитесь в поддержку."
+                "🚫 Ваш аккаунт заблокирован, покупка недоступна. Обратитесь в поддержку."
             )
         elif outcome.pending_limit_exceeded:
             await message.answer(
@@ -670,7 +672,7 @@ async def _create_and_offer_payment(
                     str(message.chat.id),
                     qr_payload,
                     caption=(
-                        "Отсканируйте QR-код в банковском приложении и оплатите по реквизитам.\n"
+                        "📷 Отсканируйте QR-код в банковском приложении и оплатите по реквизитам.\n"
                         "Этот QR-код действителен только для данного счёта: не используйте его "
                         "повторно для оплаты другого заказа и не меняйте сумму или назначение "
                         "платежа — иначе оплата не будет засчитана автоматически.\n"
@@ -694,7 +696,7 @@ async def _create_and_offer_payment(
         instruction = "Оплатите QR-код выше в банковском приложении по реквизитам."
     else:
         instruction = (
-            "Не удалось отправить QR-код для оплаты. Пожалуйста, воспользуйтесь кнопкой "
+            "⚠️ Не удалось отправить QR-код для оплаты. Пожалуйста, воспользуйтесь кнопкой "
             "«💬 Написать в поддержку», чтобы получить реквизиты для оплаты вручную."
         )
     await message.answer(
@@ -719,7 +721,7 @@ async def _deliver_tickets(message: Message, outcome: payment_svc.FinalizeOutcom
         str(message.chat.id),
         poster_path=poster_path,
         codes=codes,
-        intro="Оплата прошла успешно! Ваши постеры куплены, номера:",
+        intro="✅ Оплата прошла успешно! Ваши постеры куплены, номера:",
     )
 
 
@@ -755,7 +757,7 @@ async def on_my_tickets(message: Message, state: FSMContext) -> None:
         return
 
     if tickets:
-        await message.answer(f"Ваши постеры ({len(tickets)} шт.), номера:")
+        await message.answer(f"🖼 Ваши постеры ({len(tickets)} шт.), номера:")
         await _get_channel().send_ticket_codes(str(message.chat.id), [t.full_code for t in tickets])
 
     if pending_payments:
@@ -775,7 +777,7 @@ async def _send_pending_payments(
     прикрепления (см. `on_select_payment_for_receipt`)."""
     from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-    lines = ["Неоплаченные счета:"]
+    lines = ["🧾 Неоплаченные счета:"]
     rows: list[list[InlineKeyboardButton]] = []
     for index, p in enumerate(payments):
         invoice_line = f", счёт № {p.invoice_no}" if p.invoice_no else ""
@@ -841,7 +843,7 @@ async def on_select_payment_for_receipt(callback: CallbackQuery, state: FSMConte
         else ""
     )
     await _msg(callback).answer(
-        f"Пришлите фото или документ с квитанцией к счёту на {payment.amount / 100:.2f} ₽"
+        f"📎 Пришлите фото или документ с квитанцией к счёту на {payment.amount / 100:.2f} ₽"
         f"{invoice_line}."
     )
     await callback.answer()
@@ -863,7 +865,7 @@ async def on_support_contact(message: Message, state: FSMContext) -> None:
         return
     keyboard = _get_channel().render_support_prompt(url=url)
     await message.answer(
-        "Нажмите кнопку ниже, чтобы открыть чат с поддержкой.", reply_markup=keyboard
+        "💬 Нажмите кнопку ниже, чтобы открыть чат с поддержкой.", reply_markup=keyboard
     )
 
 
@@ -878,7 +880,7 @@ async def on_help(message: Message, state: FSMContext) -> None:
         platform_settings = settings_service.get_or_create_settings(session)
     contacts = platform_settings.support_contacts or {}
     lines = [
-        "Справка по боту:",
+        "ℹ️ Справка по боту:",
         "",
         "Как оформить покупку:",
         "— «Купить постер» — выберите количество и получите счёт с QR-кодом для оплаты по "
@@ -919,7 +921,7 @@ async def on_unhandled_message(message: Message) -> None:
     if participant is not None and participant.full_name is not None:
         keyboard = channel.render_keyboard(_MAIN_KEYBOARD_BUTTONS)
         await message.answer(
-            "Не понял команду. Воспользуйтесь кнопками ниже или напишите /help.",
+            "🤔 Не понял команду. Воспользуйтесь кнопками ниже или напишите /help.",
             reply_markup=keyboard,
         )
     else:
