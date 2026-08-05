@@ -58,6 +58,11 @@ _SUPPORT_CONTACT_TEXT = "💬 Написать в поддержку"
 # количества/телефона).
 _MAIN_MENU_TEXTS = frozenset(text for row in _MAIN_KEYBOARD_BUTTONS for text in row)
 
+# Переиспользуется в сообщении о принятой квитанции и в конце «Мои покупки»
+# (и списка неоплаченных счетов, и списка уже выданных номерков) — подсказка
+# оформить ещё один заказ.
+_BUY_MORE_HINT = "Хотите приобрести ещё постеры — оформите новый заказ, нажав «🖼 Купить постер»."
+
 _channel: VkChannel | None = None  # устанавливается через set_channel() в main.py
 
 
@@ -265,8 +270,7 @@ async def on_receipt_upload(message: Message) -> None:
     await message.answer(
         "Квитанция получена, спасибо! Больше ничего делать не нужно — оплачивать повторно "
         "не надо. Номера придут после зачисления денег на расчётный счёт (как правило, до "
-        "30 минут, в редких случаях — до 3 дней). Хотите приобрести ещё постеры — оформите "
-        "новый заказ, нажав «🖼 Купить постер»."
+        "30 минут, в редких случаях — до 3 дней). " + _BUY_MORE_HINT
     )
 
 
@@ -702,6 +706,11 @@ async def on_my_tickets(message: Message) -> None:
 
     if pending_payments:
         await _send_pending_payments(message.peer_id, pending_payments, answer_target=message)
+    else:
+        # Если неоплаченных счетов нет, подсказка про новый заказ иначе не
+        # попала бы в вывод «Мои покупки» — при pending_payments она уже есть
+        # в конце _send_pending_payments.
+        await message.answer(_BUY_MORE_HINT)
 
 
 async def _send_pending_payments(
@@ -716,15 +725,18 @@ async def _send_pending_payments(
     lines = ["Неоплаченные счета:"]
     keyboard = Keyboard(inline=True)
     has_buttons = False
-    for p in payments:
+    for index, p in enumerate(payments):
         invoice_line = f", счёт № {p.invoice_no}" if p.invoice_no else ""
         receipt_line = "квитанция получена ✅" if p.has_receipt else "квитанция не прислана ⏳"
         expiry_line = (
             f", действителен до {p.expires_at:%d.%m.%Y}" if p.expires_at is not None else ""
         )
+        # Пустая строка перед КАЖДЫМ счётом, кроме первого — иначе строки
+        # разных заказов слипаются друг с другом визуально.
+        prefix = "\n" if index > 0 else ""
         lines.append(
-            f"«{p.giveaway_name}»: {p.quantity} экз. на {p.amount / 100:.2f} ₽{invoice_line} "
-            f"— {receipt_line}{expiry_line}"
+            f"{prefix}«{p.giveaway_name}»: {p.quantity} экз. на {p.amount / 100:.2f} ₽"
+            f"{invoice_line} — {receipt_line}{expiry_line}"
         )
         if not p.has_receipt:
             if has_buttons:
@@ -747,6 +759,7 @@ async def _send_pending_payments(
             "не нужно, дождитесь зачисления (как правило, до 30 минут, в редких случаях — "
             "до 3 дней)."
         )
+    lines.append("\n" + _BUY_MORE_HINT)
     text = "\n".join(lines)
     keyboard_json = keyboard.get_json() if has_buttons else None
     if answer_target is not None:
