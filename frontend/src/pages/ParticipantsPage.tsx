@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ParticipantsApi } from "../api/resources";
+import { apiDownload } from "../api/client";
 import type { Participant } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { usePagination } from "../hooks/usePagination";
@@ -50,12 +51,8 @@ export function ParticipantsPage() {
       created_to: createdTo || undefined,
       total_tickets_min: debouncedTotalTicketsMin ? Number(debouncedTotalTicketsMin) : undefined,
       total_tickets_max: debouncedTotalTicketsMax ? Number(debouncedTotalTicketsMax) : undefined,
-      active_tickets_min: debouncedActiveTicketsMin
-        ? Number(debouncedActiveTicketsMin)
-        : undefined,
-      active_tickets_max: debouncedActiveTicketsMax
-        ? Number(debouncedActiveTicketsMax)
-        : undefined,
+      active_tickets_min: debouncedActiveTicketsMin ? Number(debouncedActiveTicketsMin) : undefined,
+      active_tickets_max: debouncedActiveTicketsMax ? Number(debouncedActiveTicketsMax) : undefined,
       page,
       page_size: pageSize,
     }).then((result) => {
@@ -77,6 +74,28 @@ export function ParticipantsPage() {
     page,
     pageSize,
   ]);
+
+  const downloadReport = async (format: "csv" | "xlsx") => {
+    const { blob, filename } = await apiDownload("/api/participants", {
+      q: debouncedQuery || undefined,
+      phone_verified: phoneVerified ? phoneVerified === "true" : undefined,
+      is_blocked: isBlocked ? isBlocked === "true" : undefined,
+      channel: channel || undefined,
+      created_from: createdFrom || undefined,
+      created_to: createdTo || undefined,
+      total_tickets_min: debouncedTotalTicketsMin ? Number(debouncedTotalTicketsMin) : undefined,
+      total_tickets_max: debouncedTotalTicketsMax ? Number(debouncedTotalTicketsMax) : undefined,
+      active_tickets_min: debouncedActiveTicketsMin ? Number(debouncedActiveTicketsMin) : undefined,
+      active_tickets_max: debouncedActiveTicketsMax ? Number(debouncedActiveTicketsMax) : undefined,
+      export: format,
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   const startEdit = (p: Participant) => {
     setEditingId(p.id);
@@ -237,6 +256,12 @@ export function ParticipantsPage() {
           />
         </label>
       </div>
+      {hasPermission("participants_export") && (
+        <div>
+          <button onClick={() => void downloadReport("csv")}>Экспорт CSV</button>
+          <button onClick={() => void downloadReport("xlsx")}>Экспорт XLSX</button>
+        </div>
+      )}
       <div className="table-wrapper">
         <table>
           <thead>

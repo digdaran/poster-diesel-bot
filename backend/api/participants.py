@@ -9,20 +9,53 @@ from app.core.permissions import Permission
 from app.core.phone import InvalidPhoneError
 from app.models.channel_binding import ChannelBinding
 from app.models.enums import AuditActorType, ChannelType
-from app.models.giveaway import Giveaway
+from app.models.giveaway import TICKET_NUMBER_WIDTH, Giveaway
 from app.models.panel_user import PanelUser
 from app.models.participant import Participant
 from app.models.ticket import Ticket
 from app.services import audit_service, participant_service
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from backend.api.deps import get_session, require_permission
+from backend.api.export_utils import ExportFormat, maybe_export
 from backend.api.pagination import count_total, page_bounds, validate_page_size
 from backend.api.schemas import ParticipantOut, ParticipantUpdateRequest
 
 router = APIRouter(prefix="/participants", tags=["participants"])
+
+
+def _tickets_by_participant(
+    session: Session, participant_ids: list[int]
+) -> dict[int, dict[str, str]]:
+    """Номерки участников для экспорта, сгруппированные по коллекции
+    (розыгрышу): `{"tickets": "ROMB: 000001, 000002; STAR: 000013",
+    "giveaways": "Ромашка, Звезда"}`. Отдельный запрос, а не JOIN в основной
+    выборке — иначе строки участников размножились бы по числу билетов."""
+    if not participant_ids:
+        return {}
+    stmt = (
+        select(Ticket.participant_id, Ticket.number, Giveaway.name, Giveaway.prefix)
+        .join(Giveaway, Ticket.giveaway_id == Giveaway.id)
+        .where(Ticket.participant_id.in_(participant_ids))
+        .order_by(Giveaway.name, Ticket.number)
+    )
+    # participant_id -> prefix -> (giveaway_name, [номера])
+    groups: dict[int, dict[str, tuple[str, list[str]]]] = {}
+    for participant_id, number, giveaway_name, prefix in session.execute(stmt).all():
+        by_prefix = groups.setdefault(participant_id, {})
+        _, numbers = by_prefix.setdefault(prefix, (giveaway_name, []))
+        numbers.append(f"{number:0{TICKET_NUMBER_WIDTH}d}")
+    result: dict[int, dict[str, str]] = {}
+    for participant_id, by_prefix in groups.items():
+        result[participant_id] = {
+            "tickets": "; ".join(
+                f"{prefix}: {', '.join(numbers)}" for prefix, (_, numbers) in by_prefix.items()
+            ),
+            "giveaways": ", ".join(name for _, (name, _) in by_prefix.items()),
+        }
+    return result
 
 
 @router.get("", response_model=None)
@@ -39,9 +72,10 @@ def list_participants(
     active_tickets_max: int | None = None,
     page: int = 1,
     page_size: int = 50,
+    export: ExportFormat | None = None,
     session: Session = Depends(get_session),
-    _user: PanelUser = Depends(require_permission(Permission.VIEW_PARTICIPANTS)),
-) -> dict[str, Any]:
+    user: PanelUser = Depends(require_permission(Permission.VIEW_PARTICIPANTS)),
+) -> dict[str, Any] | list[dict[str, Any]] | Response:
     validate_page_size(page_size)
     # Билеты за всё время / только в незаблокированных ("активных") акциях —
     # коррелированные скалярные подзапросы, а не JOIN + GROUP BY, чтобы не
@@ -88,6 +122,28 @@ def list_participants(
         stmt = stmt.where(active_tickets_subq >= active_tickets_min)
     if active_tickets_max is not None:
         stmt = stmt.where(active_tickets_subq <= active_tickets_max)
+
+    if export is not None:
+        # Экспортируем все строки, подходящие под фильтр, а не только текущую
+        # страницу — см. запрос пользователя: «именно те данные, которые
+        # установлены в фильтре поиска».
+        eager_stmt = stmt.options(selectinload(Participant.channel_bindings)).order_by(
+            Participant.id.desc()
+        )
+        rows = session.execute(eager_stmt).all()
+        tickets_map = _tickets_by_participant(session, [p.id for p, _, _ in rows])
+        export_items = []
+        for participant, total_tickets, active_tickets in rows:
+            data = ParticipantOut.model_validate(participant).model_dump(mode="json")
+            data["total_tickets"] = total_tickets
+            data["active_tickets"] = active_tickets
+            ticket_info = tickets_map.get(participant.id, {"tickets": "", "giveaways": ""})
+            data["giveaways"] = ticket_info["giveaways"]
+            data["tickets"] = ticket_info["tickets"]
+            export_items.append(data)
+        return maybe_export(
+            export_items, export, user, "participants", permission=Permission.PARTICIPANTS_EXPORT
+        )
 
     total = count_total(session, stmt)
     limit, offset = page_bounds(page=page, page_size=page_size)
