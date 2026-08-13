@@ -1,8 +1,12 @@
 """TelegramChannel — первая реализация `BaseMessengerChannel` (п.10.4 ТЗ).
 
-aiogram 3, long polling. Поддержка HTTP/SOCKS5-прокси (`TELEGRAM_PROXY_URL`).
-Вся бизнес-логика остаётся в app/services/* — этот класс только транслирует
-UI-примитивы и вызовы Bot API.
+aiogram 3, long polling. Поддержка HTTP/SOCKS5-прокси (`TELEGRAM_PROXY_URL`) —
+в проде это `socks5://ssh-tunnel:<port>`, локальный SOCKS5 от sidecar-контейнера
+`ssh-tunnel`, поднимающего динамический SSH-форвардинг (`ssh -D`) на удалённый
+хост с ключевой авторизацией вместо стороннего прокси-провайдера (см.
+docker-compose.yml, .env.example, DECISIONS_LOG.md №71). Вся бизнес-логика
+остаётся в app/services/* — этот класс только транслирует UI-примитивы и вызовы
+Bot API.
 """
 
 from __future__ import annotations

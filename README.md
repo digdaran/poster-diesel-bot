@@ -108,6 +108,43 @@ data/
 другом хосте: остановить стек (`docker compose down`), скопировать весь каталог проекта
 (включая `data/` и `.env`) на новый хост, запустить `docker compose up -d --build`.
 
+### SSH-туннель для Telegram-канала (вместо стороннего прокси)
+
+`channel-telegram` подключается к Bot API через `socks5://ssh-tunnel:$SSH_TUNNEL_LOCAL_PORT`
+— локальный SOCKS5, который поднимает sidecar-контейнер `ssh-tunnel` (`autossh -D`,
+динамический форвардинг портов) на удалённый хост с доступом к `api.telegram.org`,
+авторизация только по ключу (см. `DECISIONS_LOG.md` №71). Стороннего прокси-провайдера
+больше нет — `TELEGRAM_PROXY_URL` в `.env` руками не задаётся, собирается в
+`docker-compose.yml` из переменных `SSH_TUNNEL_*`.
+
+Настройка на удалённом хосте (уже существующий VPS/джамп-хост с доступом к Telegram):
+
+1. Сгенерировать новую ключевую пару (не переиспользовать ключ `backup-host` из
+   `RESTIC_*` — разное назначение):
+   ```
+   ssh-keygen -t ed25519 -f data/ssh/telegram_tunnel_ed25519 -N "" -C "poster-diesel-bot-telegram-tunnel"
+   ```
+2. Добавить публичный ключ (`data/ssh/telegram_tunnel_ed25519.pub`) в
+   `~/.ssh/authorized_keys` пользователя на удалённом хосте, желательно с
+   ограничениями:
+   ```
+   no-pty,no-agent-forwarding,no-X11-forwarding,permitopen="api.telegram.org:443" ssh-ed25519 AAAA... poster-diesel-bot-telegram-tunnel
+   ```
+   На самом хосте у этого пользователя должно быть `AllowTcpForwarding yes` в
+   `sshd_config` (дефолт в большинстве дистрибутивов).
+3. Запинить отпечаток хоста (обязательно — туннель поднимается со
+   `StrictHostKeyChecking=yes`, без этого шага контейнер `ssh-tunnel` не стартует):
+   ```
+   ssh-keyscan -p $SSH_TUNNEL_PORT $SSH_TUNNEL_HOST >> data/ssh/known_hosts
+   ```
+4. Заполнить `SSH_TUNNEL_HOST`/`SSH_TUNNEL_PORT`/`SSH_TUNNEL_USER` в `.env` (см.
+   `.env.example`).
+
+`data/ssh/` уже в `.gitignore` (правило `/data/*`) — ключи и `known_hosts` в git не
+попадают. Проверка после `docker compose up -d --build`: `docker compose logs
+ssh-tunnel` (SSH-подключение установлено, SOCKS5 слушает) и `docker compose logs
+channel-telegram` (вызовы Bot API проходят без таймаутов/ошибок прокси).
+
 ### Обновление и резервное копирование
 
 - `scripts/deploy.sh` — `git pull` + пересборка образов + `docker compose up -d`

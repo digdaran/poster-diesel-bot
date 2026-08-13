@@ -31,6 +31,10 @@ services:
       DATABASE_PATH: /data/raffle.db
       RECEIPTS_DIR: /data/receipts
       POSTER_DIR: /data/posters
+      # SOCKS5 через SSH-туннель (сервис ssh-tunnel ниже) вместо стороннего
+      # прокси — см. DECISIONS_LOG.md №71. Собирается здесь, руками в .env
+      # задавать не нужно.
+      TELEGRAM_PROXY_URL: socks5://ssh-tunnel:${SSH_TUNNEL_LOCAL_PORT:-1080}
     volumes:
       - ./data/db:/data
       - ./data/receipts:/data/receipts
@@ -38,7 +42,32 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+      ssh-tunnel:
+        condition: service_healthy
     networks: [internal]
+    restart: unless-stopped
+
+  ssh-tunnel:
+    build:
+      context: .
+      dockerfile: docker/ssh-tunnel.Dockerfile
+    env_file: .env
+    environment:
+      SSH_TUNNEL_HOST: ${SSH_TUNNEL_HOST}
+      SSH_TUNNEL_PORT: ${SSH_TUNNEL_PORT:-22}
+      SSH_TUNNEL_USER: ${SSH_TUNNEL_USER}
+      SSH_TUNNEL_LOCAL_PORT: ${SSH_TUNNEL_LOCAL_PORT:-1080}
+    volumes:
+      - ${SSH_TUNNEL_PRIVATE_KEY_PATH:-./data/ssh/telegram_tunnel_ed25519}:/run/secrets/ssh_tunnel_key:ro
+      - ${SSH_TUNNEL_KNOWN_HOSTS_PATH:-./data/ssh/known_hosts}:/run/secrets/known_hosts:ro
+    networks: [internal]
+    healthcheck:
+      # CMD-SHELL, а не exec-форма — нужна подстановка $SSH_TUNNEL_LOCAL_PORT
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 ${SSH_TUNNEL_LOCAL_PORT:-1080}"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
     restart: unless-stopped
 
   channel-vk:
