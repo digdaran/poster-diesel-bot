@@ -54,6 +54,7 @@ class ParticipantOut(BaseModel):
 
 class ParticipantUpdateRequest(BaseModel):
     full_name: str | None = None
+    phone: str | None = None
 
 
 class GiveawayOut(BaseModel):

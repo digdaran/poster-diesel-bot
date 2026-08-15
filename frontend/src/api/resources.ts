@@ -57,8 +57,8 @@ export const ParticipantsApi = {
   findByPhone: (phone: string) =>
     apiRequest<Participant | null>("/api/participants/by-phone", { query: { phone } }),
   get: (id: number) => apiRequest<Participant>(`/api/participants/${id}`),
-  update: (id: number, full_name: string) =>
-    apiRequest<Participant>(`/api/participants/${id}`, { method: "PATCH", body: { full_name } }),
+  update: (id: number, payload: { full_name?: string; phone?: string }) =>
+    apiRequest<Participant>(`/api/participants/${id}`, { method: "PATCH", body: payload }),
   block: (id: number) =>
     apiRequest<Participant>(`/api/participants/${id}/block`, { method: "POST" }),
   unblock: (id: number) =>

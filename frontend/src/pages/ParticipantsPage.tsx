@@ -11,11 +11,13 @@ import { Badge } from "../components/Badge";
 import { ChannelBadges } from "../components/ChannelBadges";
 import { EmptyStateRow } from "../components/EmptyState";
 import { ParticipantOrdersModal } from "../components/ParticipantOrdersModal";
+import { useConfirm } from "../components/ConfirmDialog";
 import { formatDateTime } from "../utils/format";
 
 export function ParticipantsPage() {
   const { hasPermission } = useAuth();
   const { showToast } = useToast();
+  const confirm = useConfirm();
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [total, setTotal] = useState(0);
   const [query, setQuery] = useState("");
@@ -30,6 +32,7 @@ export function ParticipantsPage() {
   const [activeTicketsMax, setActiveTicketsMax] = useState("");
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingName, setEditingName] = useState("");
+  const [editingPhone, setEditingPhone] = useState("");
   const [pendingId, setPendingId] = useState<number | null>(null);
   const [ordersParticipant, setOrdersParticipant] = useState<Participant | null>(null);
   const { page, pageSize, setPage, setPageSize } = usePagination();
@@ -100,17 +103,29 @@ export function ParticipantsPage() {
   const startEdit = (p: Participant) => {
     setEditingId(p.id);
     setEditingName(p.full_name ?? "");
+    setEditingPhone(p.phone);
   };
 
-  const saveEdit = async (id: number) => {
-    setPendingId(id);
+  const saveEdit = async (p: Participant) => {
+    const phoneChanged = editingPhone.trim() !== p.phone;
+    if (phoneChanged) {
+      const confirmed = await confirm(
+        `Изменить номер телефона участника с ${p.phone} на "${editingPhone.trim()}"? ` +
+          "Уже подтверждённые привязки каналов останутся подтверждёнными.",
+      );
+      if (!confirmed) return;
+    }
+    setPendingId(p.id);
     try {
-      await ParticipantsApi.update(id, editingName);
+      await ParticipantsApi.update(p.id, {
+        full_name: editingName,
+        ...(phoneChanged ? { phone: editingPhone.trim() } : {}),
+      });
       setEditingId(null);
-      showToast("Имя обновлено");
+      showToast(phoneChanged ? "Участник обновлён" : "Имя обновлено");
       load();
     } catch (err) {
-      showToast(err instanceof Error ? err.message : "Не удалось сохранить имя", "error");
+      showToast(err instanceof Error ? err.message : "Не удалось сохранить изменения", "error");
     } finally {
       setPendingId(null);
     }
@@ -282,7 +297,13 @@ export function ParticipantsPage() {
             {participants.length === 0 && <EmptyStateRow colSpan={showActions ? 10 : 9} />}
             {participants.map((p) => (
               <tr key={p.id}>
-                <td>{p.phone}</td>
+                <td>
+                  {editingId === p.id ? (
+                    <input value={editingPhone} onChange={(e) => setEditingPhone(e.target.value)} />
+                  ) : (
+                    p.phone
+                  )}
+                </td>
                 <td>
                   {editingId === p.id ? (
                     <input value={editingName} onChange={(e) => setEditingName(e.target.value)} />
@@ -314,7 +335,7 @@ export function ParticipantsPage() {
                     {hasPermission("participant_edit") &&
                       (editingId === p.id ? (
                         <>
-                          <button disabled={pendingId === p.id} onClick={() => saveEdit(p.id)}>
+                          <button disabled={pendingId === p.id} onClick={() => saveEdit(p)}>
                             Сохранить
                           </button>
                           <button className="button-secondary" onClick={() => setEditingId(null)}>
@@ -322,7 +343,7 @@ export function ParticipantsPage() {
                           </button>
                         </>
                       ) : (
-                        <button onClick={() => startEdit(p)}>Изменить имя</button>
+                        <button onClick={() => startEdit(p)}>Изменить</button>
                       ))}
                     {hasPermission("participant_block") && (
                       <button

@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import pytest
+from app.core.phone import InvalidPhoneError
 from app.models.enums import ChannelType
 from app.services import participant_service as svc
 from sqlalchemy.orm import Session
@@ -75,6 +77,53 @@ def test_set_full_name_ignores_blank_input(session: Session) -> None:
     participant = svc.resolve_manual_recipient(session, "79990003338")
     updated = svc.set_full_name(session, participant_id=participant.id, full_name="   ")
     assert updated.full_name is None
+
+
+def test_change_phone_updates_and_normalizes(session: Session) -> None:
+    participant = svc.resolve_manual_recipient(session, "79990004001")
+    updated = svc.change_phone(
+        session, participant_id=participant.id, new_phone_raw="+7 999 000-40-02"
+    )
+    assert updated.phone == "79990004002"
+
+
+def test_change_phone_is_noop_for_same_normalized_number(session: Session) -> None:
+    participant = svc.resolve_manual_recipient(session, "79990004003")
+    updated = svc.change_phone(
+        session, participant_id=participant.id, new_phone_raw="8 999 000 40 03"
+    )
+    assert updated.phone == "79990004003"
+
+
+def test_change_phone_rejects_invalid_number(session: Session) -> None:
+    participant = svc.resolve_manual_recipient(session, "79990004004")
+    with pytest.raises(InvalidPhoneError):
+        svc.change_phone(session, participant_id=participant.id, new_phone_raw="не номер")
+    assert participant.phone == "79990004004"
+
+
+def test_change_phone_rejects_number_taken_by_another_participant(session: Session) -> None:
+    svc.resolve_manual_recipient(session, "79990004005")
+    other = svc.resolve_manual_recipient(session, "79990004006")
+    with pytest.raises(svc.PhoneAlreadyTakenError):
+        svc.change_phone(session, participant_id=other.id, new_phone_raw="79990004005")
+    assert other.phone == "79990004006"
+
+
+def test_change_phone_does_not_affect_existing_verified_binding(session: Session) -> None:
+    result = svc.confirm_channel_binding(
+        session,
+        channel=ChannelType.TELEGRAM,
+        external_user_id="tg-change-phone",
+        phone_raw="79990004007",
+    )
+    svc.change_phone(session, participant_id=result.participant.id, new_phone_raw="79990004008")
+    binding = svc.get_binding(
+        session, channel=ChannelType.TELEGRAM, external_user_id="tg-change-phone"
+    )
+    assert binding is not None
+    assert binding.phone_verified is True
+    assert binding.participant.phone == "79990004008"
 
 
 def test_confirm_channel_binding_creates_participant_and_verified_binding(session: Session) -> None:

@@ -156,6 +156,41 @@ def set_full_name(session: Session, *, participant_id: int, full_name: str) -> P
     return participant
 
 
+class PhoneAlreadyTakenError(Exception):
+    """Новый номер уже принадлежит ДРУГОМУ участнику (`Participant.phone` уникален,
+    п.6.2 ТЗ) — автоматического слияния участников (билеты/покупки/привязки
+    каналов) нет, см. DECISIONS_LOG.md №72."""
+
+    def __init__(self, phone: str):
+        self.phone = phone
+        super().__init__(f"Номер {phone} уже используется другим участником")
+
+
+def change_phone(session: Session, *, participant_id: int, new_phone_raw: str) -> Participant:
+    """Правка номера телефона участника оператором панели (опечатка при ручной
+    регистрации/самостоятельном вводе, п.11.4 ТЗ — см. DECISIONS_LOG.md №72).
+
+    Намеренно НЕ трогает `ChannelBinding`/производный `phone_verified`: верификация
+    закреплена за конкретным подтверждённым фактом (`ChannelBinding.phone_verified`),
+    а не за текущим значением `Participant.phone` — привязки, сделанные до правки,
+    остаются подтверждёнными и после неё.
+
+    Raises:
+        InvalidPhoneError: новый номер не проходит нормализацию.
+        PhoneAlreadyTakenError: номер уже занят другим участником.
+    """
+    participant = session.get(Participant, participant_id)
+    assert participant is not None
+    new_phone = normalize_phone(new_phone_raw)
+    if new_phone != participant.phone:
+        conflict = _find_participant_by_phone(session, new_phone)
+        if conflict is not None and conflict.id != participant.id:
+            raise PhoneAlreadyTakenError(new_phone)
+        participant.phone = new_phone
+        session.flush()
+    return participant
+
+
 def confirm_channel_binding(
     session: Session,
     *,

@@ -172,18 +172,20 @@ export function TicketsPage() {
               <th>Код</th>
               <th>Коллекция</th>
               <th>Участник</th>
+              <th>Телефон</th>
               <th>Источник</th>
               <th>Канал</th>
               <th>Выдан</th>
             </tr>
           </thead>
           <tbody>
-            {tickets.length === 0 && <EmptyStateRow colSpan={6} />}
+            {tickets.length === 0 && <EmptyStateRow colSpan={7} />}
             {tickets.map((t) => (
               <tr key={t.id}>
                 <td>{t.full_code}</td>
                 <td>{t.giveaway_name}</td>
-                <td>{t.participant_full_name ?? t.participant_phone}</td>
+                <td>{t.participant_full_name ?? "—"}</td>
+                <td>{t.participant_phone}</td>
                 <td>{t.source === "online" ? "Онлайн" : "Ручная"}</td>
                 <td>
                   <ChannelBadges channel={t.channel} />

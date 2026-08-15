@@ -208,6 +208,21 @@ def update_participant(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Участник не найден")
     if payload.full_name is not None:
         participant.full_name = payload.full_name
+    details: dict[str, Any] = {}
+    if payload.phone is not None:
+        old_phone = participant.phone
+        try:
+            participant_service.change_phone(
+                session, participant_id=participant.id, new_phone_raw=payload.phone
+            )
+        except InvalidPhoneError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректный номер телефона"
+            ) from exc
+        except participant_service.PhoneAlreadyTakenError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        if participant.phone != old_phone:
+            details = {"old_phone": old_phone, "new_phone": participant.phone}
     session.flush()
     audit_service.log(
         session,
@@ -217,6 +232,7 @@ def update_participant(
         actor_label=user.login,
         entity_type="participant",
         entity_id=participant.id,
+        details=details or None,
         ip_address=request.client.host if request.client else None,
     )
     return participant
