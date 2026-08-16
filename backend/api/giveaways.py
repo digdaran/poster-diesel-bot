@@ -4,15 +4,18 @@ from __future__ import annotations
 
 from app.core.config import Settings
 from app.core.permissions import Permission
-from app.models.enums import AuditActorType
+from app.models.base import utcnow
+from app.models.enums import AuditActorType, ManualRegistrationStatus, PaymentStatus
 from app.models.giveaway import Giveaway
 from app.models.giveaway_poster import GiveawayPoster
+from app.models.manual_registration import ManualRegistration
 from app.models.panel_user import PanelUser
+from app.models.payment import Payment
 from app.services import audit_service, poster_service
 from app.services import ticket_pool_service as pool_svc
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from backend.api.deps import get_session, get_settings_dep, require_permission
@@ -31,6 +34,7 @@ def list_giveaways(
     q: str | None = None,
     is_registration_open: bool | None = None,
     is_locked: bool | None = None,
+    is_archived: bool | None = None,
     session: Session = Depends(get_session),
     _user: PanelUser = Depends(require_permission(Permission.VIEW_GIVEAWAYS)),
 ) -> list[Giveaway]:
@@ -38,6 +42,11 @@ def list_giveaways(
     # как источник опций в select-фильтрах на других страницах (Продажи
     # On-Line/Номера/Ручные регистрации/Отчёты), которые дергают его без
     # параметров и ждут плоский массив — смена формы ответа сломала бы их все.
+    # `is_archived` не задан по умолчанию (как и остальные фильтры) — эти
+    # страницы по-прежнему видят архивные коллекции в своих фильтрах (нужно для
+    # поиска исторических номерков/платежей); скрывает архивные только раздел
+    # «Коллекции» (`is_archived=false`) и показывает раздел «Архив»
+    # (`is_archived=true`) — см. GiveawaysPage.tsx/ArchivePage.tsx.
     stmt = select(Giveaway)
     if q:
         like = f"%{q}%"
@@ -46,6 +55,8 @@ def list_giveaways(
         stmt = stmt.where(Giveaway.is_registration_open == is_registration_open)
     if is_locked is not None:
         stmt = stmt.where(Giveaway.is_locked == is_locked)
+    if is_archived is not None:
+        stmt = stmt.where(Giveaway.is_archived == is_archived)
     stmt = stmt.order_by(Giveaway.id.desc())
     return list(session.execute(stmt).scalars())
 
@@ -214,6 +225,88 @@ def close_registration(
     audit_service.log(
         session,
         action="giveaway_close_registration",
+        actor_type=AuditActorType.PANEL_USER,
+        actor_id=user.id,
+        actor_label=user.login,
+        entity_type="giveaway",
+        entity_id=giveaway.id,
+        ip_address=request.client.host if request.client else None,
+    )
+    return giveaway
+
+
+@router.post("/{giveaway_id}/archive", response_model=GiveawayOut)
+def archive_giveaway(
+    giveaway_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+    user: PanelUser = Depends(require_permission(Permission.GIVEAWAY_ARCHIVE)),
+) -> Giveaway:
+    """Архивация — не удаление (см. DECISIONS.md/DECISIONS_LOG.md): скрывает
+    коллекцию из раздела «Коллекции» в «Архив», ни одна связанная запись
+    (Ticket/Payment/ManualRegistration/аудит) не трогается и не теряется.
+    Разрешена только когда регистрация закрыта навсегда и нет ни одной
+    незавершённой (PENDING) заявки — иначе можно было бы спрятать коллекцию с
+    ещё живыми, ожидающими решения заказами."""
+    giveaway = session.get(Giveaway, giveaway_id)
+    if giveaway is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Розыгрыш не найден")
+    if giveaway.is_registration_open:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Нельзя архивировать: регистрация ещё не закрыта навсегда",
+        )
+    pending_payments = session.execute(
+        select(func.count())
+        .select_from(Payment)
+        .where(Payment.giveaway_id == giveaway_id, Payment.status == PaymentStatus.PENDING)
+    ).scalar_one()
+    pending_registrations = session.execute(
+        select(func.count())
+        .select_from(ManualRegistration)
+        .where(
+            ManualRegistration.giveaway_id == giveaway_id,
+            ManualRegistration.status == ManualRegistrationStatus.PENDING,
+        )
+    ).scalar_one()
+    pending_total = pending_payments + pending_registrations
+    if pending_total:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Нельзя архивировать: есть незавершённые заявки ({pending_total})",
+        )
+    giveaway.is_archived = True
+    giveaway.archived_at = utcnow()
+    session.flush()
+    audit_service.log(
+        session,
+        action="giveaway_archive",
+        actor_type=AuditActorType.PANEL_USER,
+        actor_id=user.id,
+        actor_label=user.login,
+        entity_type="giveaway",
+        entity_id=giveaway.id,
+        ip_address=request.client.host if request.client else None,
+    )
+    return giveaway
+
+
+@router.post("/{giveaway_id}/unarchive", response_model=GiveawayOut)
+def unarchive_giveaway(
+    giveaway_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+    user: PanelUser = Depends(require_permission(Permission.GIVEAWAY_ARCHIVE)),
+) -> Giveaway:
+    giveaway = session.get(Giveaway, giveaway_id)
+    if giveaway is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Розыгрыш не найден")
+    giveaway.is_archived = False
+    giveaway.archived_at = None
+    session.flush()
+    audit_service.log(
+        session,
+        action="giveaway_unarchive",
         actor_type=AuditActorType.PANEL_USER,
         actor_id=user.id,
         actor_label=user.login,

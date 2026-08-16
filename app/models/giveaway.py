@@ -39,6 +39,13 @@ class Giveaway(Base):
     next_payment_number: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     is_registration_open: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Архивация (не удаление, см. DECISIONS_LOG.md) — скрывает коллекцию из
+    # основного раздела «Коллекции» в отдельный «Архив», не трогая ни одной
+    # связанной записи (Ticket/Payment/ManualRegistration/аудит остаются как есть).
+    # Обратима (`unarchive`). Разрешена только когда is_registration_open=False
+    # и нет ни одной PENDING заявки — см. backend/api/giveaways.py::archive_giveaway.
+    is_archived: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    archived_at: Mapped[dt.datetime | None] = mapped_column(nullable=True)
     opened_at: Mapped[dt.datetime | None] = mapped_column(nullable=True)
     digital_poster_caption: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     created_at: Mapped[dt.datetime] = created_at_column()

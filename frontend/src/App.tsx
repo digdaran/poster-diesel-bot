@@ -10,6 +10,7 @@ import { DashboardPage } from "./pages/DashboardPage";
 import { ParticipantsPage } from "./pages/ParticipantsPage";
 import { GiveawaysPage } from "./pages/GiveawaysPage";
 import { GiveawayDetailPage } from "./pages/GiveawayDetailPage";
+import { ArchivePage } from "./pages/ArchivePage";
 import { ManualRegistrationsPage } from "./pages/ManualRegistrationsPage";
 import { SalesPage } from "./pages/SalesPage";
 import { MonitoringPage } from "./pages/MonitoringPage";
@@ -51,6 +52,7 @@ export default function App() {
                 <Route path="participants" element={<ParticipantsPage />} />
                 <Route path="giveaways" element={<GiveawaysPage />} />
                 <Route path="giveaways/:id" element={<GiveawayDetailPage />} />
+                <Route path="archive" element={<ArchivePage />} />
                 <Route path="manual-registrations" element={<ManualRegistrationsPage />} />
                 <Route path="sales" element={<SalesPage />} />
                 <Route path="tickets" element={<TicketsPage />} />

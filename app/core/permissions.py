@@ -55,6 +55,10 @@ class Permission(str, Enum):
     # см. DECISIONS.md, DECISIONS_LOG.md №69. Возврат денег происходит вручную
     # вне системы, поэтому право ограничено Super Admin.
     PURCHASE_REFUND = "purchase_refund"
+    # Архивация коллекции с закрытой навсегда регистрацией (в отдельный раздел
+    # «Архив», без удаления данных) — по прямому запросу заказчика ограничено
+    # Super Admin, см. DECISIONS_LOG.md.
+    GIVEAWAY_ARCHIVE = "giveaway_archive"
 
 
 _VIEW_ALL = {
@@ -89,6 +93,7 @@ _SUPER_ADMIN_EXTRA = {
     Permission.PANEL_USERS_MANAGE,
     Permission.IGNORE_PHONE_VERIFICATION_TOGGLE,
     Permission.PURCHASE_REFUND,
+    Permission.GIVEAWAY_ARCHIVE,
 }
 
 ROLE_PERMISSIONS: dict[PanelRole, frozenset[Permission]] = {

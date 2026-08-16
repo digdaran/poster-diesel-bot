@@ -27,6 +27,8 @@ export interface Giveaway {
   tickets_reserved: number;
   is_registration_open: boolean;
   is_locked: boolean;
+  is_archived: boolean;
+  archived_at: string | null;
   opened_at: string | null;
   digital_poster_caption: string | null;
   created_at: string;

@@ -69,6 +69,7 @@ export interface GiveawaysFilter {
   q?: string;
   is_registration_open?: boolean;
   is_locked?: boolean;
+  is_archived?: boolean;
 }
 
 export const GiveawaysApi = {
@@ -89,6 +90,9 @@ export const GiveawaysApi = {
   unlock: (id: number) => apiRequest<Giveaway>(`/api/giveaways/${id}/unlock`, { method: "POST" }),
   closeRegistration: (id: number) =>
     apiRequest<Giveaway>(`/api/giveaways/${id}/close-registration`, { method: "POST" }),
+  archive: (id: number) => apiRequest<Giveaway>(`/api/giveaways/${id}/archive`, { method: "POST" }),
+  unarchive: (id: number) =>
+    apiRequest<Giveaway>(`/api/giveaways/${id}/unarchive`, { method: "POST" }),
   listPosters: (id: number) => apiRequest<GiveawayPoster[]>(`/api/giveaways/${id}/posters`),
   uploadPoster: (id: number, file: File) =>
     apiUpload<GiveawayPoster>(`/api/giveaways/${id}/posters`, file),

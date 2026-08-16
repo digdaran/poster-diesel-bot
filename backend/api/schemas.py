@@ -67,6 +67,8 @@ class GiveawayOut(BaseModel):
     tickets_reserved: int
     is_registration_open: bool
     is_locked: bool
+    is_archived: bool
+    archived_at: dt.datetime | None
     opened_at: dt.datetime | None
     digital_poster_caption: str | None
     created_at: dt.datetime

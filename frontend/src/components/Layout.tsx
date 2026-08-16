@@ -24,6 +24,7 @@ const NAV_ITEMS: NavItem[] = [
   },
   { to: "/tickets", label: "Номера", permission: "view_tickets" },
   { to: "/giveaways", label: "Коллекции", permission: "view_giveaways" },
+  { to: "/archive", label: "Архив", permission: "view_giveaways" },
   { to: "/broadcasts", label: "Рассылки", permission: "broadcast_view" },
   { to: "/reports", label: "Отчёты", permission: "reports_view" },
   { to: "/settings", label: "Настройки", permission: "settings_view" },

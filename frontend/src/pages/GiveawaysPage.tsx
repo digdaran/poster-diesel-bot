@@ -16,6 +16,7 @@ export function GiveawaysPage() {
   const { hasPermission } = useAuth();
   const canEdit = hasPermission("giveaway_edit");
   const canLock = hasPermission("giveaway_lock");
+  const canArchive = hasPermission("giveaway_archive");
   const { showToast } = useToast();
   const confirm = useConfirm();
   const [giveaways, setGiveaways] = useState<Giveaway[]>([]);
@@ -34,6 +35,8 @@ export function GiveawaysPage() {
       q: debouncedQuery || undefined,
       is_registration_open: registrationOpen ? registrationOpen === "true" : undefined,
       is_locked: isLocked ? isLocked === "true" : undefined,
+      // Архивные коллекции здесь не показываются — см. раздел «Архив».
+      is_archived: false,
     }).then(setGiveaways);
   useEffect(load, [debouncedQuery, registrationOpen, isLocked]);
 
@@ -75,21 +78,38 @@ export function GiveawaysPage() {
 
   const onLock = async (g: Giveaway) => {
     const confirmed = await confirm(
-      `Заблокировать коллекцию «${g.name}»? Продажи и выдача номеров остановятся.`,
+      `Приостановить продажи коллекции «${g.name}»? Новые покупки и ручные регистрации ` +
+        "станут недоступны. Уже созданные счета всё равно завершатся, когда деньги поступят. " +
+        "Возобновить можно в любой момент кнопкой «Возобновить продажи».",
     );
     if (!confirmed) return;
-    void runRowAction(g.id, () => GiveawaysApi.lock(g.id), "Коллекция заблокирована");
+    void runRowAction(g.id, () => GiveawaysApi.lock(g.id), "Продажи приостановлены");
   };
 
   const onCloseRegistration = async (g: Giveaway) => {
     const confirmed = await confirm(
-      `Закрыть регистрацию для «${g.name}»? Действие нельзя отменить из панели.`,
+      `Закрыть регистрацию для «${g.name}» НАВСЕГДА? Новые покупки станут недоступны, и ` +
+        "открыть регистрацию заново через панель будет нельзя — действие необратимо.",
     );
     if (!confirmed) return;
-    void runRowAction(g.id, () => GiveawaysApi.closeRegistration(g.id), "Регистрация закрыта");
+    void runRowAction(
+      g.id,
+      () => GiveawaysApi.closeRegistration(g.id),
+      "Регистрация закрыта навсегда",
+    );
   };
 
-  const columnCount = canEdit || canLock ? 9 : 8;
+  const onArchive = async (g: Giveaway) => {
+    const confirmed = await confirm(
+      `Архивировать коллекцию «${g.name}»? Она пропадёт из списка «Коллекции» и переедет в ` +
+        "«Архив». Ничего не удаляется — билеты, платежи и история остаются доступны; при " +
+        "необходимости коллекцию можно вернуть обратно из архива.",
+    );
+    if (!confirmed) return;
+    void runRowAction(g.id, () => GiveawaysApi.archive(g.id), "Коллекция перемещена в архив");
+  };
+
+  const columnCount = canEdit || canLock || canArchive ? 9 : 8;
 
   return (
     <div>
@@ -99,6 +119,9 @@ export function GiveawaysPage() {
           {showForm ? "Отмена" : "Новая коллекция"}
         </button>
       )}
+      <Link to="/archive" className="button-secondary">
+        Архив
+      </Link>
       {showForm && (
         <form onSubmit={onCreate} className="inline-form">
           <input
@@ -146,9 +169,9 @@ export function GiveawaysPage() {
           <option value="false">Закрыта</option>
         </select>
         <select value={isLocked} onChange={(e) => setIsLocked(e.target.value)}>
-          <option value="">Блокировка: любая</option>
-          <option value="true">Заблокирована</option>
-          <option value="false">Не заблокирована</option>
+          <option value="">Продажи: любые</option>
+          <option value="true">Приостановлены</option>
+          <option value="false">Активны</option>
         </select>
       </div>
       <div className="table-wrapper">
@@ -162,8 +185,8 @@ export function GiveawaysPage() {
               <th>Выдано</th>
               <th>Резерв</th>
               <th>Регистрация</th>
-              <th>Блок</th>
-              {(canEdit || canLock) && <th>Действия</th>}
+              <th>Продажи</th>
+              {(canEdit || canLock || canArchive) && <th>Действия</th>}
             </tr>
           </thead>
           <tbody>
@@ -184,11 +207,11 @@ export function GiveawaysPage() {
                   </Badge>
                 </td>
                 <td>
-                  <Badge tone={g.is_locked ? "danger" : "muted"}>
-                    {g.is_locked ? "Да" : "Нет"}
+                  <Badge tone={g.is_locked ? "danger" : "success"}>
+                    {g.is_locked ? "Приостановлены" : "Активны"}
                   </Badge>
                 </td>
-                {(canEdit || canLock) && (
+                {(canEdit || canLock || canArchive) && (
                   <td className="actions">
                     {canEdit && !g.opened_at && (
                       <button
@@ -212,11 +235,11 @@ export function GiveawaysPage() {
                             void runRowAction(
                               g.id,
                               () => GiveawaysApi.unlock(g.id),
-                              "Коллекция разблокирована",
+                              "Продажи возобновлены",
                             )
                           }
                         >
-                          Разблокировать
+                          Возобновить продажи
                         </button>
                       ) : (
                         <button
@@ -224,7 +247,7 @@ export function GiveawaysPage() {
                           disabled={pendingId === g.id}
                           onClick={() => void onLock(g)}
                         >
-                          Заблокировать
+                          Приостановить продажи
                         </button>
                       ))}
                     {canEdit && g.is_registration_open && (
@@ -233,7 +256,12 @@ export function GiveawaysPage() {
                         disabled={pendingId === g.id}
                         onClick={() => void onCloseRegistration(g)}
                       >
-                        Закрыть регистрацию
+                        Закрыть регистрацию навсегда
+                      </button>
+                    )}
+                    {canArchive && !g.is_registration_open && (
+                      <button disabled={pendingId === g.id} onClick={() => void onArchive(g)}>
+                        Архивировать
                       </button>
                     )}
                   </td>
