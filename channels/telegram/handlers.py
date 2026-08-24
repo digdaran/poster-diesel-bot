@@ -19,8 +19,7 @@ from aiogram.types import CallbackQuery, Message
 from app.core.phone import InvalidPhoneError
 from app.models.enums import ChannelType, PaymentStatus
 from app.models.giveaway import Giveaway
-from app.models.ticket import Ticket
-from app.services import participant_service, settings_service
+from app.services import participant_service, settings_service, ticket_pool_service
 from app.services import payment_service as payment_svc
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -742,8 +741,8 @@ async def on_my_tickets(message: Message, state: FSMContext) -> None:
             await message.answer("Чтобы увидеть историю покупок, поделитесь контактом.")
             return
         participant_id = binding.participant_id
-        tickets = list(
-            session.execute(select(Ticket).where(Ticket.participant_id == participant_id)).scalars()
+        tickets = ticket_pool_service.list_participant_tickets(
+            session, participant_id=participant_id
         )
 
     from app.core.config import get_settings

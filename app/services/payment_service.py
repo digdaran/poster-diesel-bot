@@ -751,15 +751,21 @@ class PendingPaymentInfo:
 def list_pending_payments(
     db: Database, settings: Settings, *, participant_id: int
 ) -> list[PendingPaymentInfo]:
-    """PENDING-платежи участника, самые новые первыми — для раздела «Мои покупки»."""
+    """PENDING-платежи участника, самые новые первыми — для раздела «Мои покупки».
+
+    Счета по коллекциям с закрытой навсегда (или заархивированной) регистрацией
+    исключаются из вывода — по решению владельца продукта, см.
+    `Giveaway.closed_forever_clause`."""
     with db.session() as session:
         payments = list(
             session.execute(
                 select(Payment)
+                .join(Payment.giveaway)
                 .options(selectinload(Payment.receipts), selectinload(Payment.giveaway))
                 .where(
                     Payment.participant_id == participant_id,
                     Payment.status == PaymentStatus.PENDING,
+                    ~Giveaway.closed_forever_clause(),
                 )
                 .order_by(Payment.id.desc())
             ).scalars()

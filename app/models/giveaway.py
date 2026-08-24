@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, Integer, String
+from sqlalchemy import Boolean, ColumnElement, Integer, String, and_, or_
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, created_at_column
@@ -66,6 +66,28 @@ class Giveaway(Base):
     def is_open_for_sale(self) -> bool:
         """Продажа/выдача возможна (п.7.8 ТЗ, без учёта блокировки конкретного участника)."""
         return self.is_registration_open and not self.is_locked and self.free_tickets_count > 0
+
+    @property
+    def is_closed_forever(self) -> bool:
+        """Регистрация закрыта навсегда — необратимо (`POST /giveaways/{id}/close-registration`
+        после того как была открыта) либо коллекция заархивирована (архивация всегда требует
+        уже закрытой регистрации, см. `archive_giveaway`). Отличается от «ещё не открыта»
+        (`opened_at is None`), которая обратима и не считается закрытием.
+
+        Используется, чтобы скрыть покупки/номерки по такой коллекции от участника («Мои
+        покупки» в боте) и от Operator в разделе «Номера» веб-панели — см. DECISIONS_LOG.md.
+        SQL-эквивалент для фильтрации в запросах — `Giveaway.closed_forever_clause()`, держать
+        оба в синхронизации при изменении."""
+        return self.is_archived or (self.opened_at is not None and not self.is_registration_open)
+
+    @staticmethod
+    def closed_forever_clause() -> ColumnElement[bool]:
+        """SQL-условие, эквивалентное `is_closed_forever`, для фильтрации в запросах
+        (`.join(Giveaway).where(Giveaway.closed_forever_clause())` / `~...` чтобы исключить)."""
+        return or_(
+            Giveaway.is_archived.is_(True),
+            and_(Giveaway.opened_at.is_not(None), Giveaway.is_registration_open.is_(False)),
+        )
 
     def format_code(self, number: int) -> str:
         return f"{self.prefix}-{number:0{TICKET_NUMBER_WIDTH}d}"

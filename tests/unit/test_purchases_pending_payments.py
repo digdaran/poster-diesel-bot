@@ -13,11 +13,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from app.core.config import Settings
 from app.core.db import Database
-from app.models.enums import ChannelType, PaymentProviderType, PaymentStatus
+from app.models.enums import ChannelType, PanelUserRole, PaymentProviderType, PaymentStatus
 from app.models.giveaway import Giveaway
+from app.models.panel_user import PanelUser
 from app.models.participant import Participant
 from app.models.payment import Payment
 from app.models.payment_receipt import PaymentReceipt
+from app.services import manual_registration_service as manual_reg_svc
 from app.services import participant_service
 from app.services import payment_service as payment_svc
 from app.services import ticket_pool_service as pool_svc
@@ -69,6 +71,159 @@ def _make_payment(
         session.add(payment)
         session.flush()
         return payment.id
+
+
+def _close_forever(db: Database, giveaway_id: int) -> None:
+    """Имитирует `POST /giveaways/{id}/close-registration` — необратимо закрывает
+    уже открытую регистрацию (в отличие от «ещё не открыта»)."""
+    with db.session() as session:
+        giveaway = session.get(Giveaway, giveaway_id)
+        assert giveaway is not None
+        giveaway.is_registration_open = False
+
+
+def _archive(db: Database, giveaway_id: int) -> None:
+    """Архивация требует уже закрытой навсегда регистрации (см. `archive_giveaway`)."""
+    with db.session() as session:
+        giveaway = session.get(Giveaway, giveaway_id)
+        assert giveaway is not None
+        assert (
+            not giveaway.is_registration_open
+        ), "архивация возможна только после close-registration"
+        giveaway.is_archived = True
+
+
+def test_list_pending_payments_excludes_closed_forever_giveaway(
+    db: Database, settings: Settings
+) -> None:
+    """«Мои покупки» не должны показывать неоплаченный счёт по коллекции, регистрация
+    в которой закрыта навсегда — по решению владельца продукта."""
+    giveaway_id = _make_giveaway(db, prefix="CLF")
+    participant_id = _make_participant(db, phone="79990000010")
+    _make_payment(
+        db,
+        participant_id=participant_id,
+        giveaway_id=giveaway_id,
+        order_id="order-clf",
+        payment_number=1,
+    )
+
+    _close_forever(db, giveaway_id)
+
+    assert payment_svc.list_pending_payments(db, settings, participant_id=participant_id) == []
+
+
+def test_list_pending_payments_excludes_archived_giveaway(db: Database, settings: Settings) -> None:
+    giveaway_id = _make_giveaway(db, prefix="ARC")
+    participant_id = _make_participant(db, phone="79990000011")
+    _make_payment(
+        db,
+        participant_id=participant_id,
+        giveaway_id=giveaway_id,
+        order_id="order-arc",
+        payment_number=1,
+    )
+
+    _close_forever(db, giveaway_id)
+    _archive(db, giveaway_id)
+
+    assert payment_svc.list_pending_payments(db, settings, participant_id=participant_id) == []
+
+
+def test_list_participant_tickets_excludes_closed_forever_and_archived_giveaways(
+    db: Database,
+) -> None:
+    open_giveaway_id = _make_giveaway(db, prefix="OPN")
+    closed_giveaway_id = _make_giveaway(db, prefix="CLF2")
+    archived_giveaway_id = _make_giveaway(db, prefix="ARC2")
+    participant_id = _make_participant(db, phone="79990000012")
+    with db.session() as session:
+        operator = PanelUser(login="op-clf", password_hash="x", role=PanelUserRole.OPERATOR)
+        session.add(operator)
+        session.flush()
+        operator_id = operator.id
+
+    def _issue_one(giveaway_id: int) -> None:
+        outcome = manual_reg_svc.create_manual_registration_safe(
+            db,
+            giveaway_id=giveaway_id,
+            participant_id=participant_id,
+            quantity=1,
+            operator_id=operator_id,
+            ttl_seconds=3600,
+        )
+        assert outcome.ok
+        manual_reg_svc.confirm_manual_registration(
+            db, manual_registration_id=outcome.manual_registration_id
+        )
+
+    _issue_one(open_giveaway_id)
+    _issue_one(closed_giveaway_id)
+    _issue_one(archived_giveaway_id)
+
+    _close_forever(db, closed_giveaway_id)
+    _close_forever(db, archived_giveaway_id)
+    _archive(db, archived_giveaway_id)
+
+    with db.session() as session:
+        tickets = pool_svc.list_participant_tickets(session, participant_id=participant_id)
+
+    assert {t.giveaway_id for t in tickets} == {open_giveaway_id}
+
+
+async def test_on_my_tickets_excludes_ticket_codes_from_closed_forever_giveaway(
+    db: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(handlers_module, "get_channel_db", lambda: db)
+    channel = _FakeChannel()
+    monkeypatch.setattr(handlers_module, "_channel", channel)
+
+    open_giveaway_id = _make_giveaway(db, prefix="MYO")
+    closed_giveaway_id = _make_giveaway(db, prefix="MYC")
+    phone = "79990000013"
+    with db.session() as session:
+        participant = Participant(phone=phone, phone_verified=True)
+        session.add(participant)
+        session.flush()
+        participant_service.confirm_channel_binding(
+            session,
+            channel=ChannelType.TELEGRAM,
+            external_user_id="302",
+            phone_raw=phone,
+            username="tg_user",
+        )
+        participant_id = participant.id
+        operator = PanelUser(login="op-my", password_hash="x", role=PanelUserRole.OPERATOR)
+        session.add(operator)
+        session.flush()
+        operator_id = operator.id
+
+    def _issue_one(giveaway_id: int) -> None:
+        outcome = manual_reg_svc.create_manual_registration_safe(
+            db,
+            giveaway_id=giveaway_id,
+            participant_id=participant_id,
+            quantity=1,
+            operator_id=operator_id,
+            ttl_seconds=3600,
+        )
+        assert outcome.ok
+        manual_reg_svc.confirm_manual_registration(
+            db, manual_registration_id=outcome.manual_registration_id
+        )
+
+    _issue_one(open_giveaway_id)
+    _issue_one(closed_giveaway_id)
+    _close_forever(db, closed_giveaway_id)
+
+    message = _FakeMessage(uid=302)
+    state = _FakeState()
+    await handlers_module.on_my_tickets(message, state)  # type: ignore[arg-type]
+
+    channel.send_ticket_codes.assert_awaited_once()
+    _, sent_codes = channel.send_ticket_codes.await_args.args
+    assert len(sent_codes) == 1
+    assert sent_codes[0].startswith("MYO-")
 
 
 def test_list_pending_payments_reports_receipt_status_and_invoice(

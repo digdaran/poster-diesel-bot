@@ -6,7 +6,8 @@ import datetime as dt
 from typing import Any
 
 from app.core.permissions import Permission
-from app.models.enums import ChannelType, TicketSource
+from app.models.enums import ChannelType, PanelUserRole, TicketSource
+from app.models.giveaway import Giveaway
 from app.models.panel_user import PanelUser
 from app.models.participant import Participant
 from app.models.payment import Payment
@@ -82,24 +83,33 @@ def list_tickets(
         stmt = stmt.join(Ticket.participant).where(
             or_(Participant.phone.like(like), Participant.full_name.like(like))
         )
+    # Operator не видит номерки по коллекциям с закрытой навсегда (или заархивированной)
+    # регистрацией — по решению владельца продукта (Administrator/Super Admin по-прежнему
+    # видят всё, для поиска исторических записей). См. Giveaway.closed_forever_clause.
+    hide_closed_forever = user.role == PanelUserRole.OPERATOR
+    if hide_closed_forever:
+        stmt = stmt.join(Ticket.giveaway).where(~Giveaway.closed_forever_clause())
     participant_load = (
         contains_eager(Ticket.participant) if participant_query else joinedload(Ticket.participant)
     )
     payment_load = (
         contains_eager(Ticket.payment) if channel is not None else joinedload(Ticket.payment)
     )
+    giveaway_load = (
+        contains_eager(Ticket.giveaway) if hide_closed_forever else joinedload(Ticket.giveaway)
+    )
 
     if export is not None:
-        eager_stmt = stmt.options(
-            participant_load, joinedload(Ticket.giveaway), payment_load
-        ).order_by(Ticket.id.desc())
+        eager_stmt = stmt.options(participant_load, giveaway_load, payment_load).order_by(
+            Ticket.id.desc()
+        )
         rows = [_to_dict(t) for t in session.execute(eager_stmt).scalars()]
         return maybe_export(rows, export, user, "tickets", permission=Permission.SALES_EXPORT)
 
     total = count_total(session, stmt)
     limit, offset = page_bounds(page=page, page_size=page_size)
     eager_stmt = (
-        stmt.options(participant_load, joinedload(Ticket.giveaway), payment_load)
+        stmt.options(participant_load, giveaway_load, payment_load)
         .order_by(Ticket.id.desc())
         .limit(limit)
         .offset(offset)

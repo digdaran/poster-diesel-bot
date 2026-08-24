@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.core.db import Database
 from app.models.base import utcnow
 from app.models.giveaway import Giveaway
+from app.models.ticket import Ticket
 from app.models.ticket_pool import TicketPool
 from app.repositories import ticket_pool_repo as repo
 
@@ -129,3 +130,17 @@ def release_manual_registration_reservation(db: Database, *, manual_registration
 def get_free_count(db: Database, *, giveaway_id: int) -> int:
     with db.session() as session:
         return repo.count_free(session, giveaway_id)
+
+
+def list_participant_tickets(session: Session, *, participant_id: int) -> list[Ticket]:
+    """Номерки участника для раздела «Мои покупки» ботов (Telegram/VK, общая точка
+    входа, чтобы не дублировать фильтр в каждом канале). Номерки по коллекциям с
+    закрытой навсегда (или заархивированной) регистрацией исключаются из вывода —
+    по решению владельца продукта, см. `Giveaway.closed_forever_clause`."""
+    return list(
+        session.execute(
+            select(Ticket)
+            .join(Ticket.giveaway)
+            .where(Ticket.participant_id == participant_id, ~Giveaway.closed_forever_clause())
+        ).scalars()
+    )

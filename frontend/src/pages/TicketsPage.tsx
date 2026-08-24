@@ -8,10 +8,14 @@ import { PaginationControls } from "../components/PaginationControls";
 import { ChannelBadges } from "../components/ChannelBadges";
 import { EmptyStateRow } from "../components/EmptyState";
 import { formatDateTime } from "../utils/format";
+import { isClosedForever } from "../utils/giveaway";
 import type { Giveaway, Ticket } from "../api/types";
 
 export function TicketsPage() {
   const { hasPermission } = useAuth();
+  // Operator (в отличие от Administrator/Super Admin) не видит закрытые навсегда/архивные
+  // коллекции — ни в фильтре, ни среди самих номерков (см. backend/api/tickets.py).
+  const hideClosedForever = !hasPermission("giveaway_edit");
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [total, setTotal] = useState(0);
   const [giveaways, setGiveaways] = useState<Giveaway[]>([]);
@@ -107,11 +111,13 @@ export function TicketsPage() {
           }}
         >
           <option value="">Все коллекции</option>
-          {giveaways.map((g) => (
-            <option key={g.id} value={g.id}>
-              {g.name}
-            </option>
-          ))}
+          {giveaways
+            .filter((g) => !hideClosedForever || !isClosedForever(g))
+            .map((g) => (
+              <option key={g.id} value={g.id}>
+                {g.name}
+              </option>
+            ))}
         </select>
         <select
           value={source}
