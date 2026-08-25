@@ -8,11 +8,21 @@ services:
       DATABASE_PATH: /data/raffle.db
       RECEIPTS_DIR: /data/receipts
       POSTER_DIR: /data/posters
+      # Backend поднимает свой собственный outbound-only TelegramChannel для
+      # проактивных уведомлений (webhook/фоновая сверка — notify_payment_outcome
+      # и др., см. app/services/notification_service.py, DECISIONS_LOG.md №24) —
+      # ему, как и channel-telegram, нужен SOCKS5 через SSH-туннель (№71), иначе
+      # он ходит в Bot API напрямую и периодически ловит TimeoutError, из-за чего
+      # часть участников не получает уведомление об успешной оплате.
+      TELEGRAM_PROXY_URL: socks5://ssh-tunnel:${SSH_TUNNEL_LOCAL_PORT:-1080}
     volumes:
       - ./data/db:/data
       - ./data/receipts:/data/receipts
       - ./data/posters:/data/posters
       - ./data/backups:/backups
+    depends_on:
+      ssh-tunnel:
+        condition: service_healthy
     networks: [internal]
     healthcheck:
       test: ["CMD", "curl", "-fs", "http://localhost:8000/health"]
