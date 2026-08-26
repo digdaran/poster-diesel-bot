@@ -110,6 +110,14 @@ class Payment(Base):
     # сбрасывается автоматически впоследствии — служит историческим следом.
     amount_mismatch: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     amount_mismatch_bank_amount: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Момент, когда расхождение было обнаружено ВПЕРВЫЕ (для этого счёта) — в
+    # отличие от `amount_mismatch`/`amount_mismatch_bank_amount`, которые
+    # перезаписываются на каждом тике сверки, это поле выставляется один раз
+    # (`bank_reconciliation_service._mark_amount_mismatch` берёт
+    # `COALESCE(amount_mismatch_since, now)`) и не двигается, пока расхождение не
+    # разрешится. Нужно, чтобы Dashboard мог посчитать "висит уже N часов" для
+    # алерта — см. app/services/dashboard_service.py.
+    amount_mismatch_since: Mapped[dt.datetime | None] = mapped_column(nullable=True)
 
     # Аннулирование уже ОПЛАЧЕННОЙ покупки супер-админом (см. DECISIONS.md,
     # DECISIONS_LOG.md №69) — не путать с cancelled_at (отмена ДО оплаты).

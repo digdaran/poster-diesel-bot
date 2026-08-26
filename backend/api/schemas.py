@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -318,6 +318,53 @@ class AuditLogOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class DashboardGiveawayCardOut(BaseModel):
+    """Карточка коллекции на Dashboard — см. app/services/dashboard_service.py."""
+
+    id: int
+    name: str
+    prefix: str
+    is_registration_open: bool
+    is_locked: bool
+    is_closed_forever: bool
+    opened_at: dt.datetime | None
+    max_tickets: int
+    tickets_issued: int
+    tickets_reserved: int
+    free_tickets_count: int
+    revenue_online: int
+    revenue_offline: int
+    revenue_total: int
+
+    model_config = {"from_attributes": True}
+
+
+class DashboardSalesPointOut(BaseModel):
+    period: str
+    count: int
+    amount: int
+
+
+class DashboardAlertOut(BaseModel):
+    """Операционный алерт Dashboard — плоская структура на все типы (см.
+    `DashboardAlert` в app/services/dashboard_service.py: какие поля заполнены,
+    зависит от `type`, текст алерта собирает фронт)."""
+
+    type: Literal["low_stock", "sales_stalled", "manual_registration_expiring", "bank_mismatch"]
+    giveaway_id: int | None = None
+    giveaway_name: str | None = None
+    free_tickets_count: int | None = None
+    max_tickets: int | None = None
+    stalled_days: int | None = None
+    manual_registration_id: int | None = None
+    minutes_until_expiry: int | None = None
+    payment_id: int | None = None
+    invoice_no: str | None = None
+    hours_open: int | None = None
+
+    model_config = {"from_attributes": True}
+
+
 class DashboardOut(BaseModel):
     participants_count: int
     tickets_issued_count: int
@@ -325,3 +372,6 @@ class DashboardOut(BaseModel):
     revenue_offline: int
     revenue_total: int
     giveaways_count: int
+    giveaways: list[DashboardGiveawayCardOut]
+    sales_trend: list[DashboardSalesPointOut]
+    alerts: list[DashboardAlertOut]

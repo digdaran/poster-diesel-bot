@@ -210,7 +210,7 @@ def reconcile(
                             # тем же полем, что и недоплата (см. DECISIONS_LOG.md
                             # №53); возврат разницы — вне объёма ТЗ §21.
                             _mark_amount_mismatch(
-                                db, payment_id=payment.id, bank_amount=total_received
+                                db, payment_id=payment.id, bank_amount=total_received, now=now
                             )
                         else:
                             # Точная сумма — явно СБРАСЫВАЕМ флаг расхождения: на
@@ -235,7 +235,7 @@ def reconcile(
                 actual_amount=total_received,
                 entries_count=len(matching_entries),
             )
-            _mark_amount_mismatch(db, payment_id=payment.id, bank_amount=total_received)
+            _mark_amount_mismatch(db, payment_id=payment.id, bank_amount=total_received, now=now)
             # Деньги по этому счёту фактически идут (просто пока недостаточно) — не
             # даём TTL молча похоронить его как FAILED, пока сумма не наберётся или
             # расхождение не разберёт оператор вручную в панели (см. DECISIONS_LOG.md №39).
@@ -297,13 +297,23 @@ def reconcile(
     return outcomes
 
 
-def _mark_amount_mismatch(db: Database, *, payment_id: int, bank_amount: int) -> None:
+def _mark_amount_mismatch(
+    db: Database, *, payment_id: int, bank_amount: int, now: dt.datetime
+) -> None:
     try:
         with db.session() as session:
             session.execute(
                 update(Payment)
                 .where(Payment.id == payment_id)
-                .values(amount_mismatch=True, amount_mismatch_bank_amount=bank_amount)
+                .values(
+                    amount_mismatch=True,
+                    amount_mismatch_bank_amount=bank_amount,
+                    # COALESCE — выставляем только если ещё не стоит, чтобы дата не
+                    # "уезжала" вперёд на каждом следующем тике одного и того же
+                    # затянувшегося расхождения (см. amount_mismatch_since в модели
+                    # и алерт Dashboard, который считает от неё длительность).
+                    amount_mismatch_since=func.coalesce(Payment.amount_mismatch_since, now),
+                )
             )
     except Exception:
         logger.exception("bank_statement_mismatch_persist_failed", payment_id=payment_id)
@@ -315,7 +325,11 @@ def _clear_amount_mismatch(db: Database, *, payment_id: int) -> None:
             session.execute(
                 update(Payment)
                 .where(Payment.id == payment_id)
-                .values(amount_mismatch=False, amount_mismatch_bank_amount=None)
+                .values(
+                    amount_mismatch=False,
+                    amount_mismatch_bank_amount=None,
+                    amount_mismatch_since=None,
+                )
             )
     except Exception:
         logger.exception("bank_statement_mismatch_clear_failed", payment_id=payment_id)

@@ -20,6 +20,8 @@
   --color-info: #2563eb;
   --color-info-bg: #dbeafe;
   --color-muted-bg: #e5e7eb;
+  --color-warning: #b45309;
+  --color-warning-bg: #fef3c7;
 
   --color-disabled: #9ca3af;
 
@@ -48,6 +50,8 @@
     --color-info: #60a5fa;
     --color-info-bg: rgba(37, 99, 235, 0.18);
     --color-muted-bg: #2e323d;
+    --color-warning: #fbbf24;
+    --color-warning-bg: rgba(217, 119, 6, 0.2);
 
     --color-disabled: #4b5563;
     --overlay-bg: rgba(0, 0, 0, 0.6);
@@ -71,6 +75,8 @@
   --color-info: #60a5fa;
   --color-info-bg: rgba(37, 99, 235, 0.18);
   --color-muted-bg: #2e323d;
+  --color-warning: #fbbf24;
+  --color-warning-bg: rgba(217, 119, 6, 0.2);
 
   --color-disabled: #4b5563;
   --overlay-bg: rgba(0, 0, 0, 0.6);
@@ -93,6 +99,8 @@
   --color-info: #2563eb;
   --color-info-bg: #dbeafe;
   --color-muted-bg: #e5e7eb;
+  --color-warning: #b45309;
+  --color-warning-bg: #fef3c7;
 
   --color-disabled: #9ca3af;
   --overlay-bg: rgba(15, 17, 23, 0.5);
@@ -644,6 +652,11 @@ section {
 .badge-muted {
   background: var(--color-muted-bg);
   color: var(--color-text-muted);
+}
+
+.badge-warning {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
 }
 
 /* Статус фоновой сверки банковской выписки (панель «Продажи On-Line») */
@@ -1202,4 +1215,99 @@ section {
 .segmented button.active {
   background: var(--color-primary);
   color: #fff;
+}
+
+/* Dashboard — операционные алерты, карточки коллекций (см. DashboardPage.tsx) */
+
+.dashboard-alerts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.dashboard-alert {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--color-warning-bg);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--color-text);
+  text-decoration: none;
+}
+
+.dashboard-alert:hover {
+  filter: brightness(0.97);
+}
+
+.dashboard-alert.is-danger {
+  background: var(--color-danger-bg);
+}
+
+.dashboard-alert-icon {
+  flex-shrink: 0;
+}
+
+.giveaway-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.giveaway-card {
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-decoration: none;
+  color: var(--color-text);
+}
+
+.giveaway-card:hover {
+  filter: brightness(0.98);
+}
+
+.giveaway-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.giveaway-card-name {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.giveaway-card-meta {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.giveaway-card-revenue {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.giveaway-card-progress-track {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-surface-alt);
+  overflow: hidden;
+}
+
+.giveaway-card-progress-fill {
+  height: 100%;
+  background: var(--color-primary);
+  border-radius: 999px;
+}
+
+.giveaway-card-progress-fill.is-low-stock {
+  background: var(--color-warning);
 }

@@ -271,7 +271,8 @@ def test_reconcile_flags_amount_mismatch_instead_of_finalizing(
     settings._fake_entries = entries  # type: ignore[attr-defined]
     monkeypatch.setattr(svc, "TBankStatementProvider", _FakeStatementProvider)
 
-    outcomes = svc.reconcile(db, settings)
+    now = utcnow()
+    outcomes = svc.reconcile(db, settings, now=now)
 
     assert outcomes == []
     with db.session() as session:
@@ -281,6 +282,44 @@ def test_reconcile_flags_amount_mismatch_instead_of_finalizing(
         assert payment.status == PaymentStatus.PENDING
         assert payment.amount_mismatch is True
         assert payment.amount_mismatch_bank_amount == wrong_amount
+        # Момент ПЕРВОГО обнаружения — для алерта Dashboard "расхождение висит
+        # дольше N часов" (см. app/services/dashboard_service.py).
+        assert payment.amount_mismatch_since == now
+
+
+def test_reconcile_keeps_first_amount_mismatch_since_across_ticks(
+    db: Database, settings: Settings, monkeypatch
+) -> None:
+    """`amount_mismatch_since` должен зафиксироваться на МОМЕНТЕ ПЕРВОГО тика,
+    обнаружившего расхождение, и не "уезжать" вперёд на каждом следующем тике,
+    пока расхождение остаётся тем же самым (иначе алерт Dashboard никогда не
+    увидит его как "висящее достаточно долго")."""
+    gid = make_giveaway(db)
+    pid = make_participant(db)
+    outcome = make_pending_payment(db, giveaway_id=gid, participant_id=pid, quantity=1)
+    assert outcome.ok
+    assert outcome.invoice_no is not None
+    monkeypatch.setattr(svc, "TBankStatementProvider", _FakeStatementProvider)
+
+    settings._fake_entries = [  # type: ignore[attr-defined]
+        BankStatementEntry(
+            external_id="op-1",
+            amount=(outcome.amount or 0) - 1,
+            purpose=f"Оплата по счету № {outcome.invoice_no} от 22.07.2026",
+            operation_date=utcnow(),
+        )
+    ]
+    first_tick = utcnow()
+    svc.reconcile(db, settings, now=first_tick)
+    second_tick = first_tick + dt.timedelta(hours=2)
+    svc.reconcile(db, settings, now=second_tick)
+
+    with db.session() as session:
+        payment = session.execute(
+            select(Payment).where(Payment.id == outcome.payment_id)
+        ).scalar_one()
+        assert payment.amount_mismatch is True
+        assert payment.amount_mismatch_since == first_tick
 
 
 def test_reconcile_does_not_ttl_expire_payment_with_active_amount_mismatch(
@@ -380,6 +419,7 @@ def test_reconcile_sums_two_partial_payments_to_close_invoice(
         assert payment.status == PaymentStatus.SUCCEEDED
         assert payment.amount_mismatch is False
         assert payment.amount_mismatch_bank_amount is None
+        assert payment.amount_mismatch_since is None
 
 
 def test_reconcile_clears_stale_mismatch_flag_once_sum_matches_exactly(
@@ -441,6 +481,7 @@ def test_reconcile_clears_stale_mismatch_flag_once_sum_matches_exactly(
         assert payment.status == PaymentStatus.SUCCEEDED
         assert payment.amount_mismatch is False
         assert payment.amount_mismatch_bank_amount is None
+        assert payment.amount_mismatch_since is None
 
 
 def test_reconcile_reports_running_total_while_sum_still_short(

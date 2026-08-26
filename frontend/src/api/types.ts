@@ -194,6 +194,48 @@ export interface Broadcast {
   sent_at: string | null;
 }
 
+export interface DashboardGiveawayCard {
+  id: number;
+  name: string;
+  prefix: string;
+  is_registration_open: boolean;
+  is_locked: boolean;
+  is_closed_forever: boolean;
+  opened_at: string | null;
+  max_tickets: number;
+  tickets_issued: number;
+  tickets_reserved: number;
+  free_tickets_count: number;
+  revenue_online: number;
+  revenue_offline: number;
+  revenue_total: number;
+}
+
+export interface DashboardSalesPoint {
+  period: string;
+  count: number;
+  amount: number;
+}
+
+export type DashboardAlertType =
+  "low_stock" | "sales_stalled" | "manual_registration_expiring" | "bank_mismatch";
+
+// Плоская структура на все типы алертов — какие поля заполнены, зависит от
+// `type` (см. DashboardAlert в app/services/dashboard_service.py).
+export interface DashboardAlert {
+  type: DashboardAlertType;
+  giveaway_id: number | null;
+  giveaway_name: string | null;
+  free_tickets_count: number | null;
+  max_tickets: number | null;
+  stalled_days: number | null;
+  manual_registration_id: number | null;
+  minutes_until_expiry: number | null;
+  payment_id: number | null;
+  invoice_no: string | null;
+  hours_open: number | null;
+}
+
 export interface Dashboard {
   participants_count: number;
   tickets_issued_count: number;
@@ -201,6 +243,9 @@ export interface Dashboard {
   revenue_offline: number;
   revenue_total: number;
   giveaways_count: number;
+  giveaways: DashboardGiveawayCard[];
+  sales_trend: DashboardSalesPoint[];
+  alerts: DashboardAlert[];
 }
 
 export interface RevenueByGiveawayRow {

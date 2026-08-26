@@ -1,0 +1,383 @@
+"""Тесты данных для раздела «Dashboard» (карточки коллекций + операционные
+алерты), см. app/services/dashboard_service.py."""
+
+from __future__ import annotations
+
+import datetime as dt
+import itertools
+
+from app.core.config import Settings
+from app.models.base import utcnow
+from app.models.enums import (
+    ManualRegistrationPaymentMethod,
+    ManualRegistrationStatus,
+    PanelUserRole,
+    PaymentProviderType,
+    PaymentStatus,
+)
+from app.models.giveaway import Giveaway
+from app.models.manual_registration import ManualRegistration
+from app.models.panel_user import PanelUser
+from app.models.participant import Participant
+from app.models.payment import Payment
+from app.services import dashboard_service as svc
+from sqlalchemy.orm import Session
+
+_order_id_counter = itertools.count()
+
+
+def make_giveaway(
+    session: Session,
+    *,
+    prefix: str = "DASH",
+    max_tickets: int = 100,
+    tickets_issued: int = 0,
+    tickets_reserved: int = 0,
+    is_registration_open: bool = False,
+    is_locked: bool = False,
+    is_archived: bool = False,
+    opened_at: dt.datetime | None = None,
+) -> Giveaway:
+    g = Giveaway(
+        name=f"Test {prefix}",
+        prefix=prefix,
+        ticket_price=10000,
+        max_tickets=max_tickets,
+        tickets_issued=tickets_issued,
+        tickets_reserved=tickets_reserved,
+        is_registration_open=is_registration_open,
+        is_locked=is_locked,
+        is_archived=is_archived,
+        opened_at=opened_at,
+    )
+    session.add(g)
+    session.flush()
+    return g
+
+
+def make_participant(session: Session, phone: str = "79990009999") -> Participant:
+    p = Participant(phone=phone)
+    session.add(p)
+    session.flush()
+    return p
+
+
+def make_operator(session: Session, login: str = "dash_op") -> PanelUser:
+    u = PanelUser(login=login, password_hash="x", role=PanelUserRole.OPERATOR)
+    session.add(u)
+    session.flush()
+    return u
+
+
+def make_payment(
+    session: Session,
+    *,
+    giveaway_id: int,
+    participant_id: int,
+    status: PaymentStatus = PaymentStatus.SUCCEEDED,
+    amount: int = 10000,
+    confirmed_at: dt.datetime | None = None,
+    amount_mismatch: bool = False,
+    amount_mismatch_since: dt.datetime | None = None,
+    payment_number: int | None = None,
+) -> Payment:
+    payment = Payment(
+        order_id=f"dash-order-{next(_order_id_counter)}",
+        participant_id=participant_id,
+        giveaway_id=giveaway_id,
+        provider=PaymentProviderType.REQUISITES_QR,
+        amount=amount,
+        quantity=1,
+        status=status,
+        confirmed_at=confirmed_at,
+        amount_mismatch=amount_mismatch,
+        amount_mismatch_since=amount_mismatch_since,
+        payment_number=payment_number,
+    )
+    session.add(payment)
+    session.flush()
+    return payment
+
+
+def make_manual_registration(
+    session: Session,
+    *,
+    giveaway_id: int,
+    participant_id: int,
+    operator_id: int,
+    quantity: int = 1,
+    status: ManualRegistrationStatus = ManualRegistrationStatus.CONFIRMED,
+    confirmed_at: dt.datetime | None = None,
+    created_at: dt.datetime | None = None,
+    payment_method: ManualRegistrationPaymentMethod = ManualRegistrationPaymentMethod.CASH,
+) -> ManualRegistration:
+    reg = ManualRegistration(
+        participant_id=participant_id,
+        giveaway_id=giveaway_id,
+        quantity=quantity,
+        status=status,
+        operator_id=operator_id,
+        confirmed_at=confirmed_at,
+        payment_method=payment_method,
+    )
+    if created_at is not None:
+        reg.created_at = created_at
+    session.add(reg)
+    session.flush()
+    return reg
+
+
+# --- giveaway_cards ---------------------------------------------------------
+
+
+def test_giveaway_cards_aggregates_revenue_and_ticket_counts(session: Session) -> None:
+    g = make_giveaway(
+        session,
+        prefix="CARD1",
+        max_tickets=50,
+        tickets_issued=10,
+        tickets_reserved=2,
+        is_registration_open=True,
+        opened_at=utcnow(),
+    )
+    p = make_participant(session)
+    op = make_operator(session)
+    make_payment(session, giveaway_id=g.id, participant_id=p.id, amount=5000)
+    make_payment(
+        session, giveaway_id=g.id, participant_id=p.id, amount=99999, status=PaymentStatus.FAILED
+    )
+    make_manual_registration(session, giveaway_id=g.id, participant_id=p.id, operator_id=op.id)
+    make_manual_registration(
+        session,
+        giveaway_id=g.id,
+        participant_id=p.id,
+        operator_id=op.id,
+        status=ManualRegistrationStatus.PENDING,
+        quantity=100,
+    )
+
+    cards = {c.id: c for c in svc.giveaway_cards(session)}
+    card = cards[g.id]
+    assert card.revenue_online == 5000
+    assert card.revenue_offline == 10000  # только CONFIRMED (1 * ticket_price)
+    assert card.revenue_total == 15000
+    assert card.max_tickets == 50
+    assert card.tickets_issued == 10
+    assert card.tickets_reserved == 2
+    assert card.free_tickets_count == 38
+
+
+def test_giveaway_cards_excludes_archived(session: Session) -> None:
+    make_giveaway(session, prefix="ARCH", is_archived=True)
+    visible = make_giveaway(session, prefix="VIS")
+
+    cards = svc.giveaway_cards(session)
+    assert [c.id for c in cards] == [visible.id]
+
+
+def test_giveaway_cards_sorted_by_opened_at_desc_nulls_last(session: Session) -> None:
+    older = make_giveaway(
+        session, prefix="OLD", is_registration_open=True, opened_at=utcnow() - dt.timedelta(days=5)
+    )
+    newer = make_giveaway(
+        session, prefix="NEW", is_registration_open=True, opened_at=utcnow() - dt.timedelta(days=1)
+    )
+    never_opened = make_giveaway(session, prefix="NEVER", opened_at=None)
+
+    ids = [c.id for c in svc.giveaway_cards(session)]
+    assert ids == [newer.id, older.id, never_opened.id]
+
+
+# --- compute_alerts: low_stock ---------------------------------------------
+
+
+def test_low_stock_alert_fires_at_or_below_threshold(session: Session, settings: Settings) -> None:
+    # 5 свободных из 100 = ровно порог (5%) — должно сработать (граница включительна).
+    make_giveaway(
+        session,
+        prefix="LOW",
+        max_tickets=100,
+        tickets_issued=95,
+        is_registration_open=True,
+        opened_at=utcnow(),
+    )
+    alerts = [a for a in svc.compute_alerts(session, settings) if a.type == "low_stock"]
+    assert len(alerts) == 1
+    assert alerts[0].free_tickets_count == 5
+    assert alerts[0].max_tickets == 100
+
+
+def test_low_stock_alert_does_not_fire_above_threshold(
+    session: Session, settings: Settings
+) -> None:
+    make_giveaway(
+        session,
+        prefix="OK",
+        max_tickets=100,
+        tickets_issued=50,
+        is_registration_open=True,
+        opened_at=utcnow(),
+    )
+    alerts = [a for a in svc.compute_alerts(session, settings) if a.type == "low_stock"]
+    assert alerts == []
+
+
+# --- compute_alerts: sales_stalled ------------------------------------------
+
+
+def test_sales_stalled_alert_fires_when_never_sold_and_opened_long_ago(
+    session: Session, settings: Settings
+) -> None:
+    old_open = utcnow() - dt.timedelta(days=svc.SALES_STALLED_DAYS + 1)
+    make_giveaway(
+        session, prefix="STALL", max_tickets=100, is_registration_open=True, opened_at=old_open
+    )
+    alerts = [a for a in svc.compute_alerts(session, settings) if a.type == "sales_stalled"]
+    assert len(alerts) == 1
+    assert alerts[0].stalled_days == svc.SALES_STALLED_DAYS + 1
+
+
+def test_sales_stalled_alert_does_not_fire_with_recent_sale(
+    session: Session, settings: Settings
+) -> None:
+    old_open = utcnow() - dt.timedelta(days=svc.SALES_STALLED_DAYS + 1)
+    g = make_giveaway(
+        session, prefix="RECENT", max_tickets=100, is_registration_open=True, opened_at=old_open
+    )
+    p = make_participant(session)
+    make_payment(session, giveaway_id=g.id, participant_id=p.id, confirmed_at=utcnow())
+
+    alerts = [a for a in svc.compute_alerts(session, settings) if a.type == "sales_stalled"]
+    assert alerts == []
+
+
+def test_sales_stalled_alert_ignores_locked_or_sold_out_giveaway(
+    session: Session, settings: Settings
+) -> None:
+    old_open = utcnow() - dt.timedelta(days=svc.SALES_STALLED_DAYS + 1)
+    make_giveaway(
+        session,
+        prefix="PAUSED",
+        max_tickets=100,
+        is_registration_open=True,
+        is_locked=True,
+        opened_at=old_open,
+    )
+    make_giveaway(
+        session,
+        prefix="SOLDOUT",
+        max_tickets=100,
+        tickets_issued=100,
+        is_registration_open=True,
+        opened_at=old_open,
+    )
+    alerts = [a for a in svc.compute_alerts(session, settings) if a.type == "sales_stalled"]
+    assert alerts == []
+
+
+# --- compute_alerts: manual_registration_expiring ---------------------------
+
+
+def test_manual_registration_expiring_alert_fires_past_warn_threshold(
+    session: Session, settings: Settings
+) -> None:
+    g = make_giveaway(session, prefix="MANEXP", is_registration_open=True, opened_at=utcnow())
+    p = make_participant(session)
+    op = make_operator(session)
+    ttl = settings.manual_reservation_ttl_sec
+    created_at = utcnow() - dt.timedelta(
+        seconds=ttl * svc.MANUAL_REGISTRATION_EXPIRY_WARN_RATIO + 60
+    )
+    reg = make_manual_registration(
+        session,
+        giveaway_id=g.id,
+        participant_id=p.id,
+        operator_id=op.id,
+        status=ManualRegistrationStatus.PENDING,
+        created_at=created_at,
+    )
+
+    alerts = [
+        a for a in svc.compute_alerts(session, settings) if a.type == "manual_registration_expiring"
+    ]
+    assert len(alerts) == 1
+    assert alerts[0].manual_registration_id == reg.id
+    # created_at — на 60 сек ЗА порогом (45 мин из 60-минутного TTL), значит до
+    # автоотмены остаётся порядка 15 минут (плюс-минус время выполнения теста).
+    assert alerts[0].minutes_until_expiry is not None
+    assert 0 < alerts[0].minutes_until_expiry <= 15
+
+
+def test_manual_registration_expiring_alert_does_not_fire_for_fresh_registration(
+    session: Session, settings: Settings
+) -> None:
+    g = make_giveaway(session, prefix="MANFRESH", is_registration_open=True, opened_at=utcnow())
+    p = make_participant(session)
+    op = make_operator(session)
+    make_manual_registration(
+        session,
+        giveaway_id=g.id,
+        participant_id=p.id,
+        operator_id=op.id,
+        status=ManualRegistrationStatus.PENDING,
+        created_at=utcnow(),
+    )
+
+    alerts = [
+        a for a in svc.compute_alerts(session, settings) if a.type == "manual_registration_expiring"
+    ]
+    assert alerts == []
+
+
+# --- compute_alerts: bank_mismatch ------------------------------------------
+
+
+def test_bank_mismatch_alert_fires_past_threshold(session: Session, settings: Settings) -> None:
+    g = make_giveaway(session, prefix="BANKM", is_registration_open=True, opened_at=utcnow())
+    p = make_participant(session)
+    mismatch_since = utcnow() - dt.timedelta(hours=svc.BANK_MISMATCH_ALERT_HOURS + 1)
+    payment = make_payment(
+        session,
+        giveaway_id=g.id,
+        participant_id=p.id,
+        status=PaymentStatus.PENDING,
+        amount_mismatch=True,
+        amount_mismatch_since=mismatch_since,
+        payment_number=1,
+    )
+
+    alerts = [a for a in svc.compute_alerts(session, settings) if a.type == "bank_mismatch"]
+    assert len(alerts) == 1
+    assert alerts[0].payment_id == payment.id
+    assert alerts[0].invoice_no == g.format_invoice_number(1)
+    assert alerts[0].hours_open == svc.BANK_MISMATCH_ALERT_HOURS + 1
+
+
+def test_bank_mismatch_alert_does_not_fire_below_threshold_or_when_resolved(
+    session: Session, settings: Settings
+) -> None:
+    g = make_giveaway(session, prefix="BANKOK", is_registration_open=True, opened_at=utcnow())
+    p = make_participant(session)
+    # Расхождение только что обнаружено — ещё не пора беспокоиться.
+    make_payment(
+        session,
+        giveaway_id=g.id,
+        participant_id=p.id,
+        status=PaymentStatus.PENDING,
+        amount_mismatch=True,
+        amount_mismatch_since=utcnow(),
+        payment_number=1,
+    )
+    # Уже закрыт (переплата) — не должен считаться висящим расхождением.
+    make_payment(
+        session,
+        giveaway_id=g.id,
+        participant_id=p.id,
+        status=PaymentStatus.SUCCEEDED,
+        amount_mismatch=True,
+        amount_mismatch_since=utcnow() - dt.timedelta(hours=svc.BANK_MISMATCH_ALERT_HOURS + 1),
+        payment_number=2,
+    )
+
+    alerts = [a for a in svc.compute_alerts(session, settings) if a.type == "bank_mismatch"]
+    assert alerts == []

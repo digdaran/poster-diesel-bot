@@ -76,6 +76,18 @@ def test_full_manual_sale_flow(api_client: TestClient) -> None:
     assert dashboard["revenue_online"] == 0
     assert dashboard["revenue_total"] == 3 * 15000
 
+    # Карточка коллекции на Dashboard (см. app/services/dashboard_service.py) —
+    # выручка и остаток номерков должны совпадать с только что проведённой продажей.
+    card = next(g for g in dashboard["giveaways"] if g["id"] == giveaway_id)
+    assert card["name"] == "Осенний розыгрыш"
+    assert card["revenue_offline"] == 3 * 15000
+    assert card["tickets_issued"] == 3
+    assert card["free_tickets_count"] == 17
+    assert card["is_registration_open"] is True
+    assert card["is_closed_forever"] is False
+    assert isinstance(dashboard["sales_trend"], list)
+    assert isinstance(dashboard["alerts"], list)
+
     resp = api_client.get(f"/api/giveaways/{giveaway_id}", headers=headers)
     assert resp.json()["tickets_issued"] == 3
 
