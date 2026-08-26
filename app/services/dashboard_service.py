@@ -24,6 +24,7 @@ from app.models.base import utcnow
 from app.models.enums import ManualRegistrationStatus, PaymentStatus
 from app.models.giveaway import Giveaway
 from app.models.manual_registration import ManualRegistration
+from app.models.participant import Participant
 from app.models.payment import Payment
 
 # "Тираж почти распродан" — доля свободных номерков от общего лимита, начиная с
@@ -77,6 +78,18 @@ class GiveawayCard:
     # Выручка (онлайн + офлайн) по последним SPARKLINE_DAYS дням, от старого к
     # новому, включая сегодняшний неполный день — см. _daily_revenue_by_giveaway.
     sparkline: list[int]
+    # Средний чек в разрезе розыгрыша — "total" считает КАЖДУЮ продажу (онлайн
+    # всех каналов + офлайн) одним "чеком" (иначе, чем глобальный KPI на
+    # Dashboard, который намеренно только онлайн — см. report_service.
+    # financial_summary); офлайн — отдельный "канал" по прямому запросу.
+    average_check_total: int
+    average_check_telegram: int
+    average_check_vk: int
+    average_check_offline: int
+    # Для "% оплаченных счетов" на фронте (raw-числа, а не готовый процент —
+    # фронт сам решает, как округлять/подписывать).
+    online_payments_total: int
+    online_payments_succeeded: int
 
 
 def _daily_revenue_by_giveaway(session: Session, giveaway_ids: list[int]) -> dict[int, list[int]]:
@@ -135,6 +148,93 @@ def _daily_revenue_by_giveaway(session: Session, giveaway_ids: list[int]) -> dic
     return result
 
 
+@dataclass(frozen=True)
+class _ChecksSummary:
+    average_check_total: int
+    average_check_telegram: int
+    average_check_vk: int
+    average_check_offline: int
+    online_payments_total: int
+    online_payments_succeeded: int
+
+
+def _avg(amount: int, count: int) -> int:
+    return amount // count if count else 0
+
+
+def _checks_summary_by_giveaway(
+    session: Session, giveaway_ids: list[int], revenue_total_by_giveaway: dict[int, int]
+) -> dict[int, _ChecksSummary]:
+    """Средний чек (общий + по каналу связи, включая офлайн отдельным
+    "каналом") и статистика оплаты онлайн-счетов — на карточку коллекции
+    (см. GiveawayCard). "Общий" чек — КАЖДАЯ продажа (онлайн любого канала +
+    подтверждённая офлайн-регистрация) как один чек, поэтому считается не из
+    online_by_giveaway/offline_qty_by_giveaway (там суммы), а заново по
+    количеству сделок."""
+    if not giveaway_ids:
+        return {}
+
+    channel_stmt = (
+        select(
+            Payment.giveaway_id,
+            Payment.channel,
+            func.count(Payment.id),
+            func.coalesce(func.sum(Payment.amount), 0),
+        )
+        .where(Payment.status == PaymentStatus.SUCCEEDED, Payment.giveaway_id.in_(giveaway_ids))
+        .group_by(Payment.giveaway_id, Payment.channel)
+    )
+    channel_rows: dict[int, dict[str, tuple[int, int]]] = {}
+    online_succeeded_count: dict[int, int] = {}
+    for gid, channel, count, amount in session.execute(channel_stmt).all():
+        key = channel.value if channel else "unknown"
+        channel_rows.setdefault(gid, {})[key] = (count, amount)
+        online_succeeded_count[gid] = online_succeeded_count.get(gid, 0) + count
+
+    online_total_stmt = (
+        select(Payment.giveaway_id, func.count(Payment.id))
+        .where(Payment.giveaway_id.in_(giveaway_ids))
+        .group_by(Payment.giveaway_id)
+    )
+    online_total_count = dict(session.execute(online_total_stmt).tuples().all())
+
+    offline_stmt = (
+        select(
+            ManualRegistration.giveaway_id,
+            func.count(ManualRegistration.id),
+            func.coalesce(func.sum(ManualRegistration.quantity), 0),
+            Giveaway.ticket_price,
+        )
+        .join(Giveaway, Giveaway.id == ManualRegistration.giveaway_id)
+        .where(
+            ManualRegistration.status == ManualRegistrationStatus.CONFIRMED,
+            ManualRegistration.giveaway_id.in_(giveaway_ids),
+        )
+        .group_by(ManualRegistration.giveaway_id, Giveaway.ticket_price)
+    )
+    offline_by_giveaway: dict[int, tuple[int, int]] = {}
+    for gid, count, qty_sum, ticket_price in session.execute(offline_stmt).all():
+        offline_by_giveaway[gid] = (count, qty_sum * ticket_price)
+
+    result: dict[int, _ChecksSummary] = {}
+    for gid in giveaway_ids:
+        channels = channel_rows.get(gid, {})
+        tg_count, tg_amount = channels.get("telegram", (0, 0))
+        vk_count, vk_amount = channels.get("vk", (0, 0))
+        off_count, off_amount = offline_by_giveaway.get(gid, (0, 0))
+        succeeded = online_succeeded_count.get(gid, 0)
+        total_count = succeeded + off_count
+        result[gid] = _ChecksSummary(
+            average_check_total=_avg(revenue_total_by_giveaway.get(gid, 0), total_count),
+            average_check_telegram=_avg(tg_amount, tg_count),
+            average_check_vk=_avg(vk_amount, vk_count),
+            average_check_offline=_avg(off_amount, off_count),
+            online_payments_total=online_total_count.get(gid, 0),
+            online_payments_succeeded=succeeded,
+        )
+    return result
+
+
 def giveaway_cards(session: Session) -> list[GiveawayCard]:
     """Карточка на каждую коллекцию, включая заархивированные — тумблер "только
     открытые" / "все" на фронте (`DashboardPage.tsx`) сам решает, показывать ли
@@ -179,10 +279,20 @@ def giveaway_cards(session: Session) -> list[GiveawayCard]:
     offline_qty_by_giveaway = dict(session.execute(offline_stmt).tuples().all())
     sparkline_by_giveaway = _daily_revenue_by_giveaway(session, giveaway_ids)
 
+    revenue_total_by_giveaway = {
+        g.id: online_by_giveaway.get(g.id, 0)
+        + offline_qty_by_giveaway.get(g.id, 0) * g.ticket_price
+        for g in giveaways
+    }
+    checks_by_giveaway = _checks_summary_by_giveaway(
+        session, giveaway_ids, revenue_total_by_giveaway
+    )
+
     cards = []
     for g in giveaways:
         revenue_online = online_by_giveaway.get(g.id, 0)
         revenue_offline = offline_qty_by_giveaway.get(g.id, 0) * g.ticket_price
+        checks = checks_by_giveaway[g.id]
         cards.append(
             GiveawayCard(
                 id=g.id,
@@ -201,6 +311,12 @@ def giveaway_cards(session: Session) -> list[GiveawayCard]:
                 revenue_offline=revenue_offline,
                 revenue_total=revenue_online + revenue_offline,
                 sparkline=sparkline_by_giveaway.get(g.id, [0] * SPARKLINE_DAYS),
+                average_check_total=checks.average_check_total,
+                average_check_telegram=checks.average_check_telegram,
+                average_check_vk=checks.average_check_vk,
+                average_check_offline=checks.average_check_offline,
+                online_payments_total=checks.online_payments_total,
+                online_payments_succeeded=checks.online_payments_succeeded,
             )
         )
     return cards
@@ -384,3 +500,168 @@ def compute_alerts(
         *_manual_registration_expiring_alerts(session, settings, now=now),
         *_bank_mismatch_alerts(session, now=now),
     ]
+
+
+@dataclass(frozen=True)
+class SalesVelocity:
+    tickets_count: int
+    revenue: int
+
+
+def sales_velocity_last_hour(session: Session, *, now: dt.datetime | None = None) -> SalesVelocity:
+    """Экземпляров выдано и выручка (онлайн + офлайн) за последний час по всем
+    коллекциям — операционный пульс на Dashboard. Не заменяет «Мониторинг»
+    (там построчная живая лента) — это один агрегированный срез."""
+    now = now or utcnow()
+    cutoff = now - dt.timedelta(hours=1)
+
+    online_qty, online_amount = session.execute(
+        select(
+            func.coalesce(func.sum(Payment.quantity), 0), func.coalesce(func.sum(Payment.amount), 0)
+        ).where(Payment.status == PaymentStatus.SUCCEEDED, Payment.confirmed_at >= cutoff)
+    ).one()
+
+    offline_stmt = (
+        select(
+            func.coalesce(func.sum(ManualRegistration.quantity), 0),
+            Giveaway.ticket_price,
+        )
+        .join(Giveaway, Giveaway.id == ManualRegistration.giveaway_id)
+        .where(
+            ManualRegistration.status == ManualRegistrationStatus.CONFIRMED,
+            ManualRegistration.confirmed_at >= cutoff,
+        )
+        .group_by(ManualRegistration.giveaway_id, Giveaway.ticket_price)
+    )
+    offline_qty_total = 0
+    offline_amount_total = 0
+    for qty, ticket_price in session.execute(offline_stmt).all():
+        offline_qty_total += qty
+        offline_amount_total += qty * ticket_price
+
+    return SalesVelocity(
+        tickets_count=online_qty + offline_qty_total,
+        revenue=online_amount + offline_amount_total,
+    )
+
+
+@dataclass(frozen=True)
+class TopParticipant:
+    participant_id: int
+    phone: str
+    full_name: str | None
+    revenue_total: int
+    tickets_count: int
+
+
+def top_participants_by_revenue(session: Session, *, limit: int = 5) -> list[TopParticipant]:
+    """Топ участников по суммарным покупкам (онлайн + офлайн, за всё время,
+    по всем коллекциям) — выявление VIP/повторных покупателей."""
+    combined: dict[int, list[int]] = {}  # participant_id -> [amount, tickets_count]
+
+    online_stmt = (
+        select(
+            Payment.participant_id,
+            func.coalesce(func.sum(Payment.amount), 0),
+            func.coalesce(func.sum(Payment.quantity), 0),
+        )
+        .where(Payment.status == PaymentStatus.SUCCEEDED)
+        .group_by(Payment.participant_id)
+    )
+    for pid, amount, qty in session.execute(online_stmt).all():
+        combined.setdefault(pid, [0, 0])
+        combined[pid][0] += amount
+        combined[pid][1] += qty
+
+    # Группировка ещё и по giveaway_id/ticket_price — сумма quantity*ticket_price
+    # различается по коллекции, как и в других местах этого модуля.
+    offline_stmt = (
+        select(
+            ManualRegistration.participant_id,
+            func.coalesce(func.sum(ManualRegistration.quantity), 0),
+            Giveaway.ticket_price,
+        )
+        .join(Giveaway, Giveaway.id == ManualRegistration.giveaway_id)
+        .where(ManualRegistration.status == ManualRegistrationStatus.CONFIRMED)
+        .group_by(
+            ManualRegistration.participant_id, ManualRegistration.giveaway_id, Giveaway.ticket_price
+        )
+    )
+    for pid, qty, ticket_price in session.execute(offline_stmt).all():
+        combined.setdefault(pid, [0, 0])
+        combined[pid][0] += qty * ticket_price
+        combined[pid][1] += qty
+
+    if not combined:
+        return []
+
+    top_ids = sorted(combined, key=lambda pid: combined[pid][0], reverse=True)[:limit]
+    participants = {
+        pid: (phone, full_name)
+        for pid, phone, full_name in session.execute(
+            select(Participant.id, Participant.phone, Participant.full_name).where(
+                Participant.id.in_(top_ids)
+            )
+        ).all()
+    }
+    return [
+        TopParticipant(
+            participant_id=pid,
+            phone=participants[pid][0],
+            full_name=participants[pid][1],
+            revenue_total=combined[pid][0],
+            tickets_count=combined[pid][1],
+        )
+        for pid in top_ids
+        if pid in participants
+    ]
+
+
+@dataclass(frozen=True)
+class OnlineFunnel:
+    pending: int
+    succeeded: int
+    failed: int
+    cancelled: int
+    refunded: int
+
+
+@dataclass(frozen=True)
+class ManualFunnel:
+    pending: int
+    confirmed: int
+    cancelled: int
+    refunded: int
+
+
+def sales_funnel(session: Session) -> tuple[OnlineFunnel, ManualFunnel]:
+    """Воронка статусов онлайн-платежей и ручных регистраций, за всё время, по
+    всем коллекциям — где теряются продажи (см. DashboardPage.tsx)."""
+    online_counts = dict(
+        session.execute(select(Payment.status, func.count(Payment.id)).group_by(Payment.status))
+        .tuples()
+        .all()
+    )
+    manual_counts = dict(
+        session.execute(
+            select(ManualRegistration.status, func.count(ManualRegistration.id)).group_by(
+                ManualRegistration.status
+            )
+        )
+        .tuples()
+        .all()
+    )
+    online = OnlineFunnel(
+        pending=online_counts.get(PaymentStatus.PENDING, 0),
+        succeeded=online_counts.get(PaymentStatus.SUCCEEDED, 0),
+        failed=online_counts.get(PaymentStatus.FAILED, 0),
+        cancelled=online_counts.get(PaymentStatus.CANCELLED, 0),
+        refunded=online_counts.get(PaymentStatus.REFUNDED, 0),
+    )
+    manual = ManualFunnel(
+        pending=manual_counts.get(ManualRegistrationStatus.PENDING, 0),
+        confirmed=manual_counts.get(ManualRegistrationStatus.CONFIRMED, 0),
+        cancelled=manual_counts.get(ManualRegistrationStatus.CANCELLED, 0),
+        refunded=manual_counts.get(ManualRegistrationStatus.REFUNDED, 0),
+    )
+    return online, manual

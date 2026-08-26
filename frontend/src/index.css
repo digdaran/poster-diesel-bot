@@ -1449,6 +1449,13 @@ section {
   max-width: 640px;
 }
 
+/* Dashboard: "Динамика продаж" растянута на всю ширину контента, а не зажата
+   в те же 640px, что графики на "Отчётах" (там несколько узких карточек в ряд
+   рядом друг с другом — тут одна на всю ширину, см. DashboardPage.tsx). */
+.viz-chart-card.is-full-width {
+  max-width: none;
+}
+
 .viz-chart-header {
   display: flex;
   flex-wrap: wrap;
@@ -1657,70 +1664,77 @@ section {
   font-size: 15px;
 }
 
-.giveaway-cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 14px;
+/* Верхний ряд Dashboard — одна строка на активную (открытую для продажи)
+   коллекцию, набор показателей вместо одной цифры выручки (см. GiveawayRow в
+   DashboardPage.tsx; заменяет прежнюю сетку карточек "Коллекции"). */
+.giveaway-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
   margin-top: 16px;
 }
 
-.giveaway-card {
+.giveaway-row {
+  display: block;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  padding: 14px 18px;
   text-decoration: none;
   color: var(--color-text);
-  transition:
-    border-color 0.12s ease,
-    transform 0.12s ease;
+  transition: border-color 0.12s ease;
 }
 
-.giveaway-card:hover {
+.giveaway-row:hover {
   border-color: var(--color-primary);
-  transform: translateY(-1px);
 }
 
-/* Заархивированные показываются только в режиме "показать все" (см.
-   DashboardPage.tsx) — приглушаем визуально, чтобы не путались с активными. */
-.giveaway-card.is-archived {
-  opacity: 0.55;
-}
-
-.giveaway-card-header {
+.giveaway-row-header {
   display: flex;
+  align-items: baseline;
   justify-content: space-between;
-  align-items: flex-start;
   gap: 8px;
+  margin-bottom: 12px;
 }
 
-.giveaway-card-name {
+.giveaway-row-name {
   font-weight: 600;
-  font-size: 14px;
+  font-size: 15px;
 }
 
-.giveaway-card-meta {
+.giveaway-row-days {
   font-size: 12px;
   color: var(--color-text-muted);
+  flex-shrink: 0;
 }
 
-.giveaway-card-revenue {
+.giveaway-row-tiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 24px;
+}
+
+.giveaway-row-tile {
+  flex: 1 1 160px;
   min-width: 0;
-  font-size: 21px;
+}
+
+.giveaway-row-tile-value {
+  font-size: 19px;
   font-weight: 700;
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
 
-.giveaway-card-revenue-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+.giveaway-row-tile-label {
+  font-size: 11.5px;
+  color: var(--color-text-muted);
+  margin-top: 3px;
+}
+
+.giveaway-row-tile-spark {
+  flex: 0 0 auto;
 }
 
 .sparkline {
@@ -1872,4 +1886,44 @@ section {
   border-color: var(--color-sidebar-border);
   background: var(--color-sidebar-bg);
   color: var(--color-sidebar-text);
+}
+
+/* Воронка продаж на Dashboard (см. FunnelBar в DashboardPage.tsx) — один
+   горизонтальный стек сегментов по статусу на строку (Онлайн/Ручные),
+   легенда цветов общая для обеих строк — под графиком. */
+.funnel-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.funnel-row-label {
+  width: 70px;
+  flex-shrink: 0;
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+
+.funnel-bar {
+  flex: 1 1 auto;
+  height: 22px;
+  border-radius: var(--radius);
+  overflow: hidden;
+  display: flex;
+  background: var(--color-surface-alt);
+}
+
+.funnel-segment {
+  height: 100%;
+}
+
+.funnel-row-total {
+  flex-shrink: 0;
+  width: 60px;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 12.5px;
+  color: var(--color-text-muted);
 }

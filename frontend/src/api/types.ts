@@ -213,6 +213,16 @@ export interface DashboardGiveawayCard {
   // Выручка (онлайн + офлайн) по дням за последние SPARKLINE_DAYS, от старого к
   // новому — см. app/services/dashboard_service.py.
   sparkline: number[];
+  // Средний чек в разрезе розыгрыша: "total" — каждая продажа (онлайн любого
+  // канала + офлайн) как один чек; офлайн — отдельным "каналом" по запросу
+  // владельца. Не путать с глобальным Dashboard.average_check (только онлайн).
+  average_check_total: number;
+  average_check_telegram: number;
+  average_check_vk: number;
+  average_check_offline: number;
+  // Для "% оплаченных счетов" — raw-числа, процент считает фронт.
+  online_payments_total: number;
+  online_payments_succeeded: number;
 }
 
 export interface DashboardSalesPoint {
@@ -240,6 +250,34 @@ export interface DashboardAlert {
   hours_open: number | null;
 }
 
+export interface SalesVelocity {
+  tickets_count: number;
+  revenue: number;
+}
+
+export interface TopParticipant {
+  participant_id: number;
+  phone: string;
+  full_name: string | null;
+  revenue_total: number;
+  tickets_count: number;
+}
+
+export interface OnlineFunnel {
+  pending: number;
+  succeeded: number;
+  failed: number;
+  cancelled: number;
+  refunded: number;
+}
+
+export interface ManualFunnel {
+  pending: number;
+  confirmed: number;
+  cancelled: number;
+  refunded: number;
+}
+
 export interface Dashboard {
   participants_count: number;
   tickets_issued_count: number;
@@ -256,6 +294,10 @@ export interface Dashboard {
   sales_trend_prev_total: number;
   revenue_today: number;
   revenue_yesterday: number;
+  sales_velocity_last_hour: SalesVelocity;
+  top_participants: TopParticipant[];
+  funnel_online: OnlineFunnel;
+  funnel_manual: ManualFunnel;
 }
 
 export interface RevenueByGiveawayRow {

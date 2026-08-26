@@ -9,6 +9,7 @@ import itertools
 from app.core.config import Settings
 from app.models.base import utcnow
 from app.models.enums import (
+    ChannelType,
     ManualRegistrationPaymentMethod,
     ManualRegistrationStatus,
     PanelUserRole,
@@ -76,6 +77,8 @@ def make_payment(
     participant_id: int,
     status: PaymentStatus = PaymentStatus.SUCCEEDED,
     amount: int = 10000,
+    quantity: int = 1,
+    channel: ChannelType | None = None,
     confirmed_at: dt.datetime | None = None,
     amount_mismatch: bool = False,
     amount_mismatch_since: dt.datetime | None = None,
@@ -87,8 +90,9 @@ def make_payment(
         giveaway_id=giveaway_id,
         provider=PaymentProviderType.REQUISITES_QR,
         amount=amount,
-        quantity=1,
+        quantity=quantity,
         status=status,
+        channel=channel,
         confirmed_at=confirmed_at,
         amount_mismatch=amount_mismatch,
         amount_mismatch_since=amount_mismatch_since,
@@ -421,3 +425,129 @@ def test_bank_mismatch_alert_does_not_fire_below_threshold_or_when_resolved(
 
     alerts = [a for a in svc.compute_alerts(session, settings) if a.type == "bank_mismatch"]
     assert alerts == []
+
+
+# --- средний чек по каналам, % оплаты, скорость продаж, топ, воронка -------
+
+
+def test_giveaway_cards_average_check_by_channel_and_offline(session: Session) -> None:
+    g = make_giveaway(session, prefix="CHECK")  # ticket_price=10000
+    p = make_participant(session)
+    op = make_operator(session)
+
+    make_payment(
+        session, giveaway_id=g.id, participant_id=p.id, amount=15000, channel=ChannelType.TELEGRAM
+    )
+    make_payment(
+        session, giveaway_id=g.id, participant_id=p.id, amount=25000, channel=ChannelType.VK
+    )
+    # Неуспешный платёж — не должен попасть ни в один средний чек, но должен
+    # учитываться в знаменателе online_payments_total.
+    make_payment(
+        session,
+        giveaway_id=g.id,
+        participant_id=p.id,
+        amount=9999,
+        status=PaymentStatus.FAILED,
+    )
+    make_manual_registration(
+        session, giveaway_id=g.id, participant_id=p.id, operator_id=op.id, quantity=2
+    )
+
+    card = {c.id: c for c in svc.giveaway_cards(session)}[g.id]
+    assert card.average_check_telegram == 15000
+    assert card.average_check_vk == 25000
+    assert card.average_check_offline == 20000  # 2 * ticket_price(10000)
+    # total: 3 чека (2 онлайн-успеха + 1 офлайн) на сумму 15000+25000+20000=60000
+    assert card.average_check_total == 20000
+    assert card.online_payments_total == 3
+    assert card.online_payments_succeeded == 2
+
+
+def test_sales_velocity_last_hour_excludes_older_sales(session: Session) -> None:
+    g = make_giveaway(session, prefix="VELOC")  # ticket_price=10000
+    p = make_participant(session)
+    op = make_operator(session)
+    now = utcnow()
+
+    make_payment(
+        session, giveaway_id=g.id, participant_id=p.id, amount=5000, quantity=1, confirmed_at=now
+    )
+    make_manual_registration(
+        session,
+        giveaway_id=g.id,
+        participant_id=p.id,
+        operator_id=op.id,
+        quantity=1,
+        confirmed_at=now,
+    )
+    # За пределами часа — не должен учитываться.
+    make_payment(
+        session,
+        giveaway_id=g.id,
+        participant_id=p.id,
+        amount=99999,
+        confirmed_at=now - dt.timedelta(hours=2),
+    )
+
+    velocity = svc.sales_velocity_last_hour(session, now=now)
+    assert velocity.tickets_count == 2
+    assert velocity.revenue == 5000 + 10000
+
+
+def test_top_participants_by_revenue_combines_sources_and_sorts_desc(session: Session) -> None:
+    g = make_giveaway(session, prefix="TOP")  # ticket_price=10000
+    op = make_operator(session)
+    rich = make_participant(session, phone="79990001111")
+    poor = make_participant(session, phone="79990002222")
+
+    make_payment(session, giveaway_id=g.id, participant_id=rich.id, amount=15000)
+    make_manual_registration(
+        session, giveaway_id=g.id, participant_id=rich.id, operator_id=op.id, quantity=1
+    )
+    make_payment(session, giveaway_id=g.id, participant_id=poor.id, amount=5000)
+
+    top = svc.top_participants_by_revenue(session, limit=5)
+    assert [t.participant_id for t in top] == [rich.id, poor.id]
+    assert top[0].revenue_total == 25000
+    assert top[0].tickets_count == 2
+    assert top[1].revenue_total == 5000
+
+
+def test_sales_funnel_counts_by_status(session: Session) -> None:
+    g = make_giveaway(session, prefix="FUNNEL")
+    p = make_participant(session)
+    op = make_operator(session)
+
+    make_payment(session, giveaway_id=g.id, participant_id=p.id, status=PaymentStatus.PENDING)
+    make_payment(session, giveaway_id=g.id, participant_id=p.id, status=PaymentStatus.SUCCEEDED)
+    make_payment(session, giveaway_id=g.id, participant_id=p.id, status=PaymentStatus.SUCCEEDED)
+    make_payment(session, giveaway_id=g.id, participant_id=p.id, status=PaymentStatus.FAILED)
+    make_payment(session, giveaway_id=g.id, participant_id=p.id, status=PaymentStatus.CANCELLED)
+
+    make_manual_registration(
+        session,
+        giveaway_id=g.id,
+        participant_id=p.id,
+        operator_id=op.id,
+        status=ManualRegistrationStatus.CONFIRMED,
+    )
+    make_manual_registration(
+        session,
+        giveaway_id=g.id,
+        participant_id=p.id,
+        operator_id=op.id,
+        status=ManualRegistrationStatus.CANCELLED,
+    )
+
+    online, manual = svc.sales_funnel(session)
+    assert online.pending == 1
+    assert online.succeeded == 2
+    assert online.failed == 1
+    assert online.cancelled == 1
+    assert online.refunded == 0
+
+    assert manual.confirmed == 1
+    assert manual.cancelled == 1
+    assert manual.pending == 0
+    assert manual.refunded == 0

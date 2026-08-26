@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { DashboardApi } from "../api/resources";
 import type { Dashboard, DashboardAlert, DashboardGiveawayCard } from "../api/types";
-import { LoadingState } from "../components/EmptyState";
+import { LoadingState, EmptyStateRow } from "../components/EmptyState";
 import { Badge } from "../components/Badge";
 import { BankReconciliationStatusPanel } from "../components/BankReconciliationStatusPanel";
 import { LineChart } from "../components/charts/LineChart";
@@ -33,63 +33,12 @@ function formatDayLabel(period: string): string {
   return parts.length === 3 ? `${parts[2]}.${parts[1]}` : period;
 }
 
-function giveawayStatusBadge(g: DashboardGiveawayCard) {
-  if (g.is_archived) {
-    return <Badge tone="muted">В архиве</Badge>;
-  }
-  if (g.is_closed_forever) {
-    return <Badge tone="muted">Закрыта навсегда</Badge>;
-  }
-  if (g.is_locked) {
-    return <Badge tone="danger">Приостановлена</Badge>;
-  }
-  if (g.is_registration_open) {
-    return <Badge tone="success">Открыта</Badge>;
-  }
-  return <Badge tone="muted">Не открыта</Badge>;
-}
-
-function GiveawayCard({ giveaway }: { giveaway: DashboardGiveawayCard }) {
-  const soldRatio = giveaway.max_tickets > 0 ? giveaway.tickets_issued / giveaway.max_tickets : 0;
-  const soldPercent = Math.min(100, Math.round(soldRatio * 100));
-  const freeRatio =
-    giveaway.max_tickets > 0 ? giveaway.free_tickets_count / giveaway.max_tickets : 1;
-  return (
-    <Link
-      to={`/giveaways/${giveaway.id}`}
-      className={"giveaway-card" + (giveaway.is_archived ? " is-archived" : "")}
-    >
-      <div className="giveaway-card-header">
-        <span className="giveaway-card-name">{giveaway.name}</span>
-        {giveawayStatusBadge(giveaway)}
-      </div>
-      <div className="giveaway-card-revenue-row">
-        <div className="giveaway-card-revenue">{formatMoney(giveaway.revenue_total)}</div>
-        <Sparkline data={giveaway.sparkline} width={64} height={24} />
-      </div>
-      <div className="giveaway-card-progress-row">
-        <div className="giveaway-card-progress-track">
-          <div
-            className={
-              "giveaway-card-progress-fill" +
-              (giveaway.is_registration_open && freeRatio <= LOW_STOCK_FREE_RATIO
-                ? " is-low-stock"
-                : "")
-            }
-            style={{ width: `${soldPercent}%` }}
-          />
-        </div>
-        <span className="giveaway-card-progress-label">{soldPercent}%</span>
-      </div>
-      <div className="giveaway-card-meta">
-        Выдано {giveaway.tickets_issued} из {giveaway.max_tickets} · осталось{" "}
-        {giveaway.free_tickets_count}
-      </div>
-      {giveaway.opened_at && (
-        <div className="giveaway-card-meta">{daysSince(giveaway.opened_at)} дн. в продаже</div>
-      )}
-    </Link>
-  );
+// Зеркало app/models/giveaway.py::Giveaway.is_open_for_sale — регистрация
+// открыта, коллекция не приостановлена, есть свободные номерки. Это и есть
+// "активная" коллекция для верхнего ряда (не путать с is_registration_open,
+// которое остаётся true и для приостановленной/распроданной).
+function isOpenForSale(g: DashboardGiveawayCard): boolean {
+  return g.is_registration_open && !g.is_locked && g.free_tickets_count > 0;
 }
 
 function alertText(a: DashboardAlert): string {
@@ -147,10 +96,123 @@ function DashboardAlertRow({ alert }: { alert: DashboardAlert }) {
   );
 }
 
+// Строка активной коллекции в верхнем ряду Dashboard — по прямому запросу
+// владельца заменяет прежние карточки "Коллекции": вместо одной цифры
+// (выручка) на коллекцию теперь целый набор показателей одной строкой.
+function GiveawayRow({ giveaway }: { giveaway: DashboardGiveawayCard }) {
+  const soldRatio = giveaway.max_tickets > 0 ? giveaway.tickets_issued / giveaway.max_tickets : 0;
+  const soldPercent = Math.min(100, Math.round(soldRatio * 100));
+  const freeRatio =
+    giveaway.max_tickets > 0 ? giveaway.free_tickets_count / giveaway.max_tickets : 1;
+  const paidPercent =
+    giveaway.online_payments_total > 0
+      ? Math.round((giveaway.online_payments_succeeded / giveaway.online_payments_total) * 100)
+      : null;
+
+  return (
+    <Link to={`/giveaways/${giveaway.id}`} className="giveaway-row">
+      <div className="giveaway-row-header">
+        <span className="giveaway-row-name">{giveaway.name}</span>
+        {giveaway.opened_at && (
+          <span className="giveaway-row-days">{daysSince(giveaway.opened_at)} дн. в продаже</span>
+        )}
+      </div>
+      <div className="giveaway-row-tiles">
+        <div className="giveaway-row-tile">
+          <div className="giveaway-row-tile-value">{formatMoney(giveaway.revenue_total)}</div>
+          <div className="giveaway-row-tile-label">Выручка</div>
+        </div>
+
+        <div className="giveaway-row-tile">
+          <div className="giveaway-card-progress-row">
+            <div className="giveaway-card-progress-track">
+              <div
+                className={
+                  "giveaway-card-progress-fill" +
+                  (freeRatio <= LOW_STOCK_FREE_RATIO ? " is-low-stock" : "")
+                }
+                style={{ width: `${soldPercent}%` }}
+              />
+            </div>
+            <span className="giveaway-card-progress-label">{soldPercent}%</span>
+          </div>
+          <div className="giveaway-row-tile-label">
+            Выдано {giveaway.tickets_issued} из {giveaway.max_tickets} · осталось{" "}
+            {giveaway.free_tickets_count}
+          </div>
+        </div>
+
+        <div className="giveaway-row-tile">
+          <div className="giveaway-row-tile-value">{formatMoney(giveaway.average_check_total)}</div>
+          <div className="giveaway-row-tile-label">
+            Средний чек · TG {formatMoney(giveaway.average_check_telegram)} · VK{" "}
+            {formatMoney(giveaway.average_check_vk)} · офлайн{" "}
+            {formatMoney(giveaway.average_check_offline)}
+          </div>
+        </div>
+
+        <div className="giveaway-row-tile">
+          <div className="giveaway-row-tile-value">
+            {paidPercent !== null ? `${paidPercent}%` : "—"}
+          </div>
+          <div className="giveaway-row-tile-label">
+            Оплачено счетов
+            {paidPercent !== null
+              ? ` (${giveaway.online_payments_succeeded} из ${giveaway.online_payments_total})`
+              : " (нет онлайн-счетов)"}
+          </div>
+        </div>
+
+        <div className="giveaway-row-tile giveaway-row-tile-spark">
+          <Sparkline data={giveaway.sparkline} width={100} height={32} />
+          <div className="giveaway-row-tile-label">14 дней</div>
+        </div>
+      </div>
+    </Link>
+  );
+}
+
+interface FunnelSegmentSpec {
+  key: string;
+  label: string;
+  value: number;
+  colorVar: string;
+}
+
+// Одна строка воронки (Онлайн/Ручные) — один горизонтальный стек из 4
+// сегментов по статусу. Общая легенда рисуется один раз снаружи (см. ниже).
+function FunnelBar({ label, segments }: { label: string; segments: FunnelSegmentSpec[] }) {
+  const total = segments.reduce((sum, s) => sum + s.value, 0);
+  return (
+    <div className="funnel-row">
+      <div className="funnel-row-label">{label}</div>
+      <div className="funnel-bar">
+        {total === 0 ? (
+          <div
+            className="funnel-segment"
+            style={{ width: "100%", background: "var(--color-border)" }}
+          />
+        ) : (
+          segments
+            .filter((s) => s.value > 0)
+            .map((s) => (
+              <div
+                key={s.key}
+                className="funnel-segment"
+                style={{ width: `${(s.value / total) * 100}%`, background: `var(${s.colorVar})` }}
+                title={`${s.label}: ${s.value}`}
+              />
+            ))
+        )}
+      </div>
+      <div className="funnel-row-total">{total}</div>
+    </div>
+  );
+}
+
 export function DashboardPage() {
   const { hasPermission } = useAuth();
   const [data, setData] = useState<Dashboard | null>(null);
-  const [showAllGiveaways, setShowAllGiveaways] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -182,10 +244,7 @@ export function DashboardPage() {
     };
   }, []);
 
-  const visibleGiveaways = useMemo(() => {
-    if (!data) return [];
-    return showAllGiveaways ? data.giveaways : data.giveaways.filter((g) => g.is_registration_open);
-  }, [data, showAllGiveaways]);
+  const activeGiveaways = useMemo(() => (data?.giveaways ?? []).filter(isOpenForSale), [data]);
 
   const trendData = useMemo(
     () => (data?.sales_trend ?? []).map((row) => ({ x: row.period, y: row.amount })),
@@ -222,6 +281,59 @@ export function DashboardPage() {
 
   if (!data) return <LoadingState />;
 
+  const onlineFunnelSegments: FunnelSegmentSpec[] = [
+    {
+      key: "pending",
+      label: "Ожидание",
+      value: data.funnel_online.pending,
+      colorVar: "--color-warning",
+    },
+    {
+      key: "succeeded",
+      label: "Оплачено",
+      value: data.funnel_online.succeeded,
+      colorVar: "--color-success",
+    },
+    {
+      key: "failed",
+      label: "Не оплачено",
+      value: data.funnel_online.failed + data.funnel_online.cancelled,
+      colorVar: "--color-danger",
+    },
+    {
+      key: "refunded",
+      label: "Возврат",
+      value: data.funnel_online.refunded,
+      colorVar: "--color-info",
+    },
+  ];
+  const manualFunnelSegments: FunnelSegmentSpec[] = [
+    {
+      key: "pending",
+      label: "Ожидание",
+      value: data.funnel_manual.pending,
+      colorVar: "--color-warning",
+    },
+    {
+      key: "confirmed",
+      label: "Подтверждено",
+      value: data.funnel_manual.confirmed,
+      colorVar: "--color-success",
+    },
+    {
+      key: "cancelled",
+      label: "Отменено",
+      value: data.funnel_manual.cancelled,
+      colorVar: "--color-danger",
+    },
+    {
+      key: "refunded",
+      label: "Возврат",
+      value: data.funnel_manual.refunded,
+      colorVar: "--color-info",
+    },
+  ];
+
   return (
     <div>
       <h1>
@@ -229,45 +341,67 @@ export function DashboardPage() {
       </h1>
       {error && <div className="error">{error}</div>}
 
-      <div className="cards">
-        <div className="card">
-          <div className="card-value">{data.participants_count}</div>
-          <div className="card-label">Участников</div>
-        </div>
-        <div className="card">
-          <div className="card-value">{data.tickets_issued_count}</div>
-          <div className="card-label">Экземпляров выдано</div>
-        </div>
-        <div className="card">
-          <div className="card-value">{formatMoney(data.revenue_online)}</div>
-          <div className="card-label">Эквайринг</div>
-        </div>
-        <div className="card">
-          <div className="card-value">{formatMoney(data.revenue_offline)}</div>
-          <div className="card-label">Наличные (оператор)</div>
-        </div>
-        <div className="card is-hero">
-          <div className="card-value">{formatMoney(data.revenue_total)}</div>
-          <div className="card-label">Итого выручка</div>
-        </div>
-        <div className="card">
-          <div className="card-value">{data.giveaways_count}</div>
-          <div className="card-label">Коллекций</div>
-        </div>
-        <div className="card">
-          <div className="card-value">{formatMoney(data.average_check)}</div>
-          <div className="card-label">Средний чек (онлайн)</div>
-        </div>
-        <div className="card">
-          <div className="card-value">{formatMoney(data.revenue_today)}</div>
-          <div className="card-label dashboard-kpi-delta-row">
-            <span>Сегодня · вчера {formatMoney(data.revenue_yesterday)}</span>
-            {todayDelta && (
-              <Badge tone={todayDelta.startsWith("-") ? "danger" : "success"}>{todayDelta}</Badge>
-            )}
+      <section>
+        <h2>Активные коллекции</h2>
+        {activeGiveaways.length === 0 ? (
+          <p className="card-label">Сейчас нет коллекций, открытых для продаж</p>
+        ) : (
+          <div className="giveaway-rows">
+            {activeGiveaways.map((g) => (
+              <GiveawayRow key={g.id} giveaway={g} />
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section>
+        <h2>Итого по всем коллекциям</h2>
+        <div className="cards">
+          <div className="card">
+            <div className="card-value">{data.participants_count}</div>
+            <div className="card-label">Участников</div>
+          </div>
+          <div className="card">
+            <div className="card-value">{data.tickets_issued_count}</div>
+            <div className="card-label">Экземпляров выдано</div>
+          </div>
+          <div className="card">
+            <div className="card-value">{formatMoney(data.revenue_online)}</div>
+            <div className="card-label">Эквайринг</div>
+          </div>
+          <div className="card">
+            <div className="card-value">{formatMoney(data.revenue_offline)}</div>
+            <div className="card-label">Наличные (оператор)</div>
+          </div>
+          <div className="card is-hero">
+            <div className="card-value">{formatMoney(data.revenue_total)}</div>
+            <div className="card-label">Итого выручка</div>
+          </div>
+          <div className="card">
+            <div className="card-value">{data.giveaways_count}</div>
+            <div className="card-label">Коллекций</div>
+          </div>
+          <div className="card">
+            <div className="card-value">{formatMoney(data.average_check)}</div>
+            <div className="card-label">Средний чек (онлайн)</div>
+          </div>
+          <div className="card">
+            <div className="card-value">{formatMoney(data.revenue_today)}</div>
+            <div className="card-label dashboard-kpi-delta-row">
+              <span>Сегодня · вчера {formatMoney(data.revenue_yesterday)}</span>
+              {todayDelta && (
+                <Badge tone={todayDelta.startsWith("-") ? "danger" : "success"}>{todayDelta}</Badge>
+              )}
+            </div>
+          </div>
+          <div className="card">
+            <div className="card-value">{data.sales_velocity_last_hour.tickets_count}</div>
+            <div className="card-label">
+              За последний час · {formatMoney(data.sales_velocity_last_hour.revenue)}
+            </div>
           </div>
         </div>
-      </div>
+      </section>
 
       {data.alerts.length > 0 && (
         <section>
@@ -296,13 +430,13 @@ export function DashboardPage() {
             </Badge>
           )}
         </div>
-        <div className="viz-chart-card">
+        <div className="viz-chart-card is-full-width">
           <LineChart
             data={trendData}
             formatValue={formatMoney}
             formatAxisValue={formatMoneyCompact}
             formatX={formatDayLabel}
-            height={160}
+            height={220}
           />
         </div>
       </section>
@@ -324,44 +458,65 @@ export function DashboardPage() {
         </section>
       )}
 
+      <section>
+        <h2>Топ участников по сумме покупок</h2>
+        <div className="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Участник</th>
+                <th>Телефон</th>
+                <th>Экземпляров</th>
+                <th>Сумма покупок</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.top_participants.length === 0 && <EmptyStateRow colSpan={4} />}
+              {data.top_participants.map((p) => (
+                <tr key={p.participant_id}>
+                  <td>{p.full_name ?? "—"}</td>
+                  <td>{p.phone}</td>
+                  <td>{p.tickets_count}</td>
+                  <td>{formatMoney(p.revenue_total)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2>Воронка продаж</h2>
+        <div className="viz-chart-card">
+          <FunnelBar label="Онлайн" segments={onlineFunnelSegments} />
+          <FunnelBar label="Ручные" segments={manualFunnelSegments} />
+          <div className="viz-legend">
+            <span className="viz-legend-item">
+              <span className="viz-legend-swatch" style={{ background: "var(--color-warning)" }} />
+              Ожидание
+            </span>
+            <span className="viz-legend-item">
+              <span className="viz-legend-swatch" style={{ background: "var(--color-success)" }} />
+              Оплачено / подтверждено
+            </span>
+            <span className="viz-legend-item">
+              <span className="viz-legend-swatch" style={{ background: "var(--color-danger)" }} />
+              Не оплачено / отменено
+            </span>
+            <span className="viz-legend-item">
+              <span className="viz-legend-swatch" style={{ background: "var(--color-info)" }} />
+              Возврат
+            </span>
+          </div>
+        </div>
+      </section>
+
       {hasPermission("view_bank_reconciliation") && (
         <section>
           <h2>Сверка банковской выписки</h2>
           <BankReconciliationStatusPanel />
         </section>
       )}
-
-      <section>
-        <div className="viz-chart-header">
-          <h2>Коллекции</h2>
-          <div className="segmented" role="group" aria-label="Какие коллекции показывать">
-            <button
-              type="button"
-              className={!showAllGiveaways ? "active" : ""}
-              onClick={() => setShowAllGiveaways(false)}
-            >
-              Только открытые
-            </button>
-            <button
-              type="button"
-              className={showAllGiveaways ? "active" : ""}
-              onClick={() => setShowAllGiveaways(true)}
-            >
-              Показать все
-            </button>
-          </div>
-        </div>
-        <div className="giveaway-cards">
-          {visibleGiveaways.length === 0 && (
-            <p className="card-label">
-              {showAllGiveaways ? "Нет коллекций" : "Нет коллекций, открытых для продаж"}
-            </p>
-          )}
-          {visibleGiveaways.map((g) => (
-            <GiveawayCard key={g.id} giveaway={g} />
-          ))}
-        </div>
-      </section>
     </div>
   );
 }

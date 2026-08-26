@@ -337,6 +337,12 @@ class DashboardGiveawayCardOut(BaseModel):
     revenue_offline: int
     revenue_total: int
     sparkline: list[int]
+    average_check_total: int
+    average_check_telegram: int
+    average_check_vk: int
+    average_check_offline: int
+    online_payments_total: int
+    online_payments_succeeded: int
 
     model_config = {"from_attributes": True}
 
@@ -351,6 +357,44 @@ class ChannelSalesOut(BaseModel):
     channel: str
     count: int
     amount: int
+
+
+class SalesVelocityOut(BaseModel):
+    """Скорость продаж за последний час (см. dashboard_service.sales_velocity_last_hour)."""
+
+    tickets_count: int
+    revenue: int
+
+    model_config = {"from_attributes": True}
+
+
+class TopParticipantOut(BaseModel):
+    participant_id: int
+    phone: str
+    full_name: str | None
+    revenue_total: int
+    tickets_count: int
+
+    model_config = {"from_attributes": True}
+
+
+class OnlineFunnelOut(BaseModel):
+    pending: int
+    succeeded: int
+    failed: int
+    cancelled: int
+    refunded: int
+
+    model_config = {"from_attributes": True}
+
+
+class ManualFunnelOut(BaseModel):
+    pending: int
+    confirmed: int
+    cancelled: int
+    refunded: int
+
+    model_config = {"from_attributes": True}
 
 
 class DashboardAlertOut(BaseModel):
@@ -393,3 +437,7 @@ class DashboardOut(BaseModel):
     # Выручка (онлайн + офлайн) сегодня и вчера целиком — для дельты на hero-карточке.
     revenue_today: int
     revenue_yesterday: int
+    sales_velocity_last_hour: SalesVelocityOut
+    top_participants: list[TopParticipantOut]
+    funnel_online: OnlineFunnelOut
+    funnel_manual: ManualFunnelOut

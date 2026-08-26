@@ -25,6 +25,10 @@ from backend.api.schemas import (
     DashboardGiveawayCardOut,
     DashboardOut,
     DashboardSalesPointOut,
+    ManualFunnelOut,
+    OnlineFunnelOut,
+    SalesVelocityOut,
+    TopParticipantOut,
 )
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -89,6 +93,10 @@ def get_dashboard(
         key = d.strftime("%Y-%m-%d")
         return daily_online.get(key, 0) + daily_offline.get(key, 0)
 
+    velocity = dashboard_service.sales_velocity_last_hour(session)
+    top_participants = dashboard_service.top_participants_by_revenue(session)
+    funnel_online, funnel_manual = dashboard_service.sales_funnel(session)
+
     return DashboardOut(
         participants_count=participants_count,
         tickets_issued_count=tickets_issued_count,
@@ -110,4 +118,8 @@ def get_dashboard(
         sales_trend_prev_total=sales_trend_prev_total,
         revenue_today=_day_total(today),
         revenue_yesterday=_day_total(yesterday),
+        sales_velocity_last_hour=SalesVelocityOut.model_validate(velocity),
+        top_participants=[TopParticipantOut.model_validate(p) for p in top_participants],
+        funnel_online=OnlineFunnelOut.model_validate(funnel_online),
+        funnel_manual=ManualFunnelOut.model_validate(funnel_manual),
     )
