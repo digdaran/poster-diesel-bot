@@ -15,8 +15,12 @@ export function EmptyStateRow({
 export function LoadingState({ message = "Загрузка…" }: { message?: string }) {
   return (
     <div className="loading-state">
-      <span className="spinner" />
-      {message}
+      <span>{message}</span>
+      <div className="loading-state-bars" aria-hidden="true">
+        <span className="skeleton-bar" />
+        <span className="skeleton-bar" />
+        <span className="skeleton-bar" />
+      </div>
     </div>
   );
 }
