@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { ChartTooltip } from "./ChartTooltip";
 
@@ -19,7 +19,10 @@ interface LineChartProps {
   emptyMessage?: string;
 }
 
-const WIDTH = 680;
+// Запасная ширина до первого измерения контейнера (см. ResizeObserver ниже) —
+// подставляется в viewBox только на первый кадр, реальная ширина приходит
+// сразу следом.
+const FALLBACK_WIDTH = 680;
 const MARGIN = { top: 16, right: 16, bottom: 28, left: 56 };
 
 export function LineChart({
@@ -34,8 +37,29 @@ export function LineChart({
   const formatAxis = formatAxisValue ?? formatValue;
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
 
-  const innerWidth = WIDTH - MARGIN.left - MARGIN.right;
+  // viewBox подстраивается под реальную ширину контейнера, а не растягивается
+  // CSS-пропорционально фиксированных 680 юнитов — иначе при растягивании
+  // графика на всю ширину окна (см. DashboardPage.tsx) браузер масштабирует
+  // ВСЁ содержимое SVG пропорционально разнице, включая толщину линии и
+  // размер подписей (см. обсуждение — "увеличенные шрифты и толстая линия").
+  const [width, setWidth] = useState(FALLBACK_WIDTH);
+  useEffect(() => {
+    const el = wrapperRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width;
+      if (w && w > 0) setWidth(w);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+    // data.length (не []) — если график первым делом смонтировался пустым
+    // (emptyMessage вместо обёртки с ref), а данные подъехали следующим
+    // тиком, нужно переподписаться на уже реально отрисованный wrapperRef.
+  }, [data.length]);
+
+  const innerWidth = width - MARGIN.left - MARGIN.right;
   const innerHeight = height - MARGIN.top - MARGIN.bottom;
   const baselineY = MARGIN.top + innerHeight;
 
@@ -74,7 +98,7 @@ export function LineChart({
   function updateHoverFromClientX(clientX: number) {
     if (!svgRef.current || points.length === 0) return;
     const rect = svgRef.current.getBoundingClientRect();
-    const scaleX = WIDTH / rect.width;
+    const scaleX = width / rect.width;
     const localX = (clientX - rect.left) * scaleX;
     const idx = points.length > 1 ? Math.round((localX - MARGIN.left) / stepX) : 0;
     setHoverIndex(Math.min(Math.max(idx, 0), points.length - 1));
@@ -102,11 +126,11 @@ export function LineChart({
   const hovered = hoverIndex !== null ? points[hoverIndex] : hasLine ? null : points[0];
 
   return (
-    <div className="viz-root viz-line-wrapper">
+    <div className="viz-root viz-line-wrapper" ref={wrapperRef}>
       <svg
         ref={svgRef}
         className="viz-svg"
-        viewBox={`0 0 ${WIDTH} ${height}`}
+        viewBox={`0 0 ${width} ${height}`}
         role="img"
         aria-label={`Линейный график, ${points.length} точек, максимум ${formatValue(maxY)}. Стрелками влево/вправо — по точкам.`}
         tabIndex={hasLine ? 0 : undefined}
@@ -120,7 +144,7 @@ export function LineChart({
             <g key={i}>
               <line
                 x1={MARGIN.left}
-                x2={WIDTH - MARGIN.right}
+                x2={width - MARGIN.right}
                 y1={y}
                 y2={y}
                 className="viz-gridline"
@@ -140,7 +164,7 @@ export function LineChart({
 
         <line
           x1={MARGIN.left}
-          x2={WIDTH - MARGIN.right}
+          x2={width - MARGIN.right}
           y1={baselineY}
           y2={baselineY}
           className="viz-axis-line"
@@ -189,7 +213,7 @@ export function LineChart({
       </svg>
 
       {hovered && (
-        <ChartTooltip leftPct={(hovered.px / WIDTH) * 100} topPct={(hovered.py / height) * 100}>
+        <ChartTooltip leftPct={(hovered.px / width) * 100} topPct={(hovered.py / height) * 100}>
           <div className="viz-tooltip-label">{formatX(hovered.label)}</div>
           <div className="viz-tooltip-row">
             <span className="viz-tooltip-key" style={{ background: `var(${colorVar})` }} />

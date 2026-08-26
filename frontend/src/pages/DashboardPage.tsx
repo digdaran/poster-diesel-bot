@@ -11,7 +11,12 @@ import { BarChart } from "../components/charts/BarChart";
 import type { BarGroupDatum, BarSeriesSpec } from "../components/charts/BarChart";
 import { Sparkline } from "../components/charts/Sparkline";
 import { CHANNEL_LABELS } from "../utils/channels";
-import { formatMoney, formatMoneyCompact, formatPercentDelta } from "../utils/format";
+import {
+  formatMoney,
+  formatMoneyCompact,
+  formatMoneyRounded,
+  formatPercentDelta,
+} from "../utils/format";
 
 // Как и «Мониторинг продаж» — сводка на Dashboard обновляется вживую, раз в
 // несколько секунд, а не только при заходе на страницу (см. обсуждение с
@@ -119,7 +124,9 @@ function GiveawayRow({ giveaway }: { giveaway: DashboardGiveawayCard }) {
       </div>
       <div className="giveaway-row-tiles">
         <div className="giveaway-row-tile">
-          <div className="giveaway-row-tile-value">{formatMoney(giveaway.revenue_total)}</div>
+          <div className="giveaway-row-tile-value" title={formatMoney(giveaway.revenue_total)}>
+            {formatMoneyCompact(giveaway.revenue_total)}
+          </div>
           <div className="giveaway-row-tile-label">Выручка</div>
         </div>
 
@@ -143,7 +150,12 @@ function GiveawayRow({ giveaway }: { giveaway: DashboardGiveawayCard }) {
         </div>
 
         <div className="giveaway-row-tile">
-          <div className="giveaway-row-tile-value">{formatMoney(giveaway.average_check_total)}</div>
+          <div
+            className="giveaway-row-tile-value"
+            title={formatMoney(giveaway.average_check_total)}
+          >
+            {formatMoneyRounded(giveaway.average_check_total)}
+          </div>
           <div className="giveaway-row-tile-label">
             Средний чек · TG {formatMoney(giveaway.average_check_telegram)} · VK{" "}
             {formatMoney(giveaway.average_check_vk)} · офлайн{" "}
@@ -366,15 +378,21 @@ export function DashboardPage() {
             <div className="card-label">Экземпляров выдано</div>
           </div>
           <div className="card">
-            <div className="card-value">{formatMoney(data.revenue_online)}</div>
+            <div className="card-value" title={formatMoney(data.revenue_online)}>
+              {formatMoneyCompact(data.revenue_online)}
+            </div>
             <div className="card-label">Эквайринг</div>
           </div>
           <div className="card">
-            <div className="card-value">{formatMoney(data.revenue_offline)}</div>
+            <div className="card-value" title={formatMoney(data.revenue_offline)}>
+              {formatMoneyCompact(data.revenue_offline)}
+            </div>
             <div className="card-label">Наличные (оператор)</div>
           </div>
           <div className="card is-hero">
-            <div className="card-value">{formatMoney(data.revenue_total)}</div>
+            <div className="card-value" title={formatMoney(data.revenue_total)}>
+              {formatMoneyCompact(data.revenue_total)}
+            </div>
             <div className="card-label">Итого выручка</div>
           </div>
           <div className="card">
@@ -382,11 +400,15 @@ export function DashboardPage() {
             <div className="card-label">Коллекций</div>
           </div>
           <div className="card">
-            <div className="card-value">{formatMoney(data.average_check)}</div>
+            <div className="card-value" title={formatMoney(data.average_check)}>
+              {formatMoneyRounded(data.average_check)}
+            </div>
             <div className="card-label">Средний чек (онлайн)</div>
           </div>
           <div className="card">
-            <div className="card-value">{formatMoney(data.revenue_today)}</div>
+            <div className="card-value" title={formatMoney(data.revenue_today)}>
+              {formatMoneyCompact(data.revenue_today)}
+            </div>
             <div className="card-label dashboard-kpi-delta-row">
               <span>Сегодня · вчера {formatMoney(data.revenue_yesterday)}</span>
               {todayDelta && (

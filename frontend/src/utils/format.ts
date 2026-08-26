@@ -22,6 +22,19 @@ export function formatMoneyCompact(cents: number): string {
   return moneyCompactFormatter.format(cents / 100);
 }
 
+// Без копеек — для плотных KPI-плиток с суммами, где "compact" (formatMoneyCompact)
+// съел бы содержательную точность (средний чек 1015 ₽ превратился бы в "1 тыс. ₽",
+// а разница между 980 и 1200 ₽ там как раз важна). Точное значение — в title.
+const moneyRoundedFormatter = new Intl.NumberFormat("ru-RU", {
+  style: "currency",
+  currency: "RUB",
+  maximumFractionDigits: 0,
+});
+
+export function formatMoneyRounded(cents: number): string {
+  return moneyRoundedFormatter.format(cents / 100);
+}
+
 const compactNumberFormatter = new Intl.NumberFormat("ru-RU", {
   notation: "compact",
   maximumFractionDigits: 1,
@@ -31,12 +44,22 @@ export function formatCompactNumber(value: number): string {
   return compactNumberFormatter.format(value);
 }
 
+// Порог, после которого проценты перестают быть читаемыми ("+4087%" при
+// сравнении с почти нулевой базой — арифметически верно, но по смыслу пугает
+// и ничего не говорит). Выше порога переключаемся на множитель ("×41").
+const PERCENT_DELTA_MULTIPLIER_THRESHOLD = 300;
+
 // Дельта к предыдущему периоду для бейджей у заголовков графиков/KPI.
 // `null`, когда предыдущий период нулевой — сравнение "+∞%" ничего не говорит,
 // честнее промолчать, чем показать обманчивое число (см. DashboardPage.tsx).
 export function formatPercentDelta(current: number, previous: number): string | null {
   if (previous === 0) return null;
-  const pct = Math.round(((current - previous) / previous) * 100);
+  const ratio = current / previous;
+  const pct = Math.round((ratio - 1) * 100);
+  if (Math.abs(pct) >= PERCENT_DELTA_MULTIPLIER_THRESHOLD) {
+    const multiplier = Math.round(ratio * 10) / 10;
+    return `×${multiplier}`;
+  }
   return `${pct > 0 ? "+" : ""}${pct}%`;
 }
 
