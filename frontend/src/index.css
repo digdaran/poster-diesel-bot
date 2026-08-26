@@ -711,6 +711,7 @@ tbody tr.row-just-appeared {
   min-width: 160px;
   flex: 1 1 160px;
   box-shadow: var(--shadow-card);
+  overflow: hidden;
 }
 
 .card-value {
@@ -718,6 +719,10 @@ tbody tr.row-just-appeared {
   font-weight: 700;
   font-family: var(--font-mono);
   letter-spacing: -0.01em;
+  /* Крупные суммы (7+ знаков) в моноширинном шрифте иначе вылезают за рамку —
+     неразрывные пробелы-разделители тысяч (Intl.NumberFormat) не дают браузеру
+     перенести строку самостоятельно, поэтому переносим принудительно. */
+  overflow-wrap: anywhere;
 }
 
 .card-label {
@@ -1708,6 +1713,7 @@ section {
   font-weight: 700;
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
 }
 
 .giveaway-card-revenue-row {
