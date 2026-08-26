@@ -28,6 +28,9 @@ function formatDayLabel(period: string): string {
 }
 
 function giveawayStatusBadge(g: DashboardGiveawayCard) {
+  if (g.is_archived) {
+    return <Badge tone="muted">В архиве</Badge>;
+  }
   if (g.is_closed_forever) {
     return <Badge tone="muted">Закрыта навсегда</Badge>;
   }
@@ -42,25 +45,32 @@ function giveawayStatusBadge(g: DashboardGiveawayCard) {
 
 function GiveawayCard({ giveaway }: { giveaway: DashboardGiveawayCard }) {
   const soldRatio = giveaway.max_tickets > 0 ? giveaway.tickets_issued / giveaway.max_tickets : 0;
+  const soldPercent = Math.min(100, Math.round(soldRatio * 100));
   const freeRatio =
     giveaway.max_tickets > 0 ? giveaway.free_tickets_count / giveaway.max_tickets : 1;
   return (
-    <Link to={`/giveaways/${giveaway.id}`} className="giveaway-card">
+    <Link
+      to={`/giveaways/${giveaway.id}`}
+      className={"giveaway-card" + (giveaway.is_archived ? " is-archived" : "")}
+    >
       <div className="giveaway-card-header">
         <span className="giveaway-card-name">{giveaway.name}</span>
         {giveawayStatusBadge(giveaway)}
       </div>
       <div className="giveaway-card-revenue">{formatMoney(giveaway.revenue_total)}</div>
-      <div className="giveaway-card-progress-track">
-        <div
-          className={
-            "giveaway-card-progress-fill" +
-            (giveaway.is_registration_open && freeRatio <= LOW_STOCK_FREE_RATIO
-              ? " is-low-stock"
-              : "")
-          }
-          style={{ width: `${Math.min(100, Math.round(soldRatio * 100))}%` }}
-        />
+      <div className="giveaway-card-progress-row">
+        <div className="giveaway-card-progress-track">
+          <div
+            className={
+              "giveaway-card-progress-fill" +
+              (giveaway.is_registration_open && freeRatio <= LOW_STOCK_FREE_RATIO
+                ? " is-low-stock"
+                : "")
+            }
+            style={{ width: `${soldPercent}%` }}
+          />
+        </div>
+        <span className="giveaway-card-progress-label">{soldPercent}%</span>
       </div>
       <div className="giveaway-card-meta">
         Выдано {giveaway.tickets_issued} из {giveaway.max_tickets} · осталось{" "}
@@ -105,6 +115,15 @@ function alertLink(a: DashboardAlert): string {
 
 const DANGER_ALERT_TYPES = new Set<DashboardAlert["type"]>(["bank_mismatch"]);
 
+// Разная иконка на тип — чтобы список из нескольких алертов читался с одного
+// взгляда, без необходимости вчитываться в текст каждой строки.
+const ALERT_ICON: Record<DashboardAlert["type"], string> = {
+  low_stock: "📦",
+  sales_stalled: "📉",
+  manual_registration_expiring: "⏳",
+  bank_mismatch: "💳",
+};
+
 function DashboardAlertRow({ alert }: { alert: DashboardAlert }) {
   return (
     <Link
@@ -112,7 +131,7 @@ function DashboardAlertRow({ alert }: { alert: DashboardAlert }) {
       className={"dashboard-alert" + (DANGER_ALERT_TYPES.has(alert.type) ? " is-danger" : "")}
     >
       <span className="dashboard-alert-icon" aria-hidden="true">
-        ⚠
+        {ALERT_ICON[alert.type]}
       </span>
       <span>{alertText(alert)}</span>
     </Link>
@@ -189,7 +208,7 @@ export function DashboardPage() {
           <div className="card-value">{formatMoney(data.revenue_offline)}</div>
           <div className="card-label">Наличные (оператор)</div>
         </div>
-        <div className="card">
+        <div className="card is-hero">
           <div className="card-value">{formatMoney(data.revenue_total)}</div>
           <div className="card-label">Итого выручка</div>
         </div>

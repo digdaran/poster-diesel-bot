@@ -167,12 +167,17 @@ def test_giveaway_cards_aggregates_revenue_and_ticket_counts(session: Session) -
     assert card.free_tickets_count == 38
 
 
-def test_giveaway_cards_excludes_archived(session: Session) -> None:
-    make_giveaway(session, prefix="ARCH", is_archived=True)
+def test_giveaway_cards_includes_archived_flagged(session: Session) -> None:
+    """Архивные коллекции ТЕПЕРЬ включаются (см. DECISIONS_LOG.md №76) — тумблер
+    "только открытые"/"все" фильтрует их на фронте, не на бэкенде; здесь важно
+    только то, что карточка приходит и помечена `is_archived=True`."""
+    archived = make_giveaway(session, prefix="ARCH", is_archived=True)
     visible = make_giveaway(session, prefix="VIS")
 
-    cards = svc.giveaway_cards(session)
-    assert [c.id for c in cards] == [visible.id]
+    cards = {c.id: c for c in svc.giveaway_cards(session)}
+    assert set(cards) == {archived.id, visible.id}
+    assert cards[archived.id].is_archived is True
+    assert cards[visible.id].is_archived is False
 
 
 def test_giveaway_cards_sorted_by_opened_at_desc_nulls_last(session: Session) -> None:

@@ -201,6 +201,7 @@ export interface DashboardGiveawayCard {
   is_registration_open: boolean;
   is_locked: boolean;
   is_closed_forever: boolean;
+  is_archived: boolean;
   opened_at: string | null;
   max_tickets: number;
   tickets_issued: number;

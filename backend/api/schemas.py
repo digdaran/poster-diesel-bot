@@ -327,6 +327,7 @@ class DashboardGiveawayCardOut(BaseModel):
     is_registration_open: bool
     is_locked: bool
     is_closed_forever: bool
+    is_archived: bool
     opened_at: dt.datetime | None
     max_tickets: int
     tickets_issued: int

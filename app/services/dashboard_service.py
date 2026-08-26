@@ -61,6 +61,7 @@ class GiveawayCard:
     is_registration_open: bool
     is_locked: bool
     is_closed_forever: bool
+    is_archived: bool
     opened_at: dt.datetime | None
     max_tickets: int
     tickets_issued: int
@@ -72,17 +73,16 @@ class GiveawayCard:
 
 
 def giveaway_cards(session: Session) -> list[GiveawayCard]:
-    """Карточка на каждую НЕархивную коллекцию (архивные — отдельный раздел
-    «Архив», см. `ArchivePage.tsx`) с выручкой — фронт сам фильтрует тумблером
-    "только открытые" / "все", не дёргая лишний запрос на каждое переключение.
+    """Карточка на каждую коллекцию, включая заархивированные — тумблер "только
+    открытые" / "все" на фронте (`DashboardPage.tsx`) сам решает, показывать ли
+    архивные в режиме "все" (см. DECISIONS_LOG.md №75/№76); бэкенд отдаёт всё
+    разом, не дёргая лишний запрос на каждое переключение.
 
     Сортировка — по давности открытия регистрации (новые сверху), ещё не
     открытые (`opened_at IS NULL`) — в конце, по дате создания."""
     giveaways = list(
         session.execute(
-            select(Giveaway)
-            .where(Giveaway.is_archived.is_(False))
-            .order_by(
+            select(Giveaway).order_by(
                 Giveaway.opened_at.is_(None), Giveaway.opened_at.desc(), Giveaway.created_at.desc()
             )
         )
@@ -127,6 +127,7 @@ def giveaway_cards(session: Session) -> list[GiveawayCard]:
                 is_registration_open=g.is_registration_open,
                 is_locked=g.is_locked,
                 is_closed_forever=g.is_closed_forever,
+                is_archived=g.is_archived,
                 opened_at=g.opened_at,
                 max_tickets=g.max_tickets,
                 tickets_issued=g.tickets_issued,
