@@ -7,7 +7,9 @@ import { LineChart } from "../components/charts/LineChart";
 import { BarChart, type BarGroupDatum, type BarSeriesSpec } from "../components/charts/BarChart";
 import { DateRangePicker } from "../components/charts/DateRangePicker";
 import { TimelineBrush } from "../components/charts/TimelineBrush";
-import { formatMoney } from "../utils/format";
+import { formatMoney, formatMoneyCompact } from "../utils/format";
+import { CHANNEL_LABELS } from "../utils/channels";
+import { bucketGroupTail } from "../utils/charts";
 import type {
   ChannelSalesRow,
   Giveaway,
@@ -15,12 +17,10 @@ import type {
   SalesByPeriodRow,
 } from "../api/types";
 
-const CHANNEL_LABELS: Record<string, string> = {
-  telegram: "Telegram",
-  vk: "VK",
-  max: "MAX",
-  unknown: "Неизвестно (до внедрения)",
-};
+// Больше этого числа коллекций/провайдеров/каналов на графике — сворачиваем
+// хвост в "Прочее" (см. utils/charts.ts): иначе горизонтальные бары растягивают
+// страницу до бесконечности, а цвета серий начинают повторяться.
+const MAX_CHART_CATEGORIES = 8;
 
 const ONLINE_OFFLINE_LABELS: Record<string, string> = {
   online: "Онлайн",
@@ -158,14 +158,18 @@ export function ReportsPage() {
 
   const revenueByGiveawayGroups: BarGroupDatum[] = useMemo(
     () =>
-      (byGiveaway ?? []).map((row) => ({
-        label: row.giveaway_name,
-        values: {
-          revenue_online: row.revenue_online,
-          revenue_offline_cash: row.revenue_offline_cash,
-          revenue_offline_cashless: row.revenue_offline_cashless,
-        },
-      })),
+      bucketGroupTail(
+        (byGiveaway ?? []).map((row) => ({
+          label: row.giveaway_name,
+          values: {
+            revenue_online: row.revenue_online,
+            revenue_offline_cash: row.revenue_offline_cash,
+            revenue_offline_cashless: row.revenue_offline_cashless,
+          },
+        })),
+        REVENUE_SERIES.map((s) => s.key),
+        MAX_CHART_CATEGORIES,
+      ),
     [byGiveaway],
   );
 
@@ -198,7 +202,7 @@ export function ReportsPage() {
       (byChannel ?? []).map((row, i) => ({
         key: row.channel,
         label: CHANNEL_LABELS[row.channel] ?? row.channel,
-        colorVar: `--series-${(i % 4) + 1}`,
+        colorVar: `--series-${(i % 6) + 1}`,
       })),
     [byChannel],
   );
@@ -286,12 +290,32 @@ export function ReportsPage() {
         </div>
         <div className="viz-chart-card">
           {salesByPeriod ? (
-            <LineChart
-              data={trendData}
-              formatValue={metric === "amount" ? formatMoney : (v) => String(Math.round(v))}
-              formatX={(x) => formatPeriodLabel(x, granularity)}
-              height={180}
-            />
+            <>
+              <LineChart
+                data={trendData}
+                formatValue={metric === "amount" ? formatMoney : (v) => String(Math.round(v))}
+                formatAxisValue={metric === "amount" ? formatMoneyCompact : undefined}
+                formatX={(x) => formatPeriodLabel(x, granularity)}
+                height={180}
+                emptyMessage={
+                  dateFrom || dateTo
+                    ? "Нет продаж в выбранном диапазоне"
+                    : "В этой коллекции ещё не было продаж"
+                }
+              />
+              {trendData.length === 0 && (dateFrom || dateTo) && (
+                <button
+                  type="button"
+                  className="button-secondary"
+                  onClick={() => {
+                    setDateFrom("");
+                    setDateTo("");
+                  }}
+                >
+                  Сбросить диапазон
+                </button>
+              )}
+            </>
           ) : (
             <LoadingState />
           )}
@@ -317,8 +341,9 @@ export function ReportsPage() {
               groups={revenueByGiveawayGroups}
               series={REVENUE_SERIES}
               stacked
+              orientation="horizontal"
               formatValue={formatMoney}
-              height={160}
+              formatAxisValue={formatMoneyCompact}
             />
           ) : (
             <LoadingState />
@@ -383,6 +408,7 @@ export function ReportsPage() {
               stacked={false}
               showLegend={false}
               formatValue={formatMoney}
+              formatAxisValue={formatMoneyCompact}
               height={160}
             />
           ) : (
@@ -425,6 +451,7 @@ export function ReportsPage() {
               stacked={false}
               showLegend={false}
               formatValue={formatMoney}
+              formatAxisValue={formatMoneyCompact}
               height={160}
             />
           ) : (

@@ -16,7 +16,7 @@ import datetime as dt
 from dataclasses import dataclass
 from typing import Literal
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
@@ -52,6 +52,10 @@ BANK_MISMATCH_ALERT_HOURS = 3
 # автоотмены (`backend/background/_release_expired_manual_registrations`).
 MANUAL_REGISTRATION_EXPIRY_WARN_RATIO = 0.75
 
+# Длина спарклайна на карточке коллекции (выручка по дням, оба источника) —
+# 14 дней достаточно, чтобы увидеть форму тренда, не растягивая узкую карточку.
+SPARKLINE_DAYS = 14
+
 
 @dataclass(frozen=True)
 class GiveawayCard:
@@ -70,6 +74,65 @@ class GiveawayCard:
     revenue_online: int
     revenue_offline: int
     revenue_total: int
+    # Выручка (онлайн + офлайн) по последним SPARKLINE_DAYS дням, от старого к
+    # новому, включая сегодняшний неполный день — см. _daily_revenue_by_giveaway.
+    sparkline: list[int]
+
+
+def _daily_revenue_by_giveaway(session: Session, giveaway_ids: list[int]) -> dict[int, list[int]]:
+    """Выручка по дням за последние SPARKLINE_DAYS на каждую коллекцию — для
+    спарклайна на карточке (см. GiveawayCard.sparkline). В отличие от
+    `report_service.sales_by_period` (одноразовый просмотр на «Отчётах») здесь
+    важна лёгкость запроса: Dashboard опрашивается раз в 3 секунды, поэтому
+    период отсекается на уровне SQL, а не после загрузки всех платежей/регистраций
+    коллекции в Python."""
+    if not giveaway_ids:
+        return {}
+
+    now = utcnow()
+    cutoff_date = (now - dt.timedelta(days=SPARKLINE_DAYS - 1)).date()
+    day_keys = [(cutoff_date + dt.timedelta(days=i)).isoformat() for i in range(SPARKLINE_DAYS)]
+    cutoff = dt.datetime.combine(cutoff_date, dt.time.min, tzinfo=now.tzinfo)
+
+    online_by_giveaway: dict[int, dict[str, int]] = {}
+    online_stmt = select(
+        Payment.giveaway_id, Payment.confirmed_at, Payment.created_at, Payment.amount
+    ).where(
+        Payment.status == PaymentStatus.SUCCEEDED,
+        Payment.giveaway_id.in_(giveaway_ids),
+        or_(Payment.confirmed_at >= cutoff, Payment.created_at >= cutoff),
+    )
+    for gid, confirmed_at, created_at, amount in session.execute(online_stmt).all():
+        key = (confirmed_at or created_at).date().isoformat()
+        bucket = online_by_giveaway.setdefault(gid, {})
+        bucket[key] = bucket.get(key, 0) + amount
+
+    offline_by_giveaway: dict[int, dict[str, int]] = {}
+    offline_stmt = (
+        select(
+            ManualRegistration.giveaway_id,
+            ManualRegistration.confirmed_at,
+            ManualRegistration.quantity,
+            Giveaway.ticket_price,
+        )
+        .join(Giveaway, Giveaway.id == ManualRegistration.giveaway_id)
+        .where(
+            ManualRegistration.status == ManualRegistrationStatus.CONFIRMED,
+            ManualRegistration.giveaway_id.in_(giveaway_ids),
+            ManualRegistration.confirmed_at >= cutoff,
+        )
+    )
+    for gid, confirmed_at, quantity, ticket_price in session.execute(offline_stmt).all():
+        key = confirmed_at.date().isoformat()
+        bucket = offline_by_giveaway.setdefault(gid, {})
+        bucket[key] = bucket.get(key, 0) + quantity * ticket_price
+
+    result: dict[int, list[int]] = {}
+    for gid in giveaway_ids:
+        online_days = online_by_giveaway.get(gid, {})
+        offline_days = offline_by_giveaway.get(gid, {})
+        result[gid] = [online_days.get(k, 0) + offline_days.get(k, 0) for k in day_keys]
+    return result
 
 
 def giveaway_cards(session: Session) -> list[GiveawayCard]:
@@ -114,6 +177,7 @@ def giveaway_cards(session: Session) -> list[GiveawayCard]:
         .group_by(ManualRegistration.giveaway_id)
     )
     offline_qty_by_giveaway = dict(session.execute(offline_stmt).tuples().all())
+    sparkline_by_giveaway = _daily_revenue_by_giveaway(session, giveaway_ids)
 
     cards = []
     for g in giveaways:
@@ -136,6 +200,7 @@ def giveaway_cards(session: Session) -> list[GiveawayCard]:
                 revenue_online=revenue_online,
                 revenue_offline=revenue_offline,
                 revenue_total=revenue_online + revenue_offline,
+                sparkline=sparkline_by_giveaway.get(g.id, [0] * SPARKLINE_DAYS),
             )
         )
     return cards

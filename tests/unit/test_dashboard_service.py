@@ -167,6 +167,41 @@ def test_giveaway_cards_aggregates_revenue_and_ticket_counts(session: Session) -
     assert card.free_tickets_count == 38
 
 
+def test_giveaway_cards_sparkline_buckets_by_day_within_window(session: Session) -> None:
+    g = make_giveaway(session, prefix="SPARK")  # ticket_price=10000
+    p = make_participant(session)
+    op = make_operator(session)
+    now = utcnow()
+    two_days_ago = now - dt.timedelta(days=2)
+    outside_window = now - dt.timedelta(days=svc.SPARKLINE_DAYS + 5)
+
+    make_payment(session, giveaway_id=g.id, participant_id=p.id, amount=7000, confirmed_at=now)
+    make_manual_registration(
+        session,
+        giveaway_id=g.id,
+        participant_id=p.id,
+        operator_id=op.id,
+        quantity=1,
+        confirmed_at=two_days_ago,
+    )
+    make_payment(
+        session, giveaway_id=g.id, participant_id=p.id, amount=99999, confirmed_at=outside_window
+    )
+
+    card = {c.id: c for c in svc.giveaway_cards(session)}[g.id]
+    assert len(card.sparkline) == svc.SPARKLINE_DAYS
+    assert card.sparkline[-1] == 7000  # сегодня
+    assert card.sparkline[-3] == 10000  # два дня назад: 1 * ticket_price
+    # Платёж за пределами окна не должен попасть ни в одну корзину.
+    assert sum(card.sparkline) == 7000 + 10000
+
+
+def test_giveaway_cards_sparkline_all_zero_without_sales(session: Session) -> None:
+    g = make_giveaway(session, prefix="SPARKZERO")
+    cards = {c.id: c for c in svc.giveaway_cards(session)}
+    assert cards[g.id].sparkline == [0] * svc.SPARKLINE_DAYS
+
+
 def test_giveaway_cards_includes_archived_flagged(session: Session) -> None:
     """Архивные коллекции ТЕПЕРЬ включаются (см. DECISIONS_LOG.md №76) — тумблер
     "только открытые"/"все" фильтрует их на фронте, не на бэкенде; здесь важно

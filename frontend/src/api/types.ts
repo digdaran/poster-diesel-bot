@@ -210,6 +210,9 @@ export interface DashboardGiveawayCard {
   revenue_online: number;
   revenue_offline: number;
   revenue_total: number;
+  // Выручка (онлайн + офлайн) по дням за последние SPARKLINE_DAYS, от старого к
+  // новому — см. app/services/dashboard_service.py.
+  sparkline: number[];
 }
 
 export interface DashboardSalesPoint {
@@ -247,6 +250,12 @@ export interface Dashboard {
   giveaways: DashboardGiveawayCard[];
   sales_trend: DashboardSalesPoint[];
   alerts: DashboardAlert[];
+  average_check: number;
+  revenue_by_channel: ChannelSalesRow[];
+  // Сумма sales_trend за предыдущие 30 дней — для дельты у заголовка графика.
+  sales_trend_prev_total: number;
+  revenue_today: number;
+  revenue_yesterday: number;
 }
 
 export interface RevenueByGiveawayRow {

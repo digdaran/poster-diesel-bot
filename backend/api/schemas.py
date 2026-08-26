@@ -336,12 +336,19 @@ class DashboardGiveawayCardOut(BaseModel):
     revenue_online: int
     revenue_offline: int
     revenue_total: int
+    sparkline: list[int]
 
     model_config = {"from_attributes": True}
 
 
 class DashboardSalesPointOut(BaseModel):
     period: str
+    count: int
+    amount: int
+
+
+class ChannelSalesOut(BaseModel):
+    channel: str
     count: int
     amount: int
 
@@ -376,3 +383,13 @@ class DashboardOut(BaseModel):
     giveaways: list[DashboardGiveawayCardOut]
     sales_trend: list[DashboardSalesPointOut]
     alerts: list[DashboardAlertOut]
+    # Средний чек (только по онлайн-платежам — см. report_service.financial_summary).
+    average_check: int
+    # Разбивка выручки по каналу связи (Telegram/VK) — см. report_service.sales_by_channel.
+    revenue_by_channel: list[ChannelSalesOut]
+    # Сумма графика "Динамика продаж" (sales_trend) за предыдущие SALES_TREND_DAYS
+    # дней — сравнить сам с собой, не открывая «Отчёты» (см. backend/api/dashboard.py).
+    sales_trend_prev_total: int
+    # Выручка (онлайн + офлайн) сегодня и вчера целиком — для дельты на hero-карточке.
+    revenue_today: int
+    revenue_yesterday: int

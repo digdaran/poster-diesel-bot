@@ -1396,6 +1396,8 @@ section {
   --series-2: #3763c9;
   --series-3: #16875a;
   --series-4: #a83f2a;
+  --series-5: #0f7c86;
+  --series-6: #6a3fa0;
   position: relative;
 }
 
@@ -1405,6 +1407,8 @@ section {
     --series-2: #5b8def;
     --series-3: #2fae74;
     --series-4: #e2694a;
+    --series-5: #2bb3c0;
+    --series-6: #9b6fd6;
   }
 }
 
@@ -1413,6 +1417,8 @@ section {
   --series-2: #5b8def;
   --series-3: #2fae74;
   --series-4: #e2694a;
+  --series-5: #2bb3c0;
+  --series-6: #9b6fd6;
 }
 
 :root[data-theme="light"] .viz-root {
@@ -1420,6 +1426,8 @@ section {
   --series-2: #3763c9;
   --series-3: #16875a;
   --series-4: #a83f2a;
+  --series-5: #0f7c86;
+  --series-6: #6a3fa0;
 }
 
 .viz-line-wrapper {
@@ -1695,10 +1703,31 @@ section {
 }
 
 .giveaway-card-revenue {
+  min-width: 0;
   font-size: 21px;
   font-weight: 700;
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
+}
+
+.giveaway-card-revenue-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sparkline {
+  display: block;
+  flex-shrink: 0;
+}
+
+/* Dashboard — плитка "Сегодня" с бейджем дельты к вчера (см. DashboardPage.tsx) */
+.dashboard-kpi-delta-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .giveaway-card-progress-row {

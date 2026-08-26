@@ -63,6 +63,41 @@ def sales_by_period(
     return [{"period": k, **v} for k, v in sorted(buckets.items())]
 
 
+def offline_revenue_by_day(
+    session: Session,
+    *,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    giveaway_id: int | None = None,
+) -> dict[str, int]:
+    """Офлайн-выручка (наличные + безнал по QR оператора), сгруппированная по
+    дню подтверждения (`confirmed_at`) — младшая сестра `sales_by_period`,
+    которая считает только онлайн. Используется на Dashboard для сравнения
+    `revenue_total` (онлайн + офлайн, как и везде) день-к-дню, см.
+    `backend/api/dashboard.py`. Ключи — `%Y-%m-%d`, как у `sales_by_period` с
+    `granularity="day"`, чтобы дни из обеих выдач совмещались напрямую."""
+    stmt = (
+        select(ManualRegistration.confirmed_at, ManualRegistration.quantity, Giveaway.ticket_price)
+        .join(Giveaway, Giveaway.id == ManualRegistration.giveaway_id)
+        .where(ManualRegistration.status == ManualRegistrationStatus.CONFIRMED)
+    )
+    if giveaway_id is not None:
+        stmt = stmt.where(ManualRegistration.giveaway_id == giveaway_id)
+
+    buckets: dict[str, int] = {}
+    for confirmed_at, quantity, ticket_price in session.execute(stmt).all():
+        if confirmed_at is None:
+            continue
+        d = confirmed_at.date()
+        if date_from is not None and d < date_from:
+            continue
+        if date_to is not None and d > date_to:
+            continue
+        key = d.strftime("%Y-%m-%d")
+        buckets[key] = buckets.get(key, 0) + quantity * ticket_price
+    return buckets
+
+
 def online_vs_offline(
     session: Session, *, giveaway_id: int | None = None
 ) -> dict[str, dict[str, int]]:

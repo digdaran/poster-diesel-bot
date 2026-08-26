@@ -4,6 +4,7 @@ webhook банка -> идемпотентная финализация онла
 
 from __future__ import annotations
 
+from app.services.dashboard_service import SPARKLINE_DAYS
 from fastapi.testclient import TestClient
 
 from tests.integration.conftest import auth_headers, login
@@ -87,6 +88,16 @@ def test_full_manual_sale_flow(api_client: TestClient) -> None:
     assert card["is_closed_forever"] is False
     assert isinstance(dashboard["sales_trend"], list)
     assert isinstance(dashboard["alerts"], list)
+
+    # Новые агрегаты Dashboard (см. backend/api/dashboard.py): спарклайн
+    # коллекции, средний чек, разбивка по каналу, дельта день/период.
+    assert len(card["sparkline"]) == SPARKLINE_DAYS
+    assert card["sparkline"][-1] == 3 * 15000  # регистрация подтверждена только что — сегодня
+    assert dashboard["average_check"] == 0  # нет онлайн-платежей
+    assert dashboard["revenue_by_channel"] == []
+    assert dashboard["revenue_today"] == 3 * 15000
+    assert dashboard["revenue_yesterday"] == 0
+    assert isinstance(dashboard["sales_trend_prev_total"], int)
 
     resp = api_client.get(f"/api/giveaways/{giveaway_id}", headers=headers)
     assert resp.json()["tickets_issued"] == 3

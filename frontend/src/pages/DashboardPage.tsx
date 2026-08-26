@@ -1,11 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { useAuth } from "../auth/AuthContext";
 import { DashboardApi } from "../api/resources";
 import type { Dashboard, DashboardAlert, DashboardGiveawayCard } from "../api/types";
 import { LoadingState } from "../components/EmptyState";
 import { Badge } from "../components/Badge";
+import { BankReconciliationStatusPanel } from "../components/BankReconciliationStatusPanel";
 import { LineChart } from "../components/charts/LineChart";
-import { formatMoney } from "../utils/format";
+import { BarChart } from "../components/charts/BarChart";
+import type { BarGroupDatum, BarSeriesSpec } from "../components/charts/BarChart";
+import { Sparkline } from "../components/charts/Sparkline";
+import { CHANNEL_LABELS } from "../utils/channels";
+import { formatMoney, formatMoneyCompact, formatPercentDelta } from "../utils/format";
 
 // Как и «Мониторинг продаж» — сводка на Dashboard обновляется вживую, раз в
 // несколько секунд, а не только при заходе на страницу (см. обсуждение с
@@ -57,7 +63,10 @@ function GiveawayCard({ giveaway }: { giveaway: DashboardGiveawayCard }) {
         <span className="giveaway-card-name">{giveaway.name}</span>
         {giveawayStatusBadge(giveaway)}
       </div>
-      <div className="giveaway-card-revenue">{formatMoney(giveaway.revenue_total)}</div>
+      <div className="giveaway-card-revenue-row">
+        <div className="giveaway-card-revenue">{formatMoney(giveaway.revenue_total)}</div>
+        <Sparkline data={giveaway.sparkline} width={64} height={24} />
+      </div>
       <div className="giveaway-card-progress-row">
         <div className="giveaway-card-progress-track">
           <div
@@ -139,6 +148,7 @@ function DashboardAlertRow({ alert }: { alert: DashboardAlert }) {
 }
 
 export function DashboardPage() {
+  const { hasPermission } = useAuth();
   const [data, setData] = useState<Dashboard | null>(null);
   const [showAllGiveaways, setShowAllGiveaways] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -182,6 +192,34 @@ export function DashboardPage() {
     [data],
   );
 
+  // Дельта к предыдущим 30 дням у заголовка графика — сумма самого графика
+  // (trendData) против sales_trend_prev_total, который приходит уже готовым.
+  const trendDelta = useMemo(() => {
+    if (!data) return null;
+    const trendTotal = trendData.reduce((sum, p) => sum + p.y, 0);
+    return formatPercentDelta(trendTotal, data.sales_trend_prev_total);
+  }, [data, trendData]);
+
+  const todayDelta = data ? formatPercentDelta(data.revenue_today, data.revenue_yesterday) : null;
+
+  const channelGroups: BarGroupDatum[] = useMemo(
+    () =>
+      (data?.revenue_by_channel ?? []).map((row) => ({
+        label: CHANNEL_LABELS[row.channel] ?? row.channel,
+        values: { [row.channel]: row.amount },
+      })),
+    [data],
+  );
+  const channelSeries: BarSeriesSpec[] = useMemo(
+    () =>
+      (data?.revenue_by_channel ?? []).map((row, i) => ({
+        key: row.channel,
+        label: CHANNEL_LABELS[row.channel] ?? row.channel,
+        colorVar: `--series-${(i % 6) + 1}`,
+      })),
+    [data],
+  );
+
   if (!data) return <LoadingState />;
 
   return (
@@ -216,6 +254,19 @@ export function DashboardPage() {
           <div className="card-value">{data.giveaways_count}</div>
           <div className="card-label">Коллекций</div>
         </div>
+        <div className="card">
+          <div className="card-value">{formatMoney(data.average_check)}</div>
+          <div className="card-label">Средний чек (онлайн)</div>
+        </div>
+        <div className="card">
+          <div className="card-value">{formatMoney(data.revenue_today)}</div>
+          <div className="card-label dashboard-kpi-delta-row">
+            <span>Сегодня · вчера {formatMoney(data.revenue_yesterday)}</span>
+            {todayDelta && (
+              <Badge tone={todayDelta.startsWith("-") ? "danger" : "success"}>{todayDelta}</Badge>
+            )}
+          </div>
+        </div>
       </div>
 
       {data.alerts.length > 0 && (
@@ -237,16 +288,48 @@ export function DashboardPage() {
       )}
 
       <section>
-        <h2>Динамика продаж за 30 дней</h2>
+        <div className="viz-chart-header">
+          <h2>Динамика продаж за 30 дней</h2>
+          {trendDelta && (
+            <Badge tone={trendDelta.startsWith("-") ? "danger" : "success"}>
+              {trendDelta} к прошлым 30 дням
+            </Badge>
+          )}
+        </div>
         <div className="viz-chart-card">
           <LineChart
             data={trendData}
             formatValue={formatMoney}
+            formatAxisValue={formatMoneyCompact}
             formatX={formatDayLabel}
             height={160}
           />
         </div>
       </section>
+
+      {channelGroups.length > 0 && (
+        <section>
+          <h2>Продажи по каналу связи</h2>
+          <div className="viz-chart-card">
+            <BarChart
+              groups={channelGroups}
+              series={channelSeries}
+              stacked={false}
+              showLegend={false}
+              formatValue={formatMoney}
+              formatAxisValue={formatMoneyCompact}
+              height={140}
+            />
+          </div>
+        </section>
+      )}
+
+      {hasPermission("view_bank_reconciliation") && (
+        <section>
+          <h2>Сверка банковской выписки</h2>
+          <BankReconciliationStatusPanel />
+        </section>
+      )}
 
       <section>
         <div className="viz-chart-header">

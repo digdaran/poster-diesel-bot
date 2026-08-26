@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from backend.api.deps import get_session, get_settings_dep, require_permission
 from backend.api.schemas import (
+    ChannelSalesOut,
     DashboardAlertOut,
     DashboardGiveawayCardOut,
     DashboardOut,
@@ -46,12 +47,47 @@ def get_dashboard(
     revenue = svc.online_vs_offline(session)
     revenue_online = revenue["online"]["amount"]
     revenue_offline = revenue["offline"]["amount"]
+    average_check = (
+        revenue["online"]["amount"] // revenue["online"]["count"]
+        if revenue["online"]["count"]
+        else 0
+    )
 
     trend_date_to = utcnow().date()
     trend_date_from = trend_date_to - dt.timedelta(days=SALES_TREND_DAYS - 1)
     sales_trend = svc.sales_by_period(
         session, granularity="day", date_from=trend_date_from, date_to=trend_date_to
     )
+
+    # Тот же онлайн-график, что и sales_trend, но за предыдущие SALES_TREND_DAYS
+    # дней — только чтобы посчитать сумму для дельты у заголовка графика
+    # ("+12% к прошлым 30 дням"), сами точки на фронт не идут.
+    prev_trend_date_to = trend_date_from - dt.timedelta(days=1)
+    prev_trend_date_from = prev_trend_date_to - dt.timedelta(days=SALES_TREND_DAYS - 1)
+    sales_trend_prev_total = sum(
+        row["amount"]
+        for row in svc.sales_by_period(
+            session, granularity="day", date_from=prev_trend_date_from, date_to=prev_trend_date_to
+        )
+    )
+
+    # Выручка (онлайн + офлайн, как revenue_total) за сегодня и за вчера целиком
+    # — для дельты на hero-карточке. "Сегодня" — текущий, ещё не завершившийся
+    # день, сравнение с целым "вчера" честно предупреждено на фронте подписью,
+    # а не выдаётся за сравнение сопоставимых периодов.
+    today = trend_date_to
+    yesterday = today - dt.timedelta(days=1)
+    daily_online = {
+        row["period"]: row["amount"]
+        for row in svc.sales_by_period(
+            session, granularity="day", date_from=yesterday, date_to=today
+        )
+    }
+    daily_offline = svc.offline_revenue_by_day(session, date_from=yesterday, date_to=today)
+
+    def _day_total(d: dt.date) -> int:
+        key = d.strftime("%Y-%m-%d")
+        return daily_online.get(key, 0) + daily_offline.get(key, 0)
 
     return DashboardOut(
         participants_count=participants_count,
@@ -69,4 +105,9 @@ def get_dashboard(
             DashboardAlertOut.model_validate(alert)
             for alert in dashboard_service.compute_alerts(session, settings)
         ],
+        average_check=average_check,
+        revenue_by_channel=[ChannelSalesOut(**row) for row in svc.sales_by_channel(session)],
+        sales_trend_prev_total=sales_trend_prev_total,
+        revenue_today=_day_total(today),
+        revenue_yesterday=_day_total(yesterday),
     )

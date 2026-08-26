@@ -1,10 +1,5 @@
 import { Badge } from "./Badge";
-
-const CHANNEL_LABELS: Record<string, string> = {
-  telegram: "Telegram",
-  vk: "VK",
-  max: "MAX",
-};
+import { CHANNEL_LABELS } from "../utils/channels";
 
 type Props = { channels: string[] } | { channel: string | null };
 

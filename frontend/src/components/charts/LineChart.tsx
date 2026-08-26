@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from "react";
+import type { KeyboardEvent } from "react";
 import { ChartTooltip } from "./ChartTooltip";
 
 export interface LineChartPoint {
@@ -9,6 +10,9 @@ export interface LineChartPoint {
 interface LineChartProps {
   data: LineChartPoint[];
   formatValue?: (v: number) => string;
+  // Подпись на оси Y — по умолчанию совпадает с formatValue, но для денег
+  // разумно сократить ("4,5 млн ₽"), оставив точную сумму в тултипе.
+  formatAxisValue?: (v: number) => string;
   formatX?: (x: string) => string;
   colorVar?: string;
   height?: number;
@@ -21,11 +25,13 @@ const MARGIN = { top: 16, right: 16, bottom: 28, left: 56 };
 export function LineChart({
   data,
   formatValue = String,
+  formatAxisValue,
   formatX = (x) => x,
   colorVar = "--series-1",
   height = 240,
   emptyMessage = "Нет данных за выбранный период",
 }: LineChartProps) {
+  const formatAxis = formatAxisValue ?? formatValue;
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
 
@@ -74,6 +80,25 @@ export function LineChart({
     setHoverIndex(Math.min(Math.max(idx, 0), points.length - 1));
   }
 
+  // Клавиатурный паритет с BarChart (там бары фокусируются табом) — стрелками
+  // двигаем курсор по точкам, когда график в фокусе.
+  function onKeyDown(e: KeyboardEvent<SVGSVGElement>) {
+    if (points.length === 0) return;
+    if (e.key === "ArrowRight") {
+      e.preventDefault();
+      setHoverIndex((i) => Math.min((i ?? -1) + 1, points.length - 1));
+    } else if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      setHoverIndex((i) => Math.max((i ?? points.length) - 1, 0));
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      setHoverIndex(0);
+    } else if (e.key === "End") {
+      e.preventDefault();
+      setHoverIndex(points.length - 1);
+    }
+  }
+
   const hovered = hoverIndex !== null ? points[hoverIndex] : hasLine ? null : points[0];
 
   return (
@@ -83,9 +108,11 @@ export function LineChart({
         className="viz-svg"
         viewBox={`0 0 ${WIDTH} ${height}`}
         role="img"
-        aria-label={`Линейный график, ${points.length} точек, максимум ${formatValue(maxY)}`}
+        aria-label={`Линейный график, ${points.length} точек, максимум ${formatValue(maxY)}. Стрелками влево/вправо — по точкам.`}
+        tabIndex={hasLine ? 0 : undefined}
         onPointerMove={(e) => updateHoverFromClientX(e.clientX)}
         onPointerLeave={() => setHoverIndex(null)}
+        onKeyDown={onKeyDown}
       >
         {yTickValues.map((v, i) => {
           const y = baselineY - (v / maxY) * innerHeight;
@@ -105,7 +132,7 @@ export function LineChart({
                 textAnchor="end"
                 dominantBaseline="middle"
               >
-                {formatValue(v)}
+                {formatAxis(v)}
               </text>
             </g>
           );

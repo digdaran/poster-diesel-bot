@@ -325,6 +325,67 @@ def test_online_vs_offline(session: Session) -> None:
     assert result["offline_cashless"] == {"count": 1, "amount": 30000}
 
 
+def test_offline_revenue_by_day(session: Session) -> None:
+    g = make_giveaway(session)  # ticket_price=10000
+    p = make_participant(session, "79990003334")
+    operator = PanelUser(login="op-offline-day", password_hash="x", role=PanelUserRole.OPERATOR)
+    session.add(operator)
+    session.flush()
+
+    day1 = dt.datetime(2024, 5, 1, 10, 0)
+    day2 = dt.datetime(2024, 5, 2, 23, 59)
+    session.add(
+        ManualRegistration(
+            participant_id=p.id,
+            giveaway_id=g.id,
+            quantity=2,
+            status=ManualRegistrationStatus.CONFIRMED,
+            operator_id=operator.id,
+            confirmed_at=day1,
+        )
+    )
+    session.add(
+        ManualRegistration(
+            participant_id=p.id,
+            giveaway_id=g.id,
+            quantity=1,
+            status=ManualRegistrationStatus.CONFIRMED,
+            operator_id=operator.id,
+            confirmed_at=day1,
+        )
+    )
+    session.add(
+        ManualRegistration(
+            participant_id=p.id,
+            giveaway_id=g.id,
+            quantity=3,
+            status=ManualRegistrationStatus.CONFIRMED,
+            operator_id=operator.id,
+            confirmed_at=day2,
+        )
+    )
+    # PENDING (не подтверждена) и без confirmed_at — не должна попасть никуда.
+    session.add(
+        ManualRegistration(
+            participant_id=p.id,
+            giveaway_id=g.id,
+            quantity=99,
+            status=ManualRegistrationStatus.PENDING,
+            operator_id=operator.id,
+        )
+    )
+    session.flush()
+
+    result = svc.offline_revenue_by_day(session)
+    assert result == {"2024-05-01": 30000, "2024-05-02": 30000}
+
+    # date_from/date_to отсекают день2.
+    result_filtered = svc.offline_revenue_by_day(
+        session, date_from=day1.date(), date_to=day1.date()
+    )
+    assert result_filtered == {"2024-05-01": 30000}
+
+
 def test_revenue_by_giveaway(session: Session) -> None:
     g1 = make_giveaway(session, prefix="RBG1")
     g2 = make_giveaway(session, prefix="RBG2")
