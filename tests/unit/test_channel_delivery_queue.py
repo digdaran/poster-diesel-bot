@@ -5,16 +5,19 @@ DECISIONS_LOG.md №73): немедленная попытка с ретраям
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from unittest.mock import AsyncMock
 
 import pytest
+from aiogram.exceptions import TelegramForbiddenError, TelegramNotFound
 from app.core.db import Database
 from app.models.enums import ChannelType, PendingDeliveryKind, PendingDeliveryStatus
 from app.models.participant import Participant
 from app.models.pending_channel_delivery import PendingChannelDelivery
 from app.services import channel_delivery_queue as queue_svc
 from sqlalchemy import select
+from vkbottle import VKAPIError
 
 
 @dataclass
@@ -22,12 +25,18 @@ class FakeChannel:
     fail_times: int = 0
     """Сколько первых вызовов ЛЮБОГО метода должны падать, прежде чем начать
     успевать — 0 значит "всегда успех"."""
+    fail_exception: Callable[[], Exception] | None = None
+    """Если задано — ВСЕГДА падает с этим исключением (игнорирует fail_times);
+    для проверки постоянных сбоев (заблокировал бота и т.п.), которые не
+    "исправляются" повторной попыткой."""
     calls: list[tuple[str, tuple, dict]] = field(default_factory=list)
     _call_count: int = 0
 
     async def _maybe_fail(self, name: str, *args: object, **kwargs: object) -> None:
         self.calls.append((name, args, kwargs))
         self._call_count += 1
+        if self.fail_exception is not None:
+            raise self.fail_exception()
         if self._call_count <= self.fail_times:
             raise RuntimeError(f"boom on call {self._call_count}")
 
@@ -70,7 +79,7 @@ async def test_send_or_enqueue_succeeds_immediately_without_enqueueing(db: Datab
         payload={"text": "привет"},
     )
 
-    assert sent is True
+    assert sent == queue_svc.DeliveryOutcome.DELIVERED
     assert channel.calls == [("send_message", ("123", "привет"), {})]
     assert _all_deliveries(db) == []
 
@@ -94,7 +103,7 @@ async def test_send_or_enqueue_falls_back_to_queue_after_exhausting_retries(
         participant_id=participant_id,
     )
 
-    assert sent is False
+    assert sent == queue_svc.DeliveryOutcome.QUEUED
     rows = _all_deliveries(db)
     assert len(rows) == 1
     row = rows[0]
@@ -121,9 +130,88 @@ async def test_send_or_enqueue_succeeds_after_transient_failures(db: Database) -
         payload={"text": "привет"},
     )
 
-    assert sent is True
+    assert sent == queue_svc.DeliveryOutcome.DELIVERED
     assert len(channel.calls) == 3
     assert _all_deliveries(db) == []
+
+
+async def test_send_or_enqueue_marks_undeliverable_for_permanent_telegram_failure(
+    db: Database,
+) -> None:
+    """ "bot was blocked by the user" — то же самое на любой попытке (найдено
+    на первой боевой рассылке, DECISIONS_LOG.md №82): не повторяем, сразу
+    помечаем терминальным статусом вместо бесконечной докрутки."""
+    channel = FakeChannel(
+        fail_exception=lambda: TelegramForbiddenError(
+            method=AsyncMock(), message="Forbidden: bot was blocked by the user"
+        )
+    )
+    with db.session() as session:
+        session.add(Participant(phone="79995550001", phone_verified=True))
+        session.flush()
+        participant_id = session.query(Participant).one().id
+
+    outcome = await queue_svc.send_or_enqueue(
+        db,
+        channel=channel,
+        channel_type=ChannelType.TELEGRAM,
+        external_user_id="123",
+        kind=PendingDeliveryKind.TEXT_MESSAGE,
+        payload={"text": "привет"},
+        participant_id=participant_id,
+    )
+
+    assert outcome == queue_svc.DeliveryOutcome.UNDELIVERABLE
+    assert len(channel.calls) == 1  # ни одного лишнего повтора
+    rows = _all_deliveries(db)
+    assert len(rows) == 1
+    assert rows[0].status == PendingDeliveryStatus.UNDELIVERABLE
+    assert rows[0].last_error is not None
+    assert "blocked" in rows[0].last_error
+
+
+async def test_send_or_enqueue_marks_undeliverable_for_permanent_vk_failure(
+    db: Database,
+) -> None:
+    """Код 901 ("нельзя писать первым") постоянный — как и 900/902."""
+    channel = FakeChannel(
+        fail_exception=lambda: VKAPIError[901](error_msg="Can't send messages...")
+    )
+
+    outcome = await queue_svc.send_or_enqueue(
+        db,
+        channel=channel,
+        channel_type=ChannelType.VK,
+        external_user_id="vk-1",
+        kind=PendingDeliveryKind.TEXT_MESSAGE,
+        payload={"text": "привет"},
+    )
+
+    assert outcome == queue_svc.DeliveryOutcome.UNDELIVERABLE
+    assert len(channel.calls) == 1
+    rows = _all_deliveries(db)
+    assert rows[0].status == PendingDeliveryStatus.UNDELIVERABLE
+
+
+async def test_send_or_enqueue_queues_transient_vk_failure_not_undeliverable(
+    db: Database,
+) -> None:
+    """Код, не входящий в постоянный список (например временная перегрузка
+    API) — обычная постановка в очередь на докрутку, не UNDELIVERABLE."""
+    channel = FakeChannel(fail_exception=lambda: VKAPIError[10](error_msg="Internal server error"))
+
+    outcome = await queue_svc.send_or_enqueue(
+        db,
+        channel=channel,
+        channel_type=ChannelType.VK,
+        external_user_id="vk-1",
+        kind=PendingDeliveryKind.TEXT_MESSAGE,
+        payload={"text": "привет"},
+    )
+
+    assert outcome == queue_svc.DeliveryOutcome.QUEUED
+    rows = _all_deliveries(db)
+    assert rows[0].status == PendingDeliveryStatus.PENDING
 
 
 async def test_process_pending_deliveries_marks_row_sent_on_success(db: Database) -> None:
@@ -175,6 +263,39 @@ async def test_process_pending_deliveries_keeps_pending_on_repeated_failure(
         assert rows[0].status == PendingDeliveryStatus.PENDING
         assert rows[0].attempts == expected_attempts
         assert rows[0].last_error == f"boom on call {expected_attempts}"
+
+
+async def test_process_pending_deliveries_marks_undeliverable_on_permanent_failure(
+    db: Database,
+) -> None:
+    """Строка встала в очередь как обычный временный сбой (PENDING), но на
+    докрутке провайдер отвечает постоянной ошибкой ("chat not found" — аккаунт
+    удалён) — не должна остаться PENDING навечно, сразу переводим в терминал."""
+    with db.session() as session:
+        session.add(
+            PendingChannelDelivery(
+                channel=ChannelType.TELEGRAM,
+                external_user_id="123",
+                kind=PendingDeliveryKind.TEXT_MESSAGE,
+                payload={"text": "привет"},
+                status=PendingDeliveryStatus.PENDING,
+            )
+        )
+
+    telegram_channel = FakeChannel(
+        fail_exception=lambda: TelegramNotFound(
+            method=AsyncMock(), message="Bad Request: chat not found"
+        )
+    )
+    await queue_svc.process_pending_deliveries(
+        db, telegram_channel=telegram_channel, vk_channel=None
+    )
+
+    rows = _all_deliveries(db)
+    assert len(rows) == 1
+    assert rows[0].status == PendingDeliveryStatus.UNDELIVERABLE
+    assert rows[0].attempts == 1  # не бесполезно докручено, а сразу остановлено
+    assert "chat not found" in rows[0].last_error
 
 
 async def test_process_pending_deliveries_skips_rows_without_configured_channel(

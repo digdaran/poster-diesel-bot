@@ -603,7 +603,8 @@ async def _create_and_offer_payment(
     keyboard = channel.render_payment_prompt(payment_url=outcome.created.payment_url)
     invoice_line = f" Счёт № {outcome.invoice_no}." if outcome.invoice_no else ""
     qr_payload = outcome.created.qr_code_payload
-    qr_sent = False
+    qr_delivered = False
+    qr_undeliverable = False
     if qr_payload:
         qr_caption = (
             "📷 Отсканируйте QR-код в банковском приложении и оплатите по реквизитам.\n"
@@ -618,10 +619,12 @@ async def _create_and_offer_payment(
         # повторного показа, см. DECISIONS_LOG.md). Немедленная попытка — с
         # backoff (app/channels/retry.py); VK photo-upload API деградирует под
         # конкурентной нагрузкой на токен сообщества, но даже если и это не
-        # помогло, доставка не теряется — гарантированно докручивается фоновым
-        # циклом backend до успеха (app/services/channel_delivery_queue.py,
-        # DECISIONS_LOG.md №73), участник получит QR отдельным сообщением позже.
-        qr_sent = await channel_delivery_queue.send_or_enqueue(
+        # помогло ВРЕМЕННО, доставка не теряется — гарантированно докручивается
+        # фоновым циклом backend до успеха (app/services/channel_delivery_queue.py,
+        # DECISIONS_LOG.md №73), участник получит QR отдельным сообщением
+        # позже. Если же отказ ПОСТОЯННЫЙ (участник запретил сообщения от
+        # сообщества — DECISIONS_LOG.md №82) — докручивать бессмысленно.
+        qr_outcome = await channel_delivery_queue.send_or_enqueue(
             db,
             channel=channel,
             channel_type=ChannelType.VK,
@@ -630,14 +633,22 @@ async def _create_and_offer_payment(
             payload={"qr_code_payload": qr_payload, "caption": qr_caption},
             participant_id=participant_id,
         )
+        qr_delivered = qr_outcome == channel_delivery_queue.DeliveryOutcome.DELIVERED
+        qr_undeliverable = qr_outcome == channel_delivery_queue.DeliveryOutcome.UNDELIVERABLE
     if outcome.created.payment_url:
         instruction = (
             "Оплатите по ссылке ниже, либо QR-кодом выше (СБП)."
-            if qr_sent
+            if qr_delivered
             else "Оплатите по ссылке ниже (СБП)."
         )
-    elif qr_sent:
+    elif qr_delivered:
         instruction = "Оплатите QR-код выше в банковском приложении по реквизитам."
+    elif qr_undeliverable:
+        instruction = (
+            "❌ Не удалось отправить QR-код — доставка сообщений в этот чат сейчас "
+            "недоступна. Воспользуйтесь кнопкой «💬 Написать в поддержку», чтобы "
+            "получить реквизиты для оплаты вручную."
+        )
     else:
         instruction = (
             "⏳ Не получилось сразу отправить QR-код — мы автоматически повторим "

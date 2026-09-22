@@ -181,6 +181,9 @@ export function BroadcastsPage() {
                   {b.stats.recipients !== undefined
                     ? `${b.stats.delivered}/${b.stats.recipients} доставлено` +
                       (b.stats.queued ? `, ещё ${b.stats.queued} в очереди` : "") +
+                      (b.stats.undeliverable
+                        ? `, ${b.stats.undeliverable} недоступны (заблокировали/удалены)`
+                        : "") +
                       (b.stats.cancelled ? `, ${b.stats.cancelled} не начато (остановлено)` : "")
                     : "—"}
                 </td>

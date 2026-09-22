@@ -78,3 +78,33 @@ async def test_backoff_delay_grows_between_attempts(monkeypatch: pytest.MonkeyPa
     assert delays[0] >= 1.0  # 1.0 * 2**0 + jitter[0, 1/3)
     assert delays[1] >= 2.0  # 1.0 * 2**1 + jitter[0, 1/3)
     assert delays[1] > delays[0]
+
+
+async def test_is_permanent_stops_retrying_immediately(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Найдено на первой боевой рассылке (DECISIONS_LOG.md №82): "bot was
+    blocked by the user" отвечает ИДЕНТИЧНО на любую попытку — ждать/повторять
+    бессмысленно, `is_permanent` должен прервать ретраи сразу на первой же."""
+    sleep = AsyncMock()
+    monkeypatch.setattr("app.channels.retry.asyncio.sleep", sleep)
+    send = AsyncMock(side_effect=RuntimeError("bot was blocked by the user"))
+
+    with pytest.raises(RuntimeError, match="blocked"):
+        await send_with_retry(send, is_permanent=lambda exc: True)
+
+    send.assert_awaited_once()  # не 3 раза — сразу сдались
+    sleep.assert_not_awaited()  # и не ждали между попытками впустую
+
+
+async def test_is_permanent_does_not_affect_transient_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`is_permanent`, возвращающий False, не должен ничего менять в обычном
+    поведении ретрая — только конкретные распознанные ошибки короткозамыкают."""
+    sleep = AsyncMock()
+    monkeypatch.setattr("app.channels.retry.asyncio.sleep", sleep)
+    send = AsyncMock(side_effect=[RuntimeError("timeout"), RuntimeError("timeout"), None])
+
+    await send_with_retry(send, is_permanent=lambda exc: False)
+
+    assert send.await_count == 3
+    assert sleep.await_count == 2

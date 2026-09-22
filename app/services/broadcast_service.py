@@ -159,6 +159,10 @@ class SendResult:
     гарантированной доставки (`channel_delivery_queue`), докрутится фоновым
     циклом. Эта финальная статистика — снимок на момент отправки, "queued"
     получатели впоследствии станут доставленными без обновления этого снимка."""
+    undeliverable: int
+    """Доставить в принципе невозможно (получатель заблокировал бота/аккаунт
+    удалён) — НЕ будет докручиваться фоновым циклом, повтор бесполезен (см.
+    `channel_delivery_queue._is_permanent_failure`, DECISIONS_LOG.md №82)."""
     cancelled: int
     """Получатель не был даже затронут — рассылку остановили (см.
     `request_cancel_broadcast`) до того, как до него дошла очередь."""
@@ -231,8 +235,10 @@ async def send_broadcast(
     """Реальная отправка — предполагает, что статус уже SENDING
     (`mark_broadcast_sending` вызывается заранее). Каждому получателю —
     независимая попытка через `channel_delivery_queue.send_or_enqueue`:
-    доставлено сейчас (`delivered`) либо поставлено в очередь на
-    гарантированную докрутку (`queued`) — оба исхода НЕ являются провалом
+    доставлено сейчас (`delivered`), поставлено в очередь на гарантированную
+    докрутку (`queued`) либо доставка в принципе невозможна — получатель
+    заблокировал канал/аккаунт удалён (`undeliverable`, НЕ докручивается, см.
+    DECISIONS_LOG.md №82) — ни один из этих трёх исходов не является провалом
     рассылки в целом; `errors` — только для сбоя самой постановки в очередь.
     `telegram_channel=None` (TELEGRAM_BOT_TOKEN не задан в этом процессе) —
     все получатели ставятся в очередь напрямую, докрутятся, когда канал
@@ -263,7 +269,9 @@ async def send_broadcast(
 
     send_semaphore = asyncio.Semaphore(db.settings.channel_send_concurrency_limit)
 
-    async def _send_one(participant_id: int, external_user_id: str) -> bool | None:
+    async def _send_one(
+        participant_id: int, external_user_id: str
+    ) -> channel_delivery_queue.DeliveryOutcome | None:
         async with send_semaphore:
             if broadcast_id in _cancel_requested:
                 return None  # ещё не начато — остановлено до этого получателя
@@ -288,8 +296,10 @@ async def send_broadcast(
 
     delivered = 0
     queued = 0
+    undeliverable = 0
     cancelled = 0
     errors = 0
+    outcome_cls = channel_delivery_queue.DeliveryOutcome
     for (participant_id, _external_user_id), result in zip(recipients, results, strict=True):
         if isinstance(result, BaseException):
             errors += 1
@@ -301,8 +311,10 @@ async def send_broadcast(
             )
         elif result is None:
             cancelled += 1
-        elif result:
+        elif result == outcome_cls.DELIVERED:
             delivered += 1
+        elif result == outcome_cls.UNDELIVERABLE:
+            undeliverable += 1
         else:
             queued += 1
 
@@ -311,7 +323,7 @@ async def send_broadcast(
         assert broadcast is not None
         if cancelled > 0:
             broadcast.status = BroadcastStatus.CANCELLED
-        elif not recipients or delivered > 0 or queued > 0:
+        elif not recipients or delivered > 0 or queued > 0 or undeliverable > 0:
             broadcast.status = BroadcastStatus.SENT
         else:
             broadcast.status = BroadcastStatus.FAILED
@@ -319,6 +331,7 @@ async def send_broadcast(
             "recipients": len(recipients),
             "delivered": delivered,
             "queued": queued,
+            "undeliverable": undeliverable,
             "cancelled": cancelled,
             "errors": errors,
         }
@@ -329,6 +342,7 @@ async def send_broadcast(
         recipients=len(recipients),
         delivered=delivered,
         queued=queued,
+        undeliverable=undeliverable,
         cancelled=cancelled,
         errors=errors,
     )

@@ -107,3 +107,9 @@ class PendingDeliveryKind(str, enum.Enum):
 class PendingDeliveryStatus(str, enum.Enum):
     PENDING = "PENDING"
     SENT = "SENT"
+    # Терминальный статус — доставка невозможна В ПРИНЦИПЕ (получатель
+    # заблокировал бота, аккаунт удалён и т.п.), а не временно не удалась.
+    # В отличие от PENDING, докрутка (`process_pending_deliveries`) больше НЕ
+    # трогает такие строки — иначе фоновый цикл бесконечно повторял бы
+    # заведомо обречённые попытки раз в тик, навсегда. См. DECISIONS_LOG.md.
+    UNDELIVERABLE = "UNDELIVERABLE"

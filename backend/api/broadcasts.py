@@ -109,6 +109,7 @@ async def _send_broadcast_background(
                 "recipients": result.recipients,
                 "delivered": result.delivered,
                 "queued": result.queued,
+                "undeliverable": result.undeliverable,
                 "cancelled": result.cancelled,
                 "errors": result.errors,
             },

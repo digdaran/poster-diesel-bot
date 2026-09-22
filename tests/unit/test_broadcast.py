@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from unittest.mock import AsyncMock
 
 import pytest
+from aiogram.exceptions import TelegramForbiddenError
 from app.core.db import Database
 from app.models.base import utcnow
 from app.models.broadcast import Broadcast
@@ -169,10 +170,15 @@ class FakeTelegramChannel:
     остальные методы `DeliverableChannel` (QR/постер) им не нужны."""
 
     fail_for: set[str] = field(default_factory=set)
+    permanently_fail_for: set[str] = field(default_factory=set)
     sent_to: list[str] = field(default_factory=list)
 
     async def send_message(self, external_user_id: str, text: str, **kwargs: object) -> None:
         self.sent_to.append(external_user_id)
+        if external_user_id in self.permanently_fail_for:
+            raise TelegramForbiddenError(
+                method=AsyncMock(), message="Forbidden: bot was blocked by the user"
+            )
         if external_user_id in self.fail_for:
             raise RuntimeError("messages.send failed")
 
@@ -194,6 +200,7 @@ async def test_send_broadcast_updates_status_and_stats(
     assert result.recipients == 2
     assert result.delivered == 1
     assert result.queued == 1
+    assert result.undeliverable == 0
     assert result.cancelled == 0
     assert result.errors == 0
     assert set(channel.sent_to) == {"tg-a", "tg-b"}
@@ -207,6 +214,7 @@ async def test_send_broadcast_updates_status_and_stats(
             "recipients": 2,
             "delivered": 1,
             "queued": 1,
+            "undeliverable": 0,
             "cancelled": 0,
             "errors": 0,
         }
@@ -221,6 +229,40 @@ async def test_send_broadcast_updates_status_and_stats(
     assert rows[0].payload == {"text": "Привет!"}
 
 
+async def test_send_broadcast_marks_undeliverable_recipients_separately(
+    db: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Получатель, заблокировавший бота, — постоянный сбой (DECISIONS_LOG.md
+    №82): считается отдельно от `queued` и НЕ попадает в очередь на бесконечную
+    докрутку, а сразу пишется терминальным `UNDELIVERABLE`."""
+    monkeypatch.setattr("app.channels.retry.asyncio.sleep", AsyncMock())
+    with db.session() as session:
+        make_participant_with_channel(session, "79993330001", ChannelType.TELEGRAM, "tg-blocked")
+        broadcast = svc.create_broadcast(session, title="Тест", message_text="Привет!")
+        broadcast_id = broadcast.id
+
+    channel = FakeTelegramChannel(permanently_fail_for={"tg-blocked"})
+    result = await svc.send_broadcast(db, broadcast_id=broadcast_id, telegram_channel=channel)
+    assert result.recipients == 1
+    assert result.delivered == 0
+    assert result.queued == 0
+    assert result.undeliverable == 1
+    assert result.cancelled == 0
+    assert result.errors == 0
+    assert channel.sent_to == ["tg-blocked"]  # ни одного лишнего повтора
+
+    with db.session() as session:
+        broadcast = session.execute(
+            select(Broadcast).where(Broadcast.id == broadcast_id)
+        ).scalar_one()
+        assert broadcast.status == BroadcastStatus.SENT
+        assert broadcast.stats["undeliverable"] == 1
+
+        rows = list(session.execute(select(PendingChannelDelivery)).scalars())
+    assert len(rows) == 1
+    assert rows[0].status.value == "UNDELIVERABLE"
+
+
 async def test_send_broadcast_no_recipients_still_completes(db: Database) -> None:
     with db.session() as session:
         broadcast = svc.create_broadcast(session, title="Empty", message_text="Никто не получит")
@@ -230,6 +272,7 @@ async def test_send_broadcast_no_recipients_still_completes(db: Database) -> Non
     assert result.recipients == 0
     assert result.delivered == 0
     assert result.queued == 0
+    assert result.undeliverable == 0
     assert result.cancelled == 0
     assert result.errors == 0
 
@@ -247,6 +290,7 @@ async def test_send_broadcast_without_channel_queues_all_recipients(db: Database
     assert result.recipients == 1
     assert result.delivered == 0
     assert result.queued == 1
+    assert result.undeliverable == 0
     assert result.cancelled == 0
     assert result.errors == 0
 
@@ -342,6 +386,7 @@ async def test_send_broadcast_cooperative_cancel_stops_remaining_recipients(
     assert result.delivered == 1
     assert result.cancelled == 2
     assert result.queued == 0
+    assert result.undeliverable == 0
     assert result.errors == 0
     assert len(channel.sent_to) == 1  # ни один "лишний" получатель не тронут
 
@@ -354,6 +399,7 @@ async def test_send_broadcast_cooperative_cancel_stops_remaining_recipients(
             "recipients": 3,
             "delivered": 1,
             "queued": 0,
+            "undeliverable": 0,
             "cancelled": 2,
             "errors": 0,
         }
