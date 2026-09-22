@@ -88,6 +88,81 @@ def test_resolve_audience_paid_segment(session: Session) -> None:
     assert {p.id for p in unpaid_result} == {unpaid.id}
 
 
+def test_resolve_audience_all_segment_with_giveaway_id_scopes_to_that_giveaway(
+    session: Session,
+) -> None:
+    """Регрессия на инцидент на проде: `{"segment": "all", "giveaway_id": N}`
+    раньше игнорировал `giveaway_id` целиком в ветке "all" и возвращал ВСЕХ
+    Telegram-привязанных участников независимо от покупок — рассылка,
+    задуманная как узкая/пустая, ушла всем 3274 подписчикам бота. `Participant`
+    не связан с `Giveaway` иначе как через `Ticket`, поэтому "все участники
+    ЭТОГО розыгрыша" может значить только "купившие хотя бы один номерок этого
+    розыгрыша" — то же множество, что и "paid", ограниченный giveaway_id."""
+    giveaway = Giveaway(name="G", prefix="ALL", ticket_price=1000, max_tickets=10)
+    other_giveaway = Giveaway(name="Other", prefix="OTH", ticket_price=1000, max_tickets=10)
+    session.add_all([giveaway, other_giveaway])
+    session.flush()
+
+    buyer = make_participant_with_channel(session, "79993000000", ChannelType.TELEGRAM, "tg-buyer")
+    other_buyer = make_participant_with_channel(
+        session, "79994000000", ChannelType.TELEGRAM, "tg-other-buyer"
+    )
+    make_participant_with_channel(session, "79995000000", ChannelType.TELEGRAM, "tg-no-purchase")
+
+    pool_row = TicketPool(giveaway_id=giveaway.id, number=1, shuffle_order=1, status="issued")
+    other_pool_row = TicketPool(
+        giveaway_id=other_giveaway.id, number=1, shuffle_order=1, status="issued"
+    )
+    session.add_all([pool_row, other_pool_row])
+    session.flush()
+    session.add(
+        Ticket(
+            giveaway_id=giveaway.id,
+            pool_id=pool_row.id,
+            number=1,
+            full_code="ALL-000001",
+            participant_id=buyer.id,
+            source=TicketSource.ONLINE,
+        )
+    )
+    session.add(
+        Ticket(
+            giveaway_id=other_giveaway.id,
+            pool_id=other_pool_row.id,
+            number=1,
+            full_code="OTH-000001",
+            participant_id=other_buyer.id,
+            source=TicketSource.ONLINE,
+        )
+    )
+    session.flush()
+
+    result = svc.resolve_audience(session, {"segment": "all", "giveaway_id": giveaway.id})
+    assert {p.id for p in result} == {buyer.id}
+
+
+def test_resolve_audience_all_segment_with_unknown_giveaway_id_is_empty(session: Session) -> None:
+    """Тот самый сценарий, который на проде по ошибке разослал сообщение всем
+    3274 подписчикам вместо пустой аудитории — несуществующий `giveaway_id`
+    теперь корректно даёт пустой список, а не игнорируется."""
+    make_participant_with_channel(session, "79996000000", ChannelType.TELEGRAM, "tg-someone")
+
+    result = svc.resolve_audience(session, {"segment": "all", "giveaway_id": 999999999})
+    assert result == []
+
+
+def test_resolve_audience_all_segment_without_giveaway_id_is_unrestricted(
+    session: Session,
+) -> None:
+    """Без `giveaway_id` поведение "all" не меняется — все Telegram-привязанные
+    участники независимо от покупок (иначе это была бы уже другая семантика)."""
+    p1 = make_participant_with_channel(session, "79997000000", ChannelType.TELEGRAM, "tg-1")
+    p2 = make_participant_with_channel(session, "79998000000", ChannelType.TELEGRAM, "tg-2")
+
+    result = svc.resolve_audience(session, {"segment": "all"})
+    assert {p.id for p in result} == {p1.id, p2.id}
+
+
 @dataclass
 class FakeTelegramChannel:
     """Реализует только `send_message` — рассылки шлют исключительно текст,
