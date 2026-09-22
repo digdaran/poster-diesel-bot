@@ -5,14 +5,15 @@
 
 `send_or_enqueue` — единая точка входа для всех проактивных/полу-проактивных
 отправок (QR при создании счёта — `channels/*/handlers.py`; проактивные
-уведомления об исходе платежа — `app/services/notification_service.py`):
-сперва пытается отправить прямо сейчас (`send_with_retry`, до 3 попыток с
-backoff в течение нескольких секунд), а если и это не удалось — НЕ считает
-доставку потерянной, а кладёт `PendingChannelDelivery` со status=PENDING и
-возвращает управление вызывающему немедленно (без исключения). Дальше
-доставку докручивает фоновый цикл backend (`process_pending_deliveries`,
-вызывается из `backend/background/__init__.py`) на каждом тике, пока не
-пройдёт — без ограничения числа попыток."""
+уведомления об исходе платежа — `app/services/notification_service.py`;
+рассылки — `app/services/broadcast_service.py`, DECISIONS_LOG.md №79): сперва
+пытается отправить прямо сейчас (`send_with_retry`, до 3 попыток с backoff в
+течение нескольких секунд), а если и это не удалось — НЕ считает доставку
+потерянной, а кладёт `PendingChannelDelivery` со status=PENDING и возвращает
+управление вызывающему немедленно (без исключения). Дальше доставку
+докручивает фоновый цикл backend (`process_pending_deliveries`, вызывается из
+`backend/background/__init__.py`) на каждом тике, пока не пройдёт — без
+ограничения числа попыток."""
 
 from __future__ import annotations
 
@@ -78,7 +79,7 @@ async def _dispatch(
 async def send_or_enqueue(
     db: Database,
     *,
-    channel: DeliverableChannel,
+    channel: DeliverableChannel | None,
     channel_type: ChannelType,
     external_user_id: str,
     kind: PendingDeliveryKind,
@@ -89,34 +90,42 @@ async def send_or_enqueue(
     ставит в очередь на гарантированную докрутку фоновым циклом и возвращает
     `False`, не пробрасывая исключение (вызывающий код не обязан знать про
     очередь — просто получает признак "ушло сейчас" или "ушло в фон"). `True` —
-    доставлено в рамках этого вызова."""
-    try:
-        await send_with_retry(
-            lambda: _dispatch(
-                channel, kind=kind, payload=payload, external_user_id=external_user_id
-            )
-        )
-        return True
-    except Exception as exc:
-        with db.session() as session:
-            session.add(
-                PendingChannelDelivery(
-                    channel=channel_type,
-                    external_user_id=external_user_id,
-                    kind=kind,
-                    payload=payload,
-                    participant_id=participant_id,
-                    attempts=0,
+    доставлено в рамках этого вызова. `channel=None` (токен канала не задан в
+    ЭТОМ процессе) — попытка вообще не делается, сразу в очередь: докрутится,
+    когда канал появится (в этом же процессе после переконфигурации/деплоя,
+    либо в другом — `process_pending_deliveries` сам резолвит канал по
+    `channel_type` на каждом тике)."""
+    error: BaseException | None = None
+    if channel is not None:
+        try:
+            await send_with_retry(
+                lambda: _dispatch(
+                    channel, kind=kind, payload=payload, external_user_id=external_user_id
                 )
             )
-        logger.warning(
-            "channel_delivery_enqueued_after_immediate_failure",
-            channel=channel_type.value,
-            kind=kind.value,
-            participant_id=participant_id,
-            error=str(exc),
+            return True
+        except Exception as exc:
+            error = exc
+
+    with db.session() as session:
+        session.add(
+            PendingChannelDelivery(
+                channel=channel_type,
+                external_user_id=external_user_id,
+                kind=kind,
+                payload=payload,
+                participant_id=participant_id,
+                attempts=0,
+            )
         )
-        return False
+    logger.warning(
+        "channel_delivery_enqueued_after_immediate_failure",
+        channel=channel_type.value,
+        kind=kind.value,
+        participant_id=participant_id,
+        error=str(error) if error is not None else "channel not configured in this process",
+    )
+    return False
 
 
 def _resolve_channel(

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { BroadcastsApi } from "../api/resources";
 import type { Broadcast } from "../api/types";
@@ -15,6 +15,11 @@ const STATUS_TONE: Record<string, "success" | "danger" | "info" | "muted"> = {
   DRAFT: "muted",
 };
 
+// Отправка уходит в фоновую задачу на backend (см. DECISIONS_LOG.md №79) —
+// пока хотя бы одна рассылка в статусе SENDING, опрашиваем список, чтобы
+// увидеть финальный SENT/FAILED без ручного обновления страницы.
+const POLL_INTERVAL_MS = 3000;
+
 export function BroadcastsPage() {
   const { showToast } = useToast();
   const confirm = useConfirm();
@@ -22,9 +27,37 @@ export function BroadcastsPage() {
   const [form, setForm] = useState({ title: "", message_text: "", segment: "all" });
   const [error, setError] = useState<string | null>(null);
   const [pendingId, setPendingId] = useState<number | null>(null);
+  const broadcastsRef = useRef<Broadcast[]>([]);
 
-  const load = () => void BroadcastsApi.list().then(setBroadcasts);
-  useEffect(load, []);
+  const load = useCallback(async () => {
+    const data = await BroadcastsApi.list();
+    broadcastsRef.current = data;
+    setBroadcasts(data);
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timeoutId: number | undefined;
+
+    const tick = async () => {
+      if (broadcastsRef.current.some((b) => b.status === "SENDING")) {
+        await load();
+      }
+      if (!cancelled) {
+        timeoutId = window.setTimeout(() => void tick(), POLL_INTERVAL_MS);
+      }
+    };
+    timeoutId = window.setTimeout(() => void tick(), POLL_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+    };
+  }, [load]);
 
   const { run: onCreate, pending: creating } = useAsyncAction(async (e: FormEvent) => {
     e.preventDefault();
@@ -37,7 +70,7 @@ export function BroadcastsPage() {
       });
       setForm({ title: "", message_text: "", segment: "all" });
       showToast("Черновик рассылки создан");
-      load();
+      void load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не удалось создать рассылку");
     }
@@ -51,8 +84,8 @@ export function BroadcastsPage() {
     setPendingId(b.id);
     try {
       await BroadcastsApi.send(b.id);
-      showToast("Рассылка отправлена");
-      load();
+      showToast("Отправка запущена — статус обновится, когда рассылка завершится");
+      void load();
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Не удалось отправить рассылку", "error");
     } finally {
@@ -112,7 +145,8 @@ export function BroadcastsPage() {
                 </td>
                 <td>
                   {b.stats.recipients !== undefined
-                    ? `${b.stats.delivered}/${b.stats.recipients} доставлено`
+                    ? `${b.stats.delivered}/${b.stats.recipients} доставлено` +
+                      (b.stats.queued ? `, ещё ${b.stats.queued} в очереди` : "")
                     : "—"}
                 </td>
                 <td>
