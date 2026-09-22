@@ -13,6 +13,7 @@ const STATUS_TONE: Record<string, "success" | "danger" | "info" | "muted"> = {
   SENDING: "info",
   FAILED: "danger",
   DRAFT: "muted",
+  CANCELLED: "muted",
 };
 
 // Отправка уходит в фоновую задачу на backend (см. DECISIONS_LOG.md №79) —
@@ -93,6 +94,39 @@ export function BroadcastsPage() {
     }
   };
 
+  // Без подтверждения намеренно — это экстренная остановка, лишний диалог
+  // отнимает как раз то время, которого не хватает, пока рассылка ещё идёт.
+  // Уже отправленным (до CHANNEL_SEND_CONCURRENCY_LIMIT одновременно)
+  // получателям сообщение всё равно уйдёт — останавливаются только те, чья
+  // очередь ещё не подошла (см. DECISIONS_LOG.md).
+  const onCancel = async (b: Broadcast) => {
+    setPendingId(b.id);
+    try {
+      await BroadcastsApi.cancel(b.id);
+      showToast("Остановка запущена — уже начатые отправки доиграют до конца");
+      void load();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Не удалось остановить рассылку", "error");
+    } finally {
+      setPendingId(null);
+    }
+  };
+
+  const onDelete = async (b: Broadcast) => {
+    const confirmed = await confirm(`Удалить рассылку «${b.title}»? Это необратимо.`);
+    if (!confirmed) return;
+    setPendingId(b.id);
+    try {
+      await BroadcastsApi.delete(b.id);
+      showToast("Рассылка удалена");
+      void load();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Не удалось удалить рассылку", "error");
+    } finally {
+      setPendingId(null);
+    }
+  };
+
   return (
     <div>
       <h1>Рассылки (только Telegram)</h1>
@@ -146,13 +180,32 @@ export function BroadcastsPage() {
                 <td>
                   {b.stats.recipients !== undefined
                     ? `${b.stats.delivered}/${b.stats.recipients} доставлено` +
-                      (b.stats.queued ? `, ещё ${b.stats.queued} в очереди` : "")
+                      (b.stats.queued ? `, ещё ${b.stats.queued} в очереди` : "") +
+                      (b.stats.cancelled ? `, ${b.stats.cancelled} не начато (остановлено)` : "")
                     : "—"}
                 </td>
                 <td>
                   {b.status === "DRAFT" && (
                     <button disabled={pendingId === b.id} onClick={() => void onSend(b)}>
                       Отправить
+                    </button>
+                  )}
+                  {b.status === "SENDING" && (
+                    <button
+                      className="button-danger"
+                      disabled={pendingId === b.id}
+                      onClick={() => void onCancel(b)}
+                    >
+                      ⏹ Остановить
+                    </button>
+                  )}
+                  {b.status !== "SENDING" && (
+                    <button
+                      className="button-danger"
+                      disabled={pendingId === b.id}
+                      onClick={() => void onDelete(b)}
+                    >
+                      Удалить
                     </button>
                   )}
                 </td>

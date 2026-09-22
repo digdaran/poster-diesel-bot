@@ -32,6 +32,19 @@ from app.services.channel_delivery_queue import DeliverableChannel
 
 logger = structlog.get_logger(__name__)
 
+# Кооперативный флаг "экстренной остановки" активной рассылки — по
+# broadcast_id, в памяти ЭТОГО процесса (backend — единственный процесс,
+# выполняющий send_broadcast в фоне, см. DECISIONS_LOG.md — тот же принцип
+# "без кросс-процессной координации", что и у channel_delivery_queue).
+# Проверяется не перед КАЖДОЙ отправкой сразу (все корутины рассылки
+# создаются практически одновременно через asyncio.gather — проверка "в
+# самом начале" корутины была бы бесполезна, т.к. отменить успели бы только
+# ещё не созданные задачи), а сразу после того, как корутина реально
+# получает своё "окно" на отправку (после захвата семафора внутри
+# send_broadcast) — так получатели, чья очередь ещё не подошла, действительно
+# не отправляются.
+_cancel_requested: set[int] = set()
+
 
 class BroadcastNotFoundError(Exception):
     pass
@@ -39,6 +52,14 @@ class BroadcastNotFoundError(Exception):
 
 class BroadcastNotDraftError(Exception):
     pass
+
+
+class BroadcastNotSendingError(Exception):
+    """Остановить можно только активную (SENDING) рассылку."""
+
+
+class BroadcastSendingInProgressError(Exception):
+    """Удалить нельзя, пока рассылка активна (SENDING) — сначала остановить."""
 
 
 def create_broadcast(
@@ -138,6 +159,9 @@ class SendResult:
     гарантированной доставки (`channel_delivery_queue`), докрутится фоновым
     циклом. Эта финальная статистика — снимок на момент отправки, "queued"
     получатели впоследствии станут доставленными без обновления этого снимка."""
+    cancelled: int
+    """Получатель не был даже затронут — рассылку остановили (см.
+    `request_cancel_broadcast`) до того, как до него дошла очередь."""
     errors: int
     """Получателя не удалось даже поставить в очередь (сбой самой БД при
     INSERT) — на практике почти никогда не встречается."""
@@ -163,6 +187,44 @@ def mark_broadcast_sending(db: Database, *, broadcast_id: int) -> Broadcast:
         return broadcast
 
 
+def request_cancel_broadcast(db: Database, *, broadcast_id: int) -> Broadcast:
+    """Экстренная остановка активной рассылки — выставляет кооперативный флаг,
+    который проверяется внутри `send_broadcast` перед отправкой каждому
+    следующему получателю (см. `_cancel_requested`). НЕ трогает
+    `Broadcast.status` сама — финальный переход в `CANCELLED` (со статистикой,
+    сколько реально успело уйти) делает сама `send_broadcast`, когда
+    доработает до конца (обычно несколько секунд после вызова — уже начатые
+    отправки, ограниченные `CHANNEL_SEND_CONCURRENCY_LIMIT`, доигрываются до
+    конца, а не обрываются на середине сетевого запроса)."""
+    with db.session() as session:
+        broadcast = session.get(Broadcast, broadcast_id)
+        if broadcast is None:
+            raise BroadcastNotFoundError(f"Рассылка {broadcast_id} не найдена")
+        if broadcast.status != BroadcastStatus.SENDING:
+            raise BroadcastNotSendingError(
+                "Остановить можно только активную рассылку " f"(сейчас {broadcast.status.value})"
+            )
+        session.expunge(broadcast)
+    _cancel_requested.add(broadcast_id)
+    return broadcast
+
+
+def delete_broadcast(db: Database, *, broadcast_id: int) -> None:
+    """Удаляет рассылку — запрещено, пока она активна (`SENDING`), чтобы не
+    выбить БД-строку из-под ещё выполняющейся фоновой задачи (`send_broadcast`
+    держит `broadcast_id` и ожидает найти строку по нему на финальном шаге).
+    Сначала остановите рассылку (`request_cancel_broadcast`), затем удаляйте."""
+    with db.session() as session:
+        broadcast = session.get(Broadcast, broadcast_id)
+        if broadcast is None:
+            raise BroadcastNotFoundError(f"Рассылка {broadcast_id} не найдена")
+        if broadcast.status == BroadcastStatus.SENDING:
+            raise BroadcastSendingInProgressError(
+                "Нельзя удалить рассылку, пока она отправляется — сначала остановите её"
+            )
+        session.delete(broadcast)
+
+
 async def send_broadcast(
     db: Database, *, broadcast_id: int, telegram_channel: DeliverableChannel | None
 ) -> SendResult:
@@ -174,7 +236,19 @@ async def send_broadcast(
     рассылки в целом; `errors` — только для сбоя самой постановки в очередь.
     `telegram_channel=None` (TELEGRAM_BOT_TOKEN не задан в этом процессе) —
     все получатели ставятся в очередь напрямую, докрутятся, когда канал
-    появится."""
+    появится.
+
+    Экстренная остановка (`request_cancel_broadcast`) — кооперативная:
+    `_send_semaphore` ниже (тот же размер, что `CHANNEL_SEND_CONCURRENCY_LIMIT`
+    у самого канала) — единственная точка, где имеет смысл проверять флаг,
+    т.к. ВСЕ корутины по получателям создаются практически одновременно
+    (`asyncio.gather`) и проверка "в самом начале" корутины была бы
+    бесполезна — почти все уже успели бы её пройти до того, как оператор
+    физически успел бы нажать "Остановить". Проверка сразу после захвата
+    семафора означает, что реально останавливаются только те получатели, чья
+    очередь ЕЩЁ не подошла — уже начатые (до `CHANNEL_SEND_CONCURRENCY_LIMIT`
+    штук) доигрывают до конца, не обрываются на середине сетевого запроса."""
+    _cancel_requested.discard(broadcast_id)
     with db.session() as session:
         broadcast = session.get(Broadcast, broadcast_id)
         assert broadcast is not None
@@ -187,9 +261,13 @@ async def send_broadcast(
         ]
         message_text = broadcast.message_text
 
-    results = await asyncio.gather(
-        *(
-            channel_delivery_queue.send_or_enqueue(
+    send_semaphore = asyncio.Semaphore(db.settings.channel_send_concurrency_limit)
+
+    async def _send_one(participant_id: int, external_user_id: str) -> bool | None:
+        async with send_semaphore:
+            if broadcast_id in _cancel_requested:
+                return None  # ещё не начато — остановлено до этого получателя
+            return await channel_delivery_queue.send_or_enqueue(
                 db,
                 channel=telegram_channel,
                 channel_type=ChannelType.TELEGRAM,
@@ -198,13 +276,19 @@ async def send_broadcast(
                 payload={"text": message_text},
                 participant_id=participant_id,
             )
+
+    results = await asyncio.gather(
+        *(
+            _send_one(participant_id, external_user_id)
             for participant_id, external_user_id in recipients
         ),
         return_exceptions=True,
     )
+    _cancel_requested.discard(broadcast_id)
 
     delivered = 0
     queued = 0
+    cancelled = 0
     errors = 0
     for (participant_id, _external_user_id), result in zip(recipients, results, strict=True):
         if isinstance(result, BaseException):
@@ -215,6 +299,8 @@ async def send_broadcast(
                 participant_id=participant_id,
                 error=str(result),
             )
+        elif result is None:
+            cancelled += 1
         elif result:
             delivered += 1
         else:
@@ -223,18 +309,26 @@ async def send_broadcast(
     with db.session() as session:
         broadcast = session.get(Broadcast, broadcast_id)
         assert broadcast is not None
-        broadcast.status = (
-            BroadcastStatus.SENT
-            if not recipients or delivered > 0 or queued > 0
-            else BroadcastStatus.FAILED
-        )
+        if cancelled > 0:
+            broadcast.status = BroadcastStatus.CANCELLED
+        elif not recipients or delivered > 0 or queued > 0:
+            broadcast.status = BroadcastStatus.SENT
+        else:
+            broadcast.status = BroadcastStatus.FAILED
         broadcast.stats = {
             "recipients": len(recipients),
             "delivered": delivered,
             "queued": queued,
+            "cancelled": cancelled,
             "errors": errors,
         }
         broadcast.sent_at = utcnow()
         session.flush()
 
-    return SendResult(recipients=len(recipients), delivered=delivered, queued=queued, errors=errors)
+    return SendResult(
+        recipients=len(recipients),
+        delivered=delivered,
+        queued=queued,
+        cancelled=cancelled,
+        errors=errors,
+    )
