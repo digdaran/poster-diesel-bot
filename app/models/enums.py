@@ -81,6 +81,12 @@ class BroadcastStatus(str, enum.Enum):
     SENDING = "SENDING"
     SENT = "SENT"
     FAILED = "FAILED"
+    # Остановлена оператором через "экстренную остановку" (кооперативная
+    # отмена — см. broadcast_service.request_cancel_broadcast) ДО того, как
+    # все получатели были обработаны. Отличается от FAILED (там аудитория
+    # была обработана целиком, но никому не удалось доставить/поставить в
+    # очередь) — см. DECISIONS_LOG.md.
+    CANCELLED = "CANCELLED"
 
 
 class BankReconciliationRunStatus(str, enum.Enum):

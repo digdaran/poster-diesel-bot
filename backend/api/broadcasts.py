@@ -109,6 +109,7 @@ async def _send_broadcast_background(
                 "recipients": result.recipients,
                 "delivered": result.delivered,
                 "queued": result.queued,
+                "cancelled": result.cancelled,
                 "errors": result.errors,
             },
             ip_address=ip_address,
@@ -143,3 +144,70 @@ def send_broadcast(
         ip_address=request.client.host if request.client else None,
     )
     return broadcast
+
+
+@router.post("/{broadcast_id}/cancel", response_model=BroadcastOut)
+def cancel_broadcast(
+    broadcast_id: int,
+    request: Request,
+    db: Database = Depends(get_database),
+    user: PanelUser = Depends(require_permission(Permission.BROADCAST_SEND)),
+) -> Broadcast:
+    """Экстренная остановка активной рассылки — выставляет кооперативный флаг
+    (`broadcast_service.request_cancel_broadcast`), который отправляющая
+    фоновая задача проверяет перед каждым следующим получателем. Статус в
+    ответе на этот вызов ещё `SENDING` — переход в `CANCELLED` (с финальной
+    статистикой) делает сама фоновая задача через несколько секунд, когда уже
+    начатые отправки доиграют до конца; frontend узнаёт об этом через
+    периодический опрос (см. `BroadcastsPage.tsx`)."""
+    try:
+        broadcast = svc.request_cancel_broadcast(db, broadcast_id=broadcast_id)
+    except svc.BroadcastNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Рассылка не найдена"
+        ) from exc
+    except svc.BroadcastNotSendingError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    with db.session() as session:
+        audit_service.log(
+            session,
+            action="broadcast_cancel",
+            actor_type=AuditActorType.PANEL_USER,
+            actor_id=user.id,
+            actor_label=user.login,
+            entity_type="broadcast",
+            entity_id=broadcast_id,
+            ip_address=request.client.host if request.client else None,
+        )
+    return broadcast
+
+
+@router.delete("/{broadcast_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+def delete_broadcast(
+    broadcast_id: int,
+    request: Request,
+    db: Database = Depends(get_database),
+    user: PanelUser = Depends(require_permission(Permission.BROADCAST_SEND)),
+) -> None:
+    """Запрещено, пока рассылка активна (`SENDING`) — сначала остановить."""
+    try:
+        svc.delete_broadcast(db, broadcast_id=broadcast_id)
+    except svc.BroadcastNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Рассылка не найдена"
+        ) from exc
+    except svc.BroadcastSendingInProgressError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    with db.session() as session:
+        audit_service.log(
+            session,
+            action="broadcast_delete",
+            actor_type=AuditActorType.PANEL_USER,
+            actor_id=user.id,
+            actor_label=user.login,
+            entity_type="broadcast",
+            entity_id=broadcast_id,
+            ip_address=request.client.host if request.client else None,
+        )

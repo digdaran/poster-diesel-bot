@@ -188,7 +188,7 @@ export interface Broadcast {
   title: string;
   message_text: string;
   audience_filter: Record<string, unknown>;
-  status: "DRAFT" | "SENDING" | "SENT" | "FAILED";
+  status: "DRAFT" | "SENDING" | "SENT" | "FAILED" | "CANCELLED";
   stats: Record<string, number>;
   created_at: string;
   sent_at: string | null;

@@ -194,6 +194,7 @@ async def test_send_broadcast_updates_status_and_stats(
     assert result.recipients == 2
     assert result.delivered == 1
     assert result.queued == 1
+    assert result.cancelled == 0
     assert result.errors == 0
     assert set(channel.sent_to) == {"tg-a", "tg-b"}
 
@@ -202,7 +203,13 @@ async def test_send_broadcast_updates_status_and_stats(
             select(Broadcast).where(Broadcast.id == broadcast_id)
         ).scalar_one()
         assert broadcast.status == BroadcastStatus.SENT
-        assert broadcast.stats == {"recipients": 2, "delivered": 1, "queued": 1, "errors": 0}
+        assert broadcast.stats == {
+            "recipients": 2,
+            "delivered": 1,
+            "queued": 1,
+            "cancelled": 0,
+            "errors": 0,
+        }
         assert broadcast.sent_at is not None
 
     with db.session() as session:
@@ -223,6 +230,7 @@ async def test_send_broadcast_no_recipients_still_completes(db: Database) -> Non
     assert result.recipients == 0
     assert result.delivered == 0
     assert result.queued == 0
+    assert result.cancelled == 0
     assert result.errors == 0
 
 
@@ -239,6 +247,7 @@ async def test_send_broadcast_without_channel_queues_all_recipients(db: Database
     assert result.recipients == 1
     assert result.delivered == 0
     assert result.queued == 1
+    assert result.cancelled == 0
     assert result.errors == 0
 
 
@@ -264,3 +273,116 @@ def test_mark_broadcast_sending_rejects_non_draft(db: Database) -> None:
 def test_mark_broadcast_sending_raises_for_unknown_id(db: Database) -> None:
     with pytest.raises(svc.BroadcastNotFoundError):
         svc.mark_broadcast_sending(db, broadcast_id=999999)
+
+
+def test_request_cancel_broadcast_requires_sending_status(db: Database) -> None:
+    with db.session() as session:
+        broadcast = svc.create_broadcast(session, title="X", message_text="Y")
+        broadcast_id = broadcast.id
+
+    with pytest.raises(svc.BroadcastNotSendingError):
+        svc.request_cancel_broadcast(db, broadcast_id=broadcast_id)
+
+
+def test_request_cancel_broadcast_raises_for_unknown_id(db: Database) -> None:
+    with pytest.raises(svc.BroadcastNotFoundError):
+        svc.request_cancel_broadcast(db, broadcast_id=999999)
+
+
+def test_request_cancel_broadcast_succeeds_while_sending(db: Database) -> None:
+    with db.session() as session:
+        broadcast = svc.create_broadcast(session, title="X", message_text="Y")
+        broadcast_id = broadcast.id
+    svc.mark_broadcast_sending(db, broadcast_id=broadcast_id)
+
+    result = svc.request_cancel_broadcast(db, broadcast_id=broadcast_id)
+    assert result.status == BroadcastStatus.SENDING  # сам переход в CANCELLED — за send_broadcast
+
+
+class _CancelAfterFirstChannel:
+    """Отменяет рассылку СРАЗУ после первого реального `send_message` — имитирует
+    оператора, нажавшего «Остановить» посреди отправки. Не важно, какой именно
+    получатель окажется первым (порядок из `resolve_audience` не гарантирован) —
+    тест проверяет только агрегатные счётчики, не конкретные ID."""
+
+    def __init__(self, db: Database, broadcast_id: int) -> None:
+        self.sent_to: list[str] = []
+        self._db = db
+        self._broadcast_id = broadcast_id
+
+    async def send_message(self, external_user_id: str, text: str, **kwargs: object) -> None:
+        self.sent_to.append(external_user_id)
+        if len(self.sent_to) == 1:
+            svc.request_cancel_broadcast(self._db, broadcast_id=self._broadcast_id)
+
+
+async def test_send_broadcast_cooperative_cancel_stops_remaining_recipients(
+    db: Database,
+) -> None:
+    """`CHANNEL_SEND_CONCURRENCY_LIMIT=1` форсирует последовательную обработку —
+    иначе почти все получатели прошли бы проверку флага одновременно (все
+    корутины стартуют практически синхронно через `asyncio.gather`), и тест
+    был бы недетерминированным. Ровно один получатель должен успеть уйти
+    (тот, чья отправка триггерит отмену), остальные — оказаться в `cancelled`,
+    не тронутыми вовсе (`sent_to` содержит только его)."""
+    db.settings.channel_send_concurrency_limit = 1
+
+    with db.session() as session:
+        make_participant_with_channel(session, "79991000001", ChannelType.TELEGRAM, "tg-1")
+        make_participant_with_channel(session, "79991000002", ChannelType.TELEGRAM, "tg-2")
+        make_participant_with_channel(session, "79991000003", ChannelType.TELEGRAM, "tg-3")
+        broadcast = svc.create_broadcast(session, title="Stop me", message_text="...")
+        broadcast_id = broadcast.id
+    svc.mark_broadcast_sending(db, broadcast_id=broadcast_id)
+
+    channel = _CancelAfterFirstChannel(db, broadcast_id)
+    result = await svc.send_broadcast(db, broadcast_id=broadcast_id, telegram_channel=channel)
+
+    assert result.recipients == 3
+    assert result.delivered == 1
+    assert result.cancelled == 2
+    assert result.queued == 0
+    assert result.errors == 0
+    assert len(channel.sent_to) == 1  # ни один "лишний" получатель не тронут
+
+    with db.session() as session:
+        broadcast = session.execute(
+            select(Broadcast).where(Broadcast.id == broadcast_id)
+        ).scalar_one()
+        assert broadcast.status == BroadcastStatus.CANCELLED
+        assert broadcast.stats == {
+            "recipients": 3,
+            "delivered": 1,
+            "queued": 0,
+            "cancelled": 2,
+            "errors": 0,
+        }
+
+
+def test_delete_broadcast_removes_draft(db: Database) -> None:
+    with db.session() as session:
+        broadcast = svc.create_broadcast(session, title="X", message_text="Y")
+        broadcast_id = broadcast.id
+
+    svc.delete_broadcast(db, broadcast_id=broadcast_id)
+
+    with db.session() as session:
+        assert session.get(Broadcast, broadcast_id) is None
+
+
+def test_delete_broadcast_rejects_while_sending(db: Database) -> None:
+    with db.session() as session:
+        broadcast = svc.create_broadcast(session, title="X", message_text="Y")
+        broadcast_id = broadcast.id
+    svc.mark_broadcast_sending(db, broadcast_id=broadcast_id)
+
+    with pytest.raises(svc.BroadcastSendingInProgressError):
+        svc.delete_broadcast(db, broadcast_id=broadcast_id)
+
+    with db.session() as session:
+        assert session.get(Broadcast, broadcast_id) is not None  # не удалена
+
+
+def test_delete_broadcast_raises_for_unknown_id(db: Database) -> None:
+    with pytest.raises(svc.BroadcastNotFoundError):
+        svc.delete_broadcast(db, broadcast_id=999999)
