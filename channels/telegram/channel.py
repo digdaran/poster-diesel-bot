@@ -11,6 +11,7 @@ Bot API.
 
 from __future__ import annotations
 
+import asyncio
 import io
 from html import escape
 from pathlib import Path
@@ -81,12 +82,25 @@ class TelegramChannel(BaseMessengerChannel):
         media_send_mode="file_id",
     )
 
-    def __init__(self, *, token: str, proxy_url: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        token: str,
+        proxy_url: str | None = None,
+        send_concurrency_limit: int = 8,
+    ) -> None:
         session = AiohttpSession(proxy=proxy_url) if proxy_url else None
         self.bot = Bot(token=token, session=session)
+        # Тот же принцип, что и у VkChannel (см. channels/vk/channel.py) —
+        # ограничивает число одновременных исходящих отправок в пределах
+        # процесса. Telegram Bot API пока не показывал деградации под
+        # наблюдаемой нагрузкой (см. DECISIONS_LOG.md), но лимит общий для
+        # обоих каналов ради единообразия и запаса прочности.
+        self._send_semaphore = asyncio.Semaphore(send_concurrency_limit)
 
     async def send_message(self, external_user_id: str, text: str, **kwargs: Any) -> None:
-        await self.bot.send_message(chat_id=external_user_id, text=text, **kwargs)
+        async with self._send_semaphore:
+            await self.bot.send_message(chat_id=external_user_id, text=text, **kwargs)
 
     async def send_media(
         self, external_user_id: str, file_path: str, *, caption: str | None = None
@@ -100,9 +114,10 @@ class TelegramChannel(BaseMessengerChannel):
         path = Path(file_path)
         if not path.exists():
             raise FileNotFoundError(f"Файл постера не найден: {file_path}")
-        await self.bot.send_photo(
-            chat_id=external_user_id, photo=FSInputFile(path), caption=caption
-        )
+        async with self._send_semaphore:
+            await self.bot.send_photo(
+                chat_id=external_user_id, photo=FSInputFile(path), caption=caption
+            )
 
     async def request_contact(self, external_user_id: str) -> None:
         keyboard = ReplyKeyboardMarkup(
@@ -110,11 +125,12 @@ class TelegramChannel(BaseMessengerChannel):
             resize_keyboard=True,
             one_time_keyboard=True,
         )
-        await self.bot.send_message(
-            chat_id=external_user_id,
-            text="Поделитесь контактом, чтобы получить доступ к своим покупкам.",
-            reply_markup=keyboard,
-        )
+        async with self._send_semaphore:
+            await self.bot.send_message(
+                chat_id=external_user_id,
+                text="Поделитесь контактом, чтобы получить доступ к своим покупкам.",
+                reply_markup=keyboard,
+            )
 
     def render_keyboard(self, buttons: list[list[str]]) -> ReplyKeyboardMarkup:
         return ReplyKeyboardMarkup(
@@ -156,19 +172,23 @@ class TelegramChannel(BaseMessengerChannel):
         buffer = io.BytesIO()
         img.save(buffer, format="PNG")  # type: ignore[call-arg]
         photo = BufferedInputFile(buffer.getvalue(), filename="sbp_qr.png")
-        await self.bot.send_photo(chat_id=external_user_id, photo=photo, caption=caption)
+        async with self._send_semaphore:
+            await self.bot.send_photo(chat_id=external_user_id, photo=photo, caption=caption)
 
     async def send_ticket_codes(self, external_user_id: str, codes: list[str]) -> None:
         """Отправляет список кодов номерков, разбитый на куски в пределах лимита
         Telegram (см. `_format_ticket_codes`)."""
         multi_column = len(codes) > _TICKET_CODES_COLUMN_THRESHOLD
         for chunk in _format_ticket_codes(codes):
-            if multi_column:
-                await self.bot.send_message(
-                    chat_id=external_user_id, text=f"<pre>{escape(chunk)}</pre>", parse_mode="HTML"
-                )
-            else:
-                await self.bot.send_message(chat_id=external_user_id, text=chunk)
+            async with self._send_semaphore:
+                if multi_column:
+                    await self.bot.send_message(
+                        chat_id=external_user_id,
+                        text=f"<pre>{escape(chunk)}</pre>",
+                        parse_mode="HTML",
+                    )
+                else:
+                    await self.bot.send_message(chat_id=external_user_id, text=chunk)
 
     async def deliver_purchase(
         self, external_user_id: str, *, poster_path: str | None, codes: list[str], intro: str

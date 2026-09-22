@@ -27,7 +27,9 @@ async def run() -> None:
         raise RuntimeError("TELEGRAM_BOT_TOKEN не задан — канал Telegram не может быть запущен")
 
     channel = TelegramChannel(
-        token=settings.telegram_bot_token, proxy_url=settings.telegram_proxy_url or None
+        token=settings.telegram_bot_token,
+        proxy_url=settings.telegram_proxy_url or None,
+        send_concurrency_limit=settings.channel_send_concurrency_limit,
     )
     set_channel(channel)
     await channel.bot.set_my_commands(_BOT_COMMANDS)

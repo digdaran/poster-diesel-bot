@@ -19,38 +19,29 @@ app/services/bank_reconciliation_service.py, backend/background; подтвер�
 Многоканально (Telegram, VK): по прямому запросу заказчика уведомление уходит
 **во все** каналы, где есть подходящая привязка, одновременно — см.
 `_resolve_notify_targets` (DECISIONS_LOG.md №43, отменяет "один канал" из №33).
-"""
+
+Доставка гарантированная по каждому каналу отдельно (DECISIONS_LOG.md №72/№73):
+если немедленная отправка (с ретраями, см. `app/channels/retry.py`) не удалась,
+`channel_delivery_queue.send_or_enqueue` кладёт её в очередь, докручиваемую
+фоновым циклом backend до успеха — здесь это уже не финальный отказ, поэтому
+явного `logger.exception` на этот случай в этом модуле больше нет (лог — внутри
+`send_or_enqueue`)."""
 
 from __future__ import annotations
 
 import random
-from typing import Any, Protocol
+from typing import Any
 
-import structlog
 from sqlalchemy import select
 
 from app.core.db import Database
 from app.models.channel_binding import ChannelBinding
-from app.models.enums import ChannelType, PaymentStatus
+from app.models.enums import ChannelType, PaymentStatus, PendingDeliveryKind
 from app.models.giveaway import Giveaway
 from app.models.ticket import Ticket
-from app.services import settings_service
+from app.services import channel_delivery_queue, settings_service
+from app.services.channel_delivery_queue import DeliverableChannel
 from app.services.payment_service import FinalizeOutcome
-
-logger = structlog.get_logger(__name__)
-
-
-class NotifiableChannel(Protocol):
-    """Структурный протокол вместо конкретного класса канала: `TelegramChannel`
-    и `VkChannel` не имеют общего базового класса для `deliver_purchase`/
-    `send_message` (не входят в `BaseMessengerChannel`, см. app/channels/base.py),
-    но обе реализации совпадают по сигнатуре — этого достаточно."""
-
-    async def send_message(self, external_user_id: str, text: str, **kwargs: Any) -> None: ...
-
-    async def deliver_purchase(
-        self, external_user_id: str, *, poster_path: str | None, codes: list[str], intro: str
-    ) -> None: ...
 
 
 def _failure_text(outcome: FinalizeOutcome) -> str:
@@ -132,9 +123,9 @@ def _resolve_notify_targets(db: Database, participant_id: int) -> list[tuple[Cha
 def _channel_for(
     channel_type: ChannelType,
     *,
-    telegram_channel: NotifiableChannel | None,
-    vk_channel: NotifiableChannel | None,
-) -> NotifiableChannel | None:
+    telegram_channel: DeliverableChannel | None,
+    vk_channel: DeliverableChannel | None,
+) -> DeliverableChannel | None:
     if channel_type == ChannelType.TELEGRAM:
         return telegram_channel
     if channel_type == ChannelType.VK:
@@ -165,8 +156,8 @@ async def notify_payment_outcome(
     db: Database,
     outcome: FinalizeOutcome,
     *,
-    telegram_channel: NotifiableChannel | None,
-    vk_channel: NotifiableChannel | None,
+    telegram_channel: DeliverableChannel | None,
+    vk_channel: DeliverableChannel | None,
 ) -> None:
     """Отправляет участнику сообщение об исходе платежа: при успехе — постер и
     купленные номерки, при отказе — короткое уведомление. Уходит во ВСЕ каналы
@@ -196,23 +187,33 @@ async def notify_payment_outcome(
         )
         if channel is None:
             continue
-        try:
-            if outcome.new_status == PaymentStatus.SUCCEEDED:
-                await channel.deliver_purchase(
-                    external_user_id,
-                    poster_path=poster_path,
-                    codes=codes,
-                    intro="✅ Оплата прошла успешно! Ваши постеры куплены, номера:",
-                )
-            else:
-                await channel.send_message(external_user_id, _failure_text(outcome))
-        except Exception:
-            # Один канал не должен блокировать доставку в другой — напр. VK
-            # может вернуть ошибку запрета отправки, если участник отозвал
-            # разрешение прямо между сверкой привязок и отправкой.
-            logger.exception(
-                "notify_payment_outcome_channel_failed",
-                channel=channel_type.value,
+        # Один канал не должен блокировать доставку в другой — напр. VK может
+        # вернуть ошибку запрета отправки, если участник отозвал разрешение
+        # прямо между сверкой привязок и отправкой. `send_or_enqueue` сама не
+        # роняет исключение наружу — при неудаче ставит в очередь на
+        # гарантированную докрутку (DECISIONS_LOG.md №73), цикл идёт дальше.
+        if outcome.new_status == PaymentStatus.SUCCEEDED:
+            await channel_delivery_queue.send_or_enqueue(
+                db,
+                channel=channel,
+                channel_type=channel_type,
+                external_user_id=external_user_id,
+                kind=PendingDeliveryKind.DELIVER_PURCHASE,
+                payload={
+                    "poster_path": poster_path,
+                    "codes": codes,
+                    "intro": "✅ Оплата прошла успешно! Ваши постеры куплены, номера:",
+                },
+                participant_id=outcome.participant_id,
+            )
+        else:
+            await channel_delivery_queue.send_or_enqueue(
+                db,
+                channel=channel,
+                channel_type=channel_type,
+                external_user_id=external_user_id,
+                kind=PendingDeliveryKind.TEXT_MESSAGE,
+                payload={"text": _failure_text(outcome)},
                 participant_id=outcome.participant_id,
             )
 
@@ -221,8 +222,8 @@ async def notify_late_success_no_tickets(
     db: Database,
     outcome: FinalizeOutcome,
     *,
-    telegram_channel: NotifiableChannel | None,
-    vk_channel: NotifiableChannel | None,
+    telegram_channel: DeliverableChannel | None,
+    vk_channel: DeliverableChannel | None,
 ) -> None:
     """Платёж подтверждён банком уже ПОСЛЕ того, как он был помечен
     CANCELLED/FAILED (отмена участником или истечение TTL) и резерв роздан —
@@ -248,14 +249,15 @@ async def notify_late_success_no_tickets(
         )
         if channel is None:
             continue
-        try:
-            await channel.send_message(external_user_id, text)
-        except Exception:
-            logger.exception(
-                "notify_late_success_no_tickets_channel_failed",
-                channel=channel_type.value,
-                participant_id=outcome.participant_id,
-            )
+        await channel_delivery_queue.send_or_enqueue(
+            db,
+            channel=channel,
+            channel_type=channel_type,
+            external_user_id=external_user_id,
+            kind=PendingDeliveryKind.TEXT_MESSAGE,
+            payload={"text": text},
+            participant_id=outcome.participant_id,
+        )
 
 
 def _refund_text(
@@ -293,8 +295,8 @@ async def notify_purchase_refunded(
     amount: int | None,
     invoice_no: str | None,
     released_codes: list[str],
-    telegram_channel: NotifiableChannel | None,
-    vk_channel: NotifiableChannel | None,
+    telegram_channel: DeliverableChannel | None,
+    vk_channel: DeliverableChannel | None,
 ) -> None:
     """Уведомляет участника об аннулировании супер-админом уже завершённой
     покупки (см. `payment_service.refund_payment`/
@@ -322,14 +324,15 @@ async def notify_purchase_refunded(
         )
         if channel is None:
             continue
-        try:
-            await channel.send_message(external_user_id, text)
-        except Exception:
-            logger.exception(
-                "notify_purchase_refunded_channel_failed",
-                channel=channel_type.value,
-                participant_id=participant_id,
-            )
+        await channel_delivery_queue.send_or_enqueue(
+            db,
+            channel=channel,
+            channel_type=channel_type,
+            external_user_id=external_user_id,
+            kind=PendingDeliveryKind.TEXT_MESSAGE,
+            payload={"text": text},
+            participant_id=participant_id,
+        )
 
 
 async def notify_manual_registration_confirmed(
@@ -338,8 +341,8 @@ async def notify_manual_registration_confirmed(
     participant_id: int,
     giveaway_id: int,
     tickets: list[Ticket],
-    telegram_channel: NotifiableChannel | None,
-    vk_channel: NotifiableChannel | None,
+    telegram_channel: DeliverableChannel | None,
+    vk_channel: DeliverableChannel | None,
 ) -> None:
     """Уведомляет участника о выдаче номерков по ручной (офлайн) регистрации,
     подтверждённой оператором в панели (п.7.7 ТЗ). Уходит во ВСЕ каналы с
@@ -367,16 +370,16 @@ async def notify_manual_registration_confirmed(
         )
         if channel is None:
             continue
-        try:
-            await channel.deliver_purchase(
-                external_user_id,
-                poster_path=poster_path,
-                codes=codes,
-                intro="✅ Ваша регистрация подтверждена! Ваши постеры куплены, номера:",
-            )
-        except Exception:
-            logger.exception(
-                "notify_manual_registration_confirmed_channel_failed",
-                channel=channel_type.value,
-                participant_id=participant_id,
-            )
+        await channel_delivery_queue.send_or_enqueue(
+            db,
+            channel=channel,
+            channel_type=channel_type,
+            external_user_id=external_user_id,
+            kind=PendingDeliveryKind.DELIVER_PURCHASE,
+            payload={
+                "poster_path": poster_path,
+                "codes": codes,
+                "intro": "✅ Ваша регистрация подтверждена! Ваши постеры куплены, номера:",
+            },
+            participant_id=participant_id,
+        )

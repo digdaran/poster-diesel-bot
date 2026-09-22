@@ -21,7 +21,7 @@ from app.models.enums import ChannelType, PaymentProviderType, PaymentStatus
 from app.models.payment import Payment
 from app.payments.factory import create_provider
 from app.repositories import ticket_pool_repo as pool_repo
-from app.services import bank_reconciliation_service, notification_service
+from app.services import bank_reconciliation_service, channel_delivery_queue, notification_service
 from app.services import manual_registration_service as manual_svc
 from app.services import payment_service as payment_svc
 from app.services.payment_service import FinalizeOutcome
@@ -163,7 +163,11 @@ async def run_background_loop(
     сетевой вызов. `notification_service` сам выбирает каналы получателя
     (Telegram И VK одновременно, по привязкам) — см. DECISIONS_LOG.md №43.
     Дополнительно каждый тик сверяет `ChannelBinding.messages_allowed` для VK
-    через `_reconcile_vk_permissions` — см. DECISIONS_LOG.md №61."""
+    через `_reconcile_vk_permissions` (DECISIONS_LOG.md №61) и докручивает
+    очередь гарантированной доставки через `channel_delivery_queue` —
+    сообщения, не ушедшие с первой попытки (QR при создании счёта, проактивные
+    уведомления), повторяются здесь до успеха без ограничения числа попыток
+    (DECISIONS_LOG.md №73)."""
     while True:
         try:
             outcomes = await asyncio.to_thread(_reconcile_pending_payments, db, settings)
@@ -180,6 +184,9 @@ async def run_background_loop(
                             db, outcome, telegram_channel=telegram_channel, vk_channel=vk_channel
                         )
             await _reconcile_vk_permissions(db, vk_channel)
+            await channel_delivery_queue.process_pending_deliveries(
+                db, telegram_channel=telegram_channel, vk_channel=vk_channel
+            )
         except Exception:
             logger.exception("background_reconciliation_tick_failed")
         await asyncio.sleep(settings.online_status_poll_interval_sec)

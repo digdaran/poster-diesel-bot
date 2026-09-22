@@ -9,6 +9,7 @@ API — вся бизнес-логика остаётся в app/services/*.
 
 from __future__ import annotations
 
+import asyncio
 import io
 from pathlib import Path
 from typing import Any
@@ -72,7 +73,13 @@ class VkChannel(BaseMessengerChannel):
         media_send_mode="upload",
     )
 
-    def __init__(self, *, token: str, group_id: int | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        token: str,
+        group_id: int | None = None,
+        send_concurrency_limit: int = 8,
+    ) -> None:
         # group_id не обязателен для polling — при отсутствии BotPolling сам
         # резолвит его через groups.getById по токену сообщества (VK_GROUP_ID
         # в .env — опционален для канала с polling). Но `is_messages_allowed`
@@ -83,11 +90,19 @@ class VkChannel(BaseMessengerChannel):
         polling = BotPolling(api, group_id=group_id)
         self.bot = Bot(api=api, polling=polling)
         self.group_id = group_id
+        # Ограничивает число ОДНОВРЕМЕННЫХ исходящих отправок в пределах этого
+        # процесса (channel-vk или backend — оба создают свой VkChannel на
+        # одном VK_GROUP_TOKEN, см. backend/main.py) — под высокой конкурентной
+        # нагрузкой VK photo-upload API деградирует ("photo is undefined"),
+        # подтверждено экспериментально на проде (см. app/channels/retry.py,
+        # DECISIONS_LOG.md).
+        self._send_semaphore = asyncio.Semaphore(send_concurrency_limit)
 
     async def send_message(self, external_user_id: str, text: str, **kwargs: Any) -> None:
-        await self.bot.api.messages.send(
-            peer_id=int(external_user_id), message=text, random_id=0, **kwargs
-        )
+        async with self._send_semaphore:
+            await self.bot.api.messages.send(
+                peer_id=int(external_user_id), message=text, random_id=0, **kwargs
+            )
 
     async def send_media(
         self, external_user_id: str, file_path: str, *, caption: str | None = None
@@ -103,14 +118,15 @@ class VkChannel(BaseMessengerChannel):
         path = Path(file_path)
         if not path.exists():
             raise FileNotFoundError(f"Файл постера не найден: {file_path}")
-        uploader = PhotoMessageUploader(self.bot.api)
-        attachment = await uploader.upload(str(path), peer_id=int(external_user_id))
-        await self.bot.api.messages.send(
-            peer_id=int(external_user_id),
-            message=caption or "",
-            attachment=attachment,
-            random_id=0,
-        )
+        async with self._send_semaphore:
+            uploader = PhotoMessageUploader(self.bot.api)
+            attachment = await uploader.upload(str(path), peer_id=int(external_user_id))
+            await self.bot.api.messages.send(
+                peer_id=int(external_user_id),
+                message=caption or "",
+                attachment=attachment,
+                random_id=0,
+            )
 
     async def request_contact(self, external_user_id: str) -> None:
         """У VK нет аналога Telegram `request_contact` с гарантированно
@@ -156,14 +172,15 @@ class VkChannel(BaseMessengerChannel):
         buffer = io.BytesIO()
         img.save(buffer, format="PNG")  # type: ignore[call-arg]
         buffer.name = "sbp_qr.png"
-        uploader = PhotoMessageUploader(self.bot.api)
-        attachment = await uploader.upload(buffer, peer_id=int(external_user_id))
-        await self.bot.api.messages.send(
-            peer_id=int(external_user_id),
-            message=caption or "",
-            attachment=attachment,
-            random_id=0,
-        )
+        async with self._send_semaphore:
+            uploader = PhotoMessageUploader(self.bot.api)
+            attachment = await uploader.upload(buffer, peer_id=int(external_user_id))
+            await self.bot.api.messages.send(
+                peer_id=int(external_user_id),
+                message=caption or "",
+                attachment=attachment,
+                random_id=0,
+            )
 
     async def send_ticket_codes(self, external_user_id: str, codes: list[str]) -> None:
         """Отправляет список кодов номерков, разбитый на куски в пределах лимита
