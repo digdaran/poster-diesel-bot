@@ -65,7 +65,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # см. DECISIONS_LOG.md #24, #33.
     telegram_channel = (
         TelegramChannel(
-            token=settings.telegram_bot_token, proxy_url=settings.telegram_proxy_url or None
+            token=settings.telegram_bot_token,
+            proxy_url=settings.telegram_proxy_url or None,
+            send_concurrency_limit=settings.channel_send_concurrency_limit,
         )
         if settings.telegram_bot_token
         else None
@@ -73,7 +75,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.telegram_channel = telegram_channel
 
     vk_channel = (
-        VkChannel(token=settings.vk_group_token, group_id=settings.vk_group_id)
+        VkChannel(
+            token=settings.vk_group_token,
+            group_id=settings.vk_group_id,
+            send_concurrency_limit=settings.channel_send_concurrency_limit,
+        )
         if settings.vk_group_token
         else None
     )

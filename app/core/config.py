@@ -98,6 +98,14 @@ class Settings(BaseSettings):
     vk_group_token: str = Field(default="", alias="VK_GROUP_TOKEN")
     vk_group_id: int | None = Field(default=None, alias="VK_GROUP_ID")
 
+    # Общий предел одновременных исходящих отправок (сообщение/медиа/QR) в
+    # каждом канале, отдельно на процесс (channel-telegram, channel-vk, backend
+    # у себя для проактивных уведомлений — см. app/channels/retry.py). Введён
+    # после инцидента: VK photo-upload API под конкурентной нагрузкой на один
+    # токен сообщества деградирует, экспериментально подтверждено на проде,
+    # что ≤20 одновременных загрузок практически безопасны — см. DECISIONS_LOG.md.
+    channel_send_concurrency_limit: int = Field(default=8, alias="CHANNEL_SEND_CONCURRENCY_LIMIT")
+
     panel_domain: str = Field(default="localhost", alias="PANEL_DOMAIN")
     panel_ip_whitelist: str = Field(default="127.0.0.1", alias="PANEL_IP_WHITELIST")
 

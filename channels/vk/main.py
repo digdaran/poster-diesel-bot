@@ -21,7 +21,11 @@ async def run() -> None:
     if not settings.vk_group_token:
         raise RuntimeError("VK_GROUP_TOKEN не задан — канал VK не может быть запущен")
 
-    channel = VkChannel(token=settings.vk_group_token, group_id=settings.vk_group_id)
+    channel = VkChannel(
+        token=settings.vk_group_token,
+        group_id=settings.vk_group_id,
+        send_concurrency_limit=settings.channel_send_concurrency_limit,
+    )
     set_channel(channel)
     setup_dispatcher(channel.bot)
 

@@ -124,6 +124,18 @@
   `RESTIC_*`); `channel-telegram` подключается к `socks5://ssh-tunnel:$SSH_TUNNEL_LOCAL_PORT`
   — `TELEGRAM_PROXY_URL` в `.env` больше не задаётся вручную, собирается в
   `docker-compose.yml` (LOG №71).
+- **Отправка через мессенджер-каналы — backoff-ретрай (до 3 попыток, `app/channels/retry.py`) +
+  предел одновременных отправок на процесс (`CHANNEL_SEND_CONCURRENCY_LIMIT`, по умолчанию 8,
+  `asyncio.Semaphore` в `TelegramChannel`/`VkChannel`).** VK photo-upload API деградирует под
+  конкурентной нагрузкой на один `VK_GROUP_TOKEN` (экспериментально подтверждено на проде) —
+  затрагивает и QR при создании счёта, и доставку постера в проактивных уведомлениях
+  (`app/services/notification_service.py`) (LOG №72).
+- **Доставка гарантированная по каждому каналу (не кросс-процессно): исчерпание backoff-ретрая
+  (п. выше) — не финальный отказ, а постановка в очередь `pending_channel_deliveries`
+  (`app/services/channel_delivery_queue.py`), докручиваемую фоновым циклом backend до успеха, без
+  ограничения числа попыток.** И `channels/*/handlers.py` (QR при создании счёта), и
+  `notification_service.py` (проактивные уведомления) используют единую точку входа
+  `send_or_enqueue` вместо прямого `send_with_retry` + `try/except` (LOG №73).
 
 ## Технические допущения по умолчанию
 

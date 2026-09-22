@@ -86,3 +86,18 @@ class BroadcastStatus(str, enum.Enum):
 class BankReconciliationRunStatus(str, enum.Enum):
     SUCCESS = "SUCCESS"
     FETCH_FAILED = "FETCH_FAILED"
+
+
+class PendingDeliveryKind(str, enum.Enum):
+    """Форма сообщения в очереди гарантированной доставки
+    (`app/services/channel_delivery_queue.py`, DECISIONS_LOG.md №73) — определяет,
+    какой метод канала и с какими полями `payload` вызывать при (пере)отправке."""
+
+    TEXT_MESSAGE = "text_message"
+    QR_CODE = "qr_code"
+    DELIVER_PURCHASE = "deliver_purchase"
+
+
+class PendingDeliveryStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    SENT = "SENT"

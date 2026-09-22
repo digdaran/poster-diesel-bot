@@ -17,10 +17,10 @@ from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from app.core.phone import InvalidPhoneError
-from app.models.enums import ChannelType, PaymentStatus
+from app.models.enums import ChannelType, PaymentStatus, PendingDeliveryKind
 from app.models.giveaway import Giveaway
 from app.models.ticket import Ticket
-from app.services import participant_service, settings_service
+from app.services import channel_delivery_queue, participant_service, settings_service
 from app.services import payment_service as payment_svc
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -663,29 +663,30 @@ async def _create_and_offer_payment(
     qr_payload = outcome.created.qr_code_payload
     qr_sent = False
     if qr_payload:
+        qr_caption = (
+            "📷 Отсканируйте QR-код в банковском приложении и оплатите по реквизитам.\n"
+            "Этот QR-код действителен только для данного счёта: не используйте его "
+            "повторно для оплаты другого заказа и не меняйте сумму или назначение "
+            "платежа — иначе оплата не будет засчитана автоматически.\n"
+            "После оплаты пришлите сюда квитанцию — постеры с присвоенными номерами "
+            "придут после зачисления денег на расчётный счёт (как правило, до 30 "
+            "минут, в редких случаях — до 3 дней)."
+        )
         # QR — единственный способ получить платёжные реквизиты (нет кнопки
-        # повторного показа, см. DECISIONS_LOG.md), поэтому при сетевой ошибке
-        # пробуем ещё раз, прежде чем признать отправку неудавшейся.
-        for attempt in range(2):
-            try:
-                await channel.send_qr_code(
-                    str(message.chat.id),
-                    qr_payload,
-                    caption=(
-                        "📷 Отсканируйте QR-код в банковском приложении и оплатите по реквизитам.\n"
-                        "Этот QR-код действителен только для данного счёта: не используйте его "
-                        "повторно для оплаты другого заказа и не меняйте сумму или назначение "
-                        "платежа — иначе оплата не будет засчитана автоматически.\n"
-                        "После оплаты пришлите сюда квитанцию — постеры с присвоенными номерами "
-                        "придут после зачисления денег на расчётный счёт (как правило, до 30 "
-                        "минут, в редких случаях — до 3 дней)."
-                    ),
-                )
-                qr_sent = True
-                break
-            except Exception:
-                if attempt == 1:
-                    logger.exception("telegram_proactive_qr_send_failed", order_id=outcome.order_id)
+        # повторного показа, см. DECISIONS_LOG.md). Немедленная попытка — с
+        # backoff (app/channels/retry.py); если и она не удалась, доставка не
+        # теряется, а гарантированно докручивается фоновым циклом backend до
+        # успеха (см. app/services/channel_delivery_queue.py, DECISIONS_LOG.md
+        # №73) — участник получит QR отдельным сообщением позже.
+        qr_sent = await channel_delivery_queue.send_or_enqueue(
+            db,
+            channel=channel,
+            channel_type=ChannelType.TELEGRAM,
+            external_user_id=str(message.chat.id),
+            kind=PendingDeliveryKind.QR_CODE,
+            payload={"qr_code_payload": qr_payload, "caption": qr_caption},
+            participant_id=participant_id,
+        )
     if outcome.created.payment_url:
         instruction = (
             "Оплатите по ссылке ниже, либо QR-кодом выше (СБП)."
@@ -696,8 +697,10 @@ async def _create_and_offer_payment(
         instruction = "Оплатите QR-код выше в банковском приложении по реквизитам."
     else:
         instruction = (
-            "⚠️ Не удалось отправить QR-код для оплаты. Пожалуйста, воспользуйтесь кнопкой "
-            "«💬 Написать в поддержку», чтобы получить реквизиты для оплаты вручную."
+            "⏳ Не получилось сразу отправить QR-код — мы автоматически повторим "
+            "отправку отдельным сообщением в течение нескольких минут. Если не "
+            "придёт — воспользуйтесь кнопкой «💬 Написать в поддержку», чтобы "
+            "получить реквизиты для оплаты вручную."
         )
     await message.answer(
         f"Счёт создан на {quantity} экз. на сумму {outcome.amount / 100:.2f} ₽.{invoice_line} "

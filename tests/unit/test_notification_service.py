@@ -8,17 +8,21 @@ messages_allowed; при наличии обеих подходящих прив
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from unittest.mock import AsyncMock
 
+import pytest
 from app.core.db import Database
 from app.models.channel_binding import ChannelBinding
-from app.models.enums import ChannelType, PaymentStatus
+from app.models.enums import ChannelType, PaymentStatus, PendingDeliveryKind, PendingDeliveryStatus
 from app.models.giveaway import Giveaway
 from app.models.giveaway_poster import GiveawayPoster
 from app.models.participant import Participant
+from app.models.pending_channel_delivery import PendingChannelDelivery
 from app.payments.requisites_qr import RequisitesQrProvider
 from app.services import notification_service
 from app.services import payment_service as svc
 from app.services import ticket_pool_service as pool_svc
+from sqlalchemy import select
 
 
 def make_provider() -> RequisitesQrProvider:
@@ -449,10 +453,17 @@ async def test_notify_sends_to_both_telegram_and_vk_when_both_bound(db: Database
     ]
 
 
-async def test_notify_channel_failure_does_not_block_other_channel(db: Database) -> None:
+async def test_notify_channel_failure_does_not_block_other_channel(
+    db: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Если отправка в один канал падает (напр. VK вернул ошибку запрета,
     см. DECISIONS_LOG.md №43), доставка в уже подтверждённый другой канал всё
-    равно должна пройти."""
+    равно должна пройти. VK-канал здесь падает на каждой из попыток
+    `send_with_retry` (см. app/channels/retry.py, DECISIONS_LOG.md №72), а
+    после их исчерпания `send_or_enqueue` ставит доставку в очередь на
+    гарантированную докрутку, а не считает её потерянной (DECISIONS_LOG.md №73)
+    — `asyncio.sleep` подменён, чтобы не ждать реальный backoff между попытками."""
+    monkeypatch.setattr("app.channels.retry.asyncio.sleep", AsyncMock())
     with db.session() as session:
         p = Participant(phone="79995559911", phone_verified=True)
         session.add(p)
@@ -481,7 +492,10 @@ async def test_notify_channel_failure_does_not_block_other_channel(db: Database)
     telegram_channel = FakeChannel()
 
     class FailingChannel(FakeChannel):
+        attempt_count = 0
+
         async def send_message(self, external_user_id: str, text: str, **kwargs: object) -> None:
+            self.attempt_count += 1
             raise RuntimeError("messages.send forbidden")
 
     vk_channel = FailingChannel()
@@ -493,3 +507,15 @@ async def test_notify_channel_failure_does_not_block_other_channel(db: Database)
     assert telegram_channel.send_message_calls == [
         ("tg-2", notification_service._LATE_SUCCESS_NO_TICKETS_TEXT)
     ]
+    # send_with_retry исчерпал все попытки (DEFAULT_ATTEMPTS=3) на VK, прежде
+    # чем сдаться — не одна попытка, как было раньше.
+    assert vk_channel.attempt_count == 3
+    # ...и после этого доставка не потеряна, а стоит в очереди на докрутку.
+    with db.session() as session:
+        rows = list(session.execute(select(PendingChannelDelivery)).scalars().all())
+    assert len(rows) == 1
+    assert rows[0].channel == ChannelType.VK
+    assert rows[0].external_user_id == "vk-2"
+    assert rows[0].kind == PendingDeliveryKind.TEXT_MESSAGE
+    assert rows[0].payload == {"text": notification_service._LATE_SUCCESS_NO_TICKETS_TEXT}
+    assert rows[0].status == PendingDeliveryStatus.PENDING
