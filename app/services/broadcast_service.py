@@ -2,15 +2,21 @@
 решение): получатели — участники с привязкой канала `telegram`, остальные не
 попадают в выборку. Транзакционные уведомления (постер, коды) сюда не относятся —
 они идут через `app.channels.*` в канал покупки (см. ARCHITECTURE.md).
+
+Отправка использует ту же инфраструктуру гарантированной доставки, что и
+проактивные уведомления (`app/services/channel_delivery_queue.py`,
+DECISIONS_LOG.md №72/№73/№79): немедленная попытка с backoff-ретраем на
+получателя, а при неудаче — не потеря, а постановка в очередь на докрутку
+фоновым циклом backend до успеха.
 """
 
 from __future__ import annotations
 
-import time
-from collections.abc import Callable
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -18,14 +24,21 @@ from app.core.db import Database
 from app.models.base import utcnow
 from app.models.broadcast import Broadcast
 from app.models.channel_binding import ChannelBinding
-from app.models.enums import BroadcastStatus, ChannelType, TicketSource
+from app.models.enums import BroadcastStatus, ChannelType, PendingDeliveryKind, TicketSource
 from app.models.participant import Participant
 from app.models.ticket import Ticket
+from app.services import channel_delivery_queue
+from app.services.channel_delivery_queue import DeliverableChannel
 
-SendFn = Callable[[str, str], bool]
-"""Функция отправки сообщения: (external_user_id, text) -> успех.
-Реализуется каналом Telegram (см. app.channels / channels.telegram, M9);
-здесь сервис от неё абстрагирован для тестируемости и разделения ответственности."""
+logger = structlog.get_logger(__name__)
+
+
+class BroadcastNotFoundError(Exception):
+    pass
+
+
+class BroadcastNotDraftError(Exception):
+    pass
 
 
 def create_broadcast(
@@ -110,19 +123,51 @@ def resolve_audience(session: Session, audience_filter: dict[str, Any]) -> list[
 class SendResult:
     recipients: int
     delivered: int
+    queued: int
+    """Не ушло с первой попытки, но НЕ потеряно — поставлено в очередь
+    гарантированной доставки (`channel_delivery_queue`), докрутится фоновым
+    циклом. Эта финальная статистика — снимок на момент отправки, "queued"
+    получатели впоследствии станут доставленными без обновления этого снимка."""
     errors: int
+    """Получателя не удалось даже поставить в очередь (сбой самой БД при
+    INSERT) — на практике почти никогда не встречается."""
 
 
-def send_broadcast(
-    db: Database, *, broadcast_id: int, send_fn: SendFn, rate_limit_delay_sec: float = 0.0
+def mark_broadcast_sending(db: Database, *, broadcast_id: int) -> Broadcast:
+    """Быстрый синхронный переход DRAFT -> SENDING. Вызывается прямо в HTTP-
+    обработчике перед тем, как реальная отправка (`send_broadcast`, может
+    занимать секунды-минуты для большой аудитории) уйдёт в фоновую задачу —
+    HTTP-ответ не должен блокироваться на всё это время."""
+    with db.session() as session:
+        broadcast = session.get(Broadcast, broadcast_id)
+        if broadcast is None:
+            raise BroadcastNotFoundError(f"Рассылка {broadcast_id} не найдена")
+        if broadcast.status != BroadcastStatus.DRAFT:
+            raise BroadcastNotDraftError(
+                "Рассылку можно отправить только из статуса «черновик» "
+                f"(сейчас {broadcast.status.value})"
+            )
+        broadcast.status = BroadcastStatus.SENDING
+        session.flush()
+        session.expunge(broadcast)
+        return broadcast
+
+
+async def send_broadcast(
+    db: Database, *, broadcast_id: int, telegram_channel: DeliverableChannel | None
 ) -> SendResult:
-    """Отправляет рассылку (DRAFT -> SENDING -> SENT/FAILED, п.15 ТЗ). Учитывает
-    лимиты Telegram через `rate_limit_delay_sec` между сообщениями (п.15 ТЗ)."""
+    """Реальная отправка — предполагает, что статус уже SENDING
+    (`mark_broadcast_sending` вызывается заранее). Каждому получателю —
+    независимая попытка через `channel_delivery_queue.send_or_enqueue`:
+    доставлено сейчас (`delivered`) либо поставлено в очередь на
+    гарантированную докрутку (`queued`) — оба исхода НЕ являются провалом
+    рассылки в целом; `errors` — только для сбоя самой постановки в очередь.
+    `telegram_channel=None` (TELEGRAM_BOT_TOKEN не задан в этом процессе) —
+    все получатели ставятся в очередь напрямую, докрутятся, когда канал
+    появится."""
     with db.session() as session:
         broadcast = session.get(Broadcast, broadcast_id)
         assert broadcast is not None
-        broadcast.status = BroadcastStatus.SENDING
-        session.flush()
         participants = resolve_audience(session, broadcast.audience_filter)
         recipients: list[tuple[int, str]] = [
             (p.id, binding.external_user_id)
@@ -132,30 +177,54 @@ def send_broadcast(
         ]
         message_text = broadcast.message_text
 
+    results = await asyncio.gather(
+        *(
+            channel_delivery_queue.send_or_enqueue(
+                db,
+                channel=telegram_channel,
+                channel_type=ChannelType.TELEGRAM,
+                external_user_id=external_user_id,
+                kind=PendingDeliveryKind.TEXT_MESSAGE,
+                payload={"text": message_text},
+                participant_id=participant_id,
+            )
+            for participant_id, external_user_id in recipients
+        ),
+        return_exceptions=True,
+    )
+
     delivered = 0
+    queued = 0
     errors = 0
-    for _participant_id, external_user_id in recipients:
-        try:
-            ok = send_fn(external_user_id, message_text)
-        except (
-            Exception
-        ):  # noqa: BLE001 — сбой доставки одному получателю не должен прерывать рассылку
-            ok = False
-        if ok:
+    for (participant_id, _external_user_id), result in zip(recipients, results, strict=True):
+        if isinstance(result, BaseException):
+            errors += 1
+            logger.error(
+                "broadcast_recipient_send_or_enqueue_failed",
+                broadcast_id=broadcast_id,
+                participant_id=participant_id,
+                error=str(result),
+            )
+        elif result:
             delivered += 1
         else:
-            errors += 1
-        if rate_limit_delay_sec:
-            time.sleep(rate_limit_delay_sec)
+            queued += 1
 
     with db.session() as session:
         broadcast = session.get(Broadcast, broadcast_id)
         assert broadcast is not None
         broadcast.status = (
-            BroadcastStatus.SENT if delivered > 0 or not recipients else BroadcastStatus.FAILED
+            BroadcastStatus.SENT
+            if not recipients or delivered > 0 or queued > 0
+            else BroadcastStatus.FAILED
         )
-        broadcast.stats = {"recipients": len(recipients), "delivered": delivered, "errors": errors}
+        broadcast.stats = {
+            "recipients": len(recipients),
+            "delivered": delivered,
+            "queued": queued,
+            "errors": errors,
+        }
         broadcast.sent_at = utcnow()
         session.flush()
 
-    return SendResult(recipients=len(recipients), delivered=delivered, errors=errors)
+    return SendResult(recipients=len(recipients), delivered=delivered, queued=queued, errors=errors)

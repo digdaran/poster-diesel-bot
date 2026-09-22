@@ -1,4 +1,13 @@
-"""Раздел «Рассылки» — только Telegram (п.15 ТЗ)."""
+"""Раздел «Рассылки» — только Telegram (п.15 ТЗ).
+
+Реальная отправка идёт в фоне (`BackgroundTasks`) — при большой аудитории
+рассылка может занимать секунды-минуты, HTTP-ответ не должен блокироваться на
+всё это время. Эндпоинт синхронно переводит DRAFT -> SENDING
+(`broadcast_service.mark_broadcast_sending`) и сразу возвращает управление;
+реальную доставку и финальный переход в SENT/FAILED делает
+`broadcast_service.send_broadcast` в фоне, используя ту же инфраструктуру
+гарантированной доставки, что и проактивные уведомления
+(`app/services/channel_delivery_queue.py`, DECISIONS_LOG.md №79)."""
 
 from __future__ import annotations
 
@@ -11,12 +20,13 @@ from app.models.enums import AuditActorType
 from app.models.panel_user import PanelUser
 from app.services import audit_service
 from app.services import broadcast_service as svc
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend.api.deps import get_database, get_session, require_permission
+from backend.api.deps import get_database, get_session, get_telegram_channel, require_permission
+from channels.telegram.channel import TelegramChannel
 
 router = APIRouter(prefix="/broadcasts", tags=["broadcasts"])
 
@@ -74,38 +84,62 @@ def create_broadcast(
     return broadcast
 
 
-@router.post("/{broadcast_id}/send", response_model=BroadcastOut)
-def send_broadcast(
+async def _send_broadcast_background(
+    *,
+    db: Database,
     broadcast_id: int,
-    request: Request,
-    db: Database = Depends(get_database),
-    user: PanelUser = Depends(require_permission(Permission.BROADCAST_SEND)),
-) -> Broadcast:
-    """Реальная отправка через Telegram подключается каналом (M9) — здесь
-    используется заглушка `send_fn`, которая всегда возвращает True, пока канал
-    Telegram не зарегистрирован (см. app.channels.factory, TODO в M9)."""
-    with db.session() as session:
-        broadcast = session.get(Broadcast, broadcast_id)
-        if broadcast is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Рассылка не найдена")
-
-    svc.send_broadcast(
-        db, broadcast_id=broadcast_id, send_fn=lambda ext, text: True, rate_limit_delay_sec=0.0
+    telegram_channel: TelegramChannel | None,
+    actor_id: int,
+    actor_login: str,
+    ip_address: str | None,
+) -> None:
+    result = await svc.send_broadcast(
+        db, broadcast_id=broadcast_id, telegram_channel=telegram_channel
     )
-
     with db.session() as session:
-        broadcast = session.get(Broadcast, broadcast_id)
-        assert broadcast is not None
         audit_service.log(
             session,
             action="broadcast_send",
             actor_type=AuditActorType.PANEL_USER,
-            actor_id=user.id,
-            actor_label=user.login,
+            actor_id=actor_id,
+            actor_label=actor_login,
             entity_type="broadcast",
             entity_id=broadcast_id,
-            details=broadcast.stats,
-            ip_address=request.client.host if request.client else None,
+            details={
+                "recipients": result.recipients,
+                "delivered": result.delivered,
+                "queued": result.queued,
+                "errors": result.errors,
+            },
+            ip_address=ip_address,
         )
-        session.expunge(broadcast)
+
+
+@router.post("/{broadcast_id}/send", response_model=BroadcastOut)
+def send_broadcast(
+    broadcast_id: int,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Database = Depends(get_database),
+    user: PanelUser = Depends(require_permission(Permission.BROADCAST_SEND)),
+    telegram_channel: TelegramChannel | None = Depends(get_telegram_channel),
+) -> Broadcast:
+    try:
+        broadcast = svc.mark_broadcast_sending(db, broadcast_id=broadcast_id)
+    except svc.BroadcastNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Рассылка не найдена"
+        ) from exc
+    except svc.BroadcastNotDraftError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    background_tasks.add_task(
+        _send_broadcast_background,
+        db=db,
+        broadcast_id=broadcast_id,
+        telegram_channel=telegram_channel,
+        actor_id=user.id,
+        actor_login=user.login,
+        ip_address=request.client.host if request.client else None,
+    )
     return broadcast

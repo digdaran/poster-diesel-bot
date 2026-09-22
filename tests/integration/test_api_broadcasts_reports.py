@@ -41,7 +41,21 @@ def test_administrator_can_create_and_send_broadcast(api_client: TestClient) -> 
 
     resp = api_client.post(f"/api/broadcasts/{broadcast_id}/send", headers=headers)
     assert resp.status_code == 200
-    assert resp.json()["status"] == "SENT"
+    # Отправка уходит в фоновую задачу (BackgroundTasks) — HTTP-ответ отражает
+    # снимок сразу после перехода DRAFT -> SENDING, а не финальный статус (см.
+    # DECISIONS_LOG.md №79); TestClient дожидается завершения фоновых задач в
+    # рамках самого вызова .post(), поэтому к последующему GET рассылка уже
+    # в конечном статусе.
+    assert resp.json()["status"] == "SENDING"
+
+    resp = api_client.get("/api/broadcasts", headers=headers)
+    sent = next(b for b in resp.json() if b["id"] == broadcast_id)
+    assert sent["status"] == "SENT"
+    # В тестовой БД нет участников с Telegram-привязкой — аудитория пуста.
+    assert sent["stats"] == {"recipients": 0, "delivered": 0, "queued": 0, "errors": 0}
+
+    resp = api_client.post(f"/api/broadcasts/{broadcast_id}/send", headers=headers)
+    assert resp.status_code == 409  # повторная отправка уже не-DRAFT рассылки запрещена
 
 
 def test_financial_summary_and_export(api_client: TestClient) -> None:
