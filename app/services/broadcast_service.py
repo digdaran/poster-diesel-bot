@@ -101,7 +101,17 @@ def resolve_audience(session: Session, audience_filter: dict[str, Any]) -> list[
         stmt = stmt.where(
             Participant.id.in_(ticket_query.where(Ticket.source == TicketSource.ONLINE))
         )
-    # segment == "all" -> без доп. фильтра по покупкам
+    elif giveaway_id is not None:
+        # segment == "all", но сужено конкретным розыгрышем. РАНЬШЕ giveaway_id
+        # в этой ветке молча игнорировался целиком (баг, найден на проде —
+        # рассылка с фильтром {"segment": "all", "giveaway_id": <любой>} била
+        # по ВСЕМ Telegram-привязанным участникам вместо ожидаемой пустой/узкой
+        # аудитории). `Participant` не связан с `Giveaway` иначе как через
+        # `Ticket` — единственная содержательная трактовка "все участники
+        # этого розыгрыша" здесь совпадает с "paid", ограниченным giveaway_id
+        # (`ticket_query` уже учитывает `giveaway_id`, см. выше).
+        stmt = stmt.where(Participant.id.in_(ticket_query))
+    # segment == "all" без giveaway_id -> без доп. фильтра по покупкам вовсе
 
     participants = list(session.execute(stmt).scalars())
 
