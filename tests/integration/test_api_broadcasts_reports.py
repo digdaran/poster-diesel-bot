@@ -52,7 +52,14 @@ def test_administrator_can_create_and_send_broadcast(api_client: TestClient) -> 
     sent = next(b for b in resp.json() if b["id"] == broadcast_id)
     assert sent["status"] == "SENT"
     # В тестовой БД нет участников с Telegram-привязкой — аудитория пуста.
-    assert sent["stats"] == {"recipients": 0, "delivered": 0, "queued": 0, "errors": 0}
+    assert sent["stats"] == {
+        "recipients": 0,
+        "delivered": 0,
+        "queued": 0,
+        "undeliverable": 0,
+        "cancelled": 0,
+        "errors": 0,
+    }
 
     resp = api_client.post(f"/api/broadcasts/{broadcast_id}/send", headers=headers)
     assert resp.status_code == 409  # повторная отправка уже не-DRAFT рассылки запрещена

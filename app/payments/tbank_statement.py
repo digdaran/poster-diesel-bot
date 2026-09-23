@@ -14,13 +14,20 @@
   `operationType`.
 - `operations`/`operationId`/`operationDate`/`description`/`payPurpose` —
   угадано верно с первого раза.
+
+TLS: с 2026-09-23 `business.tbank.ru` отдаёт сертификат, выпущенный УЦ Минцифры
+(`Russian Trusted Root CA`), которого нет в `certifi` — см. `_tbank_ssl_context`.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import functools
+import ssl
+from pathlib import Path
 from typing import Any
 
+import certifi
 import httpx
 import structlog
 
@@ -28,6 +35,24 @@ from app.core.config import Settings
 from app.payments.bank_statement import BankStatementEntry, BaseBankStatementProvider
 
 logger = structlog.get_logger(__name__)
+
+# Корневой УЦ Минцифры (SHA-256 и источник — в шапке самого файла). Доверие ему
+# добавляется ТОЛЬКО в запросы к T-API выписки, а не в системное хранилище
+# образа/процесса — остальные исходящие соединения backend (Telegram, VK)
+# по-прежнему проверяются только по `certifi` (DECISIONS_LOG.md №83).
+_RUSSIAN_TRUSTED_ROOT_CA = Path(__file__).parent / "certs" / "russian_trusted_root_ca.crt"
+
+
+@functools.lru_cache(maxsize=1)
+def _tbank_ssl_context() -> ssl.SSLContext:
+    """`certifi` + Russian Trusted Root CA: цепочка `business.tbank.ru` —
+    `*.tbank.ru` ← `Russian Trusted Sub CA` (отдаётся сервером) ← `Russian
+    Trusted Root CA`. `certifi` оставлен, чтобы запрос не сломался, если банк
+    вернётся к сертификату от международного УЦ."""
+    context = ssl.create_default_context(cafile=certifi.where())
+    context.load_verify_locations(cafile=str(_RUSSIAN_TRUSTED_ROOT_CA))
+    return context
+
 
 # Порядок — по убыванию приоритета: первый ключ в каждом кортеже подтверждён
 # реальным ответом API (см. докстринг модуля), остальные — запасные варианты
@@ -73,7 +98,11 @@ class TBankStatementProvider(BaseBankStatementProvider):
                 params["cursor"] = cursor
 
             response = httpx.get(
-                f"{self.api_base}/statement", params=params, headers=headers, timeout=30.0
+                f"{self.api_base}/statement",
+                params=params,
+                headers=headers,
+                timeout=30.0,
+                verify=_tbank_ssl_context(),
             )
             response.raise_for_status()
             data = response.json()
