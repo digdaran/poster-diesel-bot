@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime as dt
 import itertools
 
+import pytest
 from app.core.config import Settings
 from app.core.db import Database
 from app.models.bank_reconciliation_run import BankReconciliationRun
@@ -25,6 +26,7 @@ from app.models.manual_registration import ManualRegistration
 from app.models.panel_user import PanelUser
 from app.models.participant import Participant
 from app.models.payment import Payment
+from app.payments import tbank_statement
 from app.payments.bank_statement import BankStatementEntry
 from app.payments.requisites_qr import RequisitesQrProvider
 from app.services import bank_reconciliation_service as svc
@@ -184,6 +186,63 @@ def test_find_matching_entries_returns_all_operations_for_invoice() -> None:
     ]
     result = svc.find_matching_entries(entries, "REQ-00001")
     assert [e.external_id for e in result] == ["op-1", "op-2"]
+
+
+def _entry(purpose: str, external_id: str = "op-1") -> BankStatementEntry:
+    return BankStatementEntry(
+        external_id=external_id, amount=10000, purpose=purpose, operation_date=utcnow()
+    )
+
+
+@pytest.mark.parametrize(
+    "purpose",
+    [
+        # Реальное назначение из выписки T-API (банк поднимает регистр, LOG №84)
+        "ОПЛАТА ПО СЧЕТУ № NIVAG-00004\nОТ 25.09.2026, В Т.Ч. НДС 5% 47.62\nРУБ.",
+        "ОПЛАТА ПО СЧЕТУ № NIVAG-00004 ОТ 20.09.2026",
+        "оплата по счету nivag-00004",
+        # Кириллица вместо похожей латиницы (набрано в русской раскладке)
+        "Оплата по счету № NivаG-00004",
+        # Другие разделители / без разделителя / без ведущих нулей
+        "Оплата по счету NivaG 00004",
+        "Оплата по счету NivaG–00004",
+        "Оплата по счету NivaG00004",
+        "Оплата по счету NivaG-4",
+        "Оплата по счету №NivaG-00004от20.09.2026",
+    ],
+)
+def test_find_matching_entries_tolerates_real_world_purpose_variants(purpose: str) -> None:
+    assert len(svc.find_matching_entries([_entry(purpose)], "NivaG-00004")) == 1
+
+
+@pytest.mark.parametrize(
+    ("purpose", "invoice_no"),
+    [
+        ("Оплата по счету № NivaG-00041", "NivaG-00004"),
+        ("Оплата по счету № NivaG-00014", "NivaG-00004"),
+        ("Оплата по счету № ANivaG-00004", "NivaG-00004"),
+        ("Оплата по счету № R200001", "R2-00001"),
+    ],
+)
+def test_find_matching_entries_does_not_match_neighbouring_invoices(
+    purpose: str, invoice_no: str
+) -> None:
+    assert svc.find_matching_entries([_entry(purpose)], invoice_no) == []
+
+
+def test_tbank_statement_entry_purpose_joins_all_purpose_fields() -> None:
+    entry = tbank_statement._parse_entry(
+        {
+            "operationId": "op-1",
+            "typeOfOperation": "Credit",
+            "rubleAmount": 100,
+            "operationDate": "2026-09-20T10:00:00Z",
+            "payPurpose": "Перевод по СБП",
+            "description": "Оплата по счету № NivaG-00004",
+        }
+    )
+    assert entry is not None
+    assert svc.find_matching_entries([entry], "NivaG-00004") == [entry]
 
 
 class _FakeStatementProvider:

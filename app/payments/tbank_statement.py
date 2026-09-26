@@ -169,7 +169,7 @@ def _parse_entry(operation: dict[str, Any]) -> BankStatementEntry | None:
         return None  # похоже на исходящую операцию — не входящий платёж участника
 
     external_id = _first_present(operation, _ID_KEYS)
-    purpose = _first_present(operation, _PURPOSE_KEYS)
+    purpose = _join_purposes(operation)
     raw_date = _first_present(operation, _DATE_KEYS)
     amount = _parse_amount(_first_present(operation, _AMOUNT_KEYS))
 
@@ -186,6 +186,22 @@ def _parse_entry(operation: dict[str, Any]) -> BankStatementEntry | None:
         purpose=str(purpose),
         operation_date=operation_date,
     )
+
+
+def _join_purposes(operation: dict[str, Any]) -> str | None:
+    """Склеивает ВСЕ непустые текстовые поля назначения, а не берёт первое: у
+    части входящих (напр. СБП) `payPurpose` заполнен банком-отправителем шаблоном,
+    а текст, введённый плательщиком (с номером счёта), лежит в `description` — если
+    смотреть только первое поле, номер счёта в сверку не попадает (LOG №84)."""
+    parts: list[str] = []
+    for key in _PURPOSE_KEYS:
+        value = operation.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text and text not in parts:
+            parts.append(text)
+    return " | ".join(parts) if parts else None
 
 
 def _parse_date(raw: str) -> dt.datetime | None:

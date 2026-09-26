@@ -63,15 +63,45 @@ logger = structlog.get_logger(__name__)
 _ERROR_MESSAGE_MAX_LEN = 2000
 
 
+# Кириллические буквы, визуально неотличимые от латинских — участник, перепечатывая
+# номер счёта руками (а не сканируя QR), легко набирает часть префикса в русской
+# раскладке. Приводим к латинице и текст назначения, и сам номер счёта.
+_HOMOGLYPHS = str.maketrans("АВЕКМНОРСТУХаеорсух", "ABEKMHOPCTYXaeopcyx")
+# Разделитель между префиксом и числом: дефис (включая типографские варианты,
+# которые подставляют банковские приложения), пробел, подчёркивание — или ничего.
+_SEPARATOR = r"[\s\-_\u2010\u2011\u2012\u2013\u2014\u2212]"
+
+
+def _normalize_purpose(text: str) -> str:
+    return text.translate(_HOMOGLYPHS).casefold()
+
+
+def _invoice_pattern(invoice_no: str) -> re.Pattern[str]:
+    """Паттерн номера счёта `PREFIX-NNNNN`, терпимый к тому, как назначение платежа
+    реально доходит до выписки (см. DECISIONS_LOG.md №84): банки и участники меняют
+    регистр (`NivaG-00004` → `NIVAG-00004`), подставляют кириллицу вместо похожей
+    латиницы, заменяют/убирают дефис и теряют ведущие нули. Границы с обеих сторон,
+    чтобы `REQ-00001` не совпадал ни с `AREQ-00001`, ни с `REQ-000012`."""
+    prefix, _, number = invoice_no.rpartition("-")
+    norm_prefix = _normalize_purpose(prefix)
+    # Префикс, оканчивающийся цифрой, без разделителя склеился бы с номером
+    # (`R2` + `00001` неотличимо от `R` + `200001`) — там разделитель обязателен.
+    separator = _SEPARATOR + ("+" if norm_prefix[-1:].isdigit() else "*")
+    return re.compile(
+        r"(?<![0-9a-z])" + re.escape(norm_prefix) + separator + r"0*" + str(int(number)) + r"(?!\d)"
+    )
+
+
 def find_matching_entries(
     entries: list[BankStatementEntry], invoice_no: str
 ) -> list[BankStatementEntry]:
     """Все операции в выписке, чьё назначение платежа указывает на этот счёт (по
-    номеру), в порядке появления в выписке. Сумма считается отдельно в `reconcile()`
-    — несколько частичных переводов по одному счёту суммируются, а не сопоставляются
-    по одной точно совпавшей операции (см. DECISIONS_LOG.md №53)."""
-    pattern = re.compile(r"№?\s*" + re.escape(invoice_no) + r"\b")
-    return [entry for entry in entries if pattern.search(entry.purpose)]
+    номеру, см. `_invoice_pattern`), в порядке появления в выписке. Сумма считается
+    отдельно в `reconcile()` — несколько частичных переводов по одному счёту
+    суммируются, а не сопоставляются по одной точно совпавшей операции (см.
+    DECISIONS_LOG.md №53)."""
+    pattern = _invoice_pattern(invoice_no)
+    return [entry for entry in entries if pattern.search(_normalize_purpose(entry.purpose))]
 
 
 def reconcile(
