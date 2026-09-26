@@ -134,6 +134,7 @@ def test_administrator_can_view_bank_reconciliation_status(api_client: TestClien
     assert "payments_brief" in body
     assert "today" in body["payments_brief"]
     assert "yesterday" in body["payments_brief"]
+    assert "days" in body["payments_brief"]
 
 
 def test_unauthenticated_request_is_401(api_client: TestClient) -> None:

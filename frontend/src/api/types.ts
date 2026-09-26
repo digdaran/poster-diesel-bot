@@ -124,9 +124,16 @@ export interface PaymentsCohortBrief {
   disputed_amount: number;
 }
 
+export interface PaymentsDayBrief extends PaymentsCohortBrief {
+  // Московская дата создания счетов, "YYYY-MM-DD".
+  date: string;
+}
+
 export interface PaymentsBrief {
   today: PaymentsCohortBrief;
   yesterday: PaymentsCohortBrief;
+  // По московским суткам с открытия тиража до сегодня, от новых к старым.
+  days: PaymentsDayBrief[];
 }
 
 export interface BankReconciliationStatus {

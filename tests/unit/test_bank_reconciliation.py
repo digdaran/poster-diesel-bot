@@ -985,11 +985,12 @@ def test_get_reconciliation_status_is_stale_when_last_run_too_old(
 def test_get_payments_brief_buckets_by_creation_day_and_status(db: Database) -> None:
     gid = make_giveaway(db)
     pid = make_participant(db)
-    now = utcnow()
-    today_start = dt.datetime.combine(now.date(), dt.time.min)
+    # 12:00 UTC = 15:00 МСК 27.09; московская полночь 27.09 = 26.09 21:00 UTC.
+    now = dt.datetime(2026, 9, 27, 12, 0)
+    today_start = dt.datetime(2026, 9, 26, 21, 0)
 
     # Сегодня: успешный, ожидающий, спорный (расхождение суммы) + один ровно на
-    # границе полуночи (проверка включительно/исключительно).
+    # границе московской полуночи (проверка включительно/исключительно).
     make_raw_payment(
         db,
         giveaway_id=gid,
@@ -1083,3 +1084,95 @@ def test_get_payments_brief_returns_zeroed_cohorts_when_no_payments(db: Database
         assert cohort.succeeded_count == 0
         assert cohort.pending_count == 0
         assert cohort.disputed_count == 0
+
+
+def _make_giveaway_opened_at(
+    db: Database, *, prefix: str, opened_at: dt.datetime, archived: bool = False
+) -> int:
+    with db.session() as session:
+        g = Giveaway(name="Test", prefix=prefix, ticket_price=10000, max_tickets=10)
+        session.add(g)
+        session.flush()
+        pool_svc.open_registration(session, g, now=opened_at)
+        g.is_archived = archived
+        return g.id
+
+
+def test_get_payments_brief_days_cover_period_since_earliest_open_giveaway(
+    db: Database,
+) -> None:
+    now = dt.datetime(2026, 9, 27, 12, 0)  # 15:00 МСК 27.09
+    # 23.09 22:30 UTC — это уже 24.09 по Москве: период начинается с 24.09.
+    gid = _make_giveaway_opened_at(db, prefix="AAA", opened_at=dt.datetime(2026, 9, 23, 22, 30))
+    _make_giveaway_opened_at(db, prefix="BBB", opened_at=dt.datetime(2026, 9, 26, 10, 0))
+    # Архивный тираж, открытый раньше, границу периода не сдвигает.
+    _make_giveaway_opened_at(
+        db, prefix="OLD", opened_at=dt.datetime(2026, 9, 1, 10, 0), archived=True
+    )
+    pid = make_participant(db)
+
+    for created_at, status, amount in [
+        # 25.09 МСК (22:00 UTC 24.09 = 01:00 МСК 25.09)
+        (dt.datetime(2026, 9, 24, 22, 0), PaymentStatus.SUCCEEDED, 1000),
+        (dt.datetime(2026, 9, 25, 10, 0), PaymentStatus.PENDING, 2000),
+        # 27.09 МСК
+        (dt.datetime(2026, 9, 27, 11, 0), PaymentStatus.SUCCEEDED, 4000),
+        # 23.09 МСК — до начала периода, в days не попадает
+        (dt.datetime(2026, 9, 23, 10, 0), PaymentStatus.SUCCEEDED, 99999),
+    ]:
+        make_raw_payment(
+            db,
+            giveaway_id=gid,
+            participant_id=pid,
+            created_at=created_at,
+            status=status,
+            amount=amount,
+        )
+
+    brief = svc.get_payments_brief(db, now=now)
+
+    assert [d.date for d in brief.days] == [
+        dt.date(2026, 9, 27),
+        dt.date(2026, 9, 26),
+        dt.date(2026, 9, 25),
+        dt.date(2026, 9, 24),
+    ]
+    by_date = {d.date: d for d in brief.days}
+    assert by_date[dt.date(2026, 9, 27)].total_amount == 4000
+    assert by_date[dt.date(2026, 9, 26)].total_count == 0
+    assert by_date[dt.date(2026, 9, 25)].total_count == 2
+    assert by_date[dt.date(2026, 9, 25)].succeeded_amount == 1000
+    assert by_date[dt.date(2026, 9, 25)].pending_amount == 2000
+    assert by_date[dt.date(2026, 9, 24)].total_count == 0
+    assert sum(d.total_amount for d in brief.days) == 7000
+
+    # today/yesterday считаются по тем же московским суткам, что и days.
+    assert brief.today == svc.PaymentsCohortBrief(**_brief_fields(by_date[dt.date(2026, 9, 27)]))
+    assert brief.yesterday.total_count == 0
+
+
+def _brief_fields(day: svc.PaymentsDayBrief) -> dict[str, int]:
+    return {k: v for k, v in vars(day).items() if k != "date"}
+
+
+def test_get_payments_brief_days_empty_without_open_giveaways(db: Database) -> None:
+    with db.session() as session:
+        g = Giveaway(name="Draft", prefix="DRF", ticket_price=10000, max_tickets=10)
+        session.add(g)
+        session.flush()
+        gid = g.id
+    pid = make_participant(db)
+    now = dt.datetime(2026, 9, 27, 12, 0)
+    make_raw_payment(
+        db,
+        giveaway_id=gid,
+        participant_id=pid,
+        created_at=dt.datetime(2026, 9, 27, 11, 0),
+        status=PaymentStatus.SUCCEEDED,
+        amount=500,
+    )
+
+    brief = svc.get_payments_brief(db, now=now)
+
+    assert brief.days == []
+    assert brief.today.total_amount == 500

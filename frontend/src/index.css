@@ -996,6 +996,20 @@ section {
   color: var(--color-text-muted);
 }
 
+.reconciliation-days {
+  margin: -8px 0 20px;
+}
+
+.reconciliation-days-total td {
+  font-weight: 600;
+}
+
+.reconciliation-days-empty {
+  color: var(--color-text-muted);
+  font-size: 13px;
+  margin: 0;
+}
+
 .reconciliation-error-message {
   color: var(--color-danger);
   font-size: 13px;

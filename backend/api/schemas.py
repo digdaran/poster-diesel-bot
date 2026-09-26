@@ -229,9 +229,15 @@ class PaymentsCohortBriefOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class PaymentsDayBriefOut(PaymentsCohortBriefOut):
+    date: dt.date
+
+
 class PaymentsBriefOut(BaseModel):
     today: PaymentsCohortBriefOut
     yesterday: PaymentsCohortBriefOut
+    # По московским суткам с открытия тиража до сегодня, от новых к старым.
+    days: list[PaymentsDayBriefOut]
 
     model_config = {"from_attributes": True}
 

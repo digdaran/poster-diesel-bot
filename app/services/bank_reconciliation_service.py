@@ -31,10 +31,11 @@ from __future__ import annotations
 import datetime as dt
 import re
 from dataclasses import dataclass
+from typing import Any
 
 import structlog
 from sqlalchemy import and_, delete, func, or_, select, update
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import joinedload
 
 from app.core.config import Settings
 from app.core.db import Database
@@ -47,6 +48,7 @@ from app.models.enums import (
     PaymentProviderType,
     PaymentStatus,
 )
+from app.models.giveaway import Giveaway
 from app.models.manual_registration import ManualRegistration
 from app.models.payment import Payment
 from app.payments.bank_statement import BankStatementEntry
@@ -481,9 +483,26 @@ def get_reconciliation_status(
     )
 
 
+# Сутки для сводки по дням — московские (UTC+3, без перехода на летнее время с
+# 2014 г.), а не UTC: иначе "сегодня" в панели начиналось бы в 03:00 МСК.
+# Фиксированное смещение вместо ZoneInfo("Europe/Moscow") — не зависит от
+# наличия tzdata в slim-образе/на Windows. `created_at` в БД — наивный UTC.
+MOSCOW_UTC_OFFSET = dt.timedelta(hours=3)
+
+
+def moscow_date(moment_utc: dt.datetime) -> dt.date:
+    """Календарная дата по Москве для наивного UTC-момента."""
+    return (moment_utc + MOSCOW_UTC_OFFSET).date()
+
+
+def _moscow_day_start_utc(day: dt.date) -> dt.datetime:
+    """Наивный UTC-момент начала московских суток `day`."""
+    return dt.datetime.combine(day, dt.time.min) - MOSCOW_UTC_OFFSET
+
+
 @dataclass(frozen=True)
 class PaymentsCohortBrief:
-    """Разбивка счетов `requisites_qr`, СОЗДАННЫХ за один календарный день (UTC),
+    """Разбивка счетов `requisites_qr`, СОЗДАННЫХ за одни московские сутки,
     по текущему статусу — не по дню, в который статус изменился. Платёж, созданный
     сегодня и подтверждённый сегодня же, попадает в "сегодня"; если он провисит в
     PENDING неделю, он навсегда останется в когорте дня СОЗДАНИЯ, не "переедет"."""
@@ -503,49 +522,79 @@ class PaymentsCohortBrief:
 
 
 @dataclass(frozen=True)
+class PaymentsDayBrief(PaymentsCohortBrief):
+    date: dt.date
+    """Московская дата создания счетов когорты."""
+
+
+@dataclass(frozen=True)
 class PaymentsBrief:
     today: PaymentsCohortBrief
     yesterday: PaymentsCohortBrief
+    days: list[PaymentsDayBrief]
+    """По дню на каждые московские сутки от открытия тиража (самый ранний
+    `opened_at` среди неархивных розыгрышей) до сегодня включительно, от новых к
+    старым, дни без счетов — нулевыми строками. Пусто, если открытых нет."""
 
 
-def _cohort_brief(
-    session: Session, *, day_start: dt.datetime, day_end: dt.datetime
-) -> PaymentsCohortBrief:
-    rows = session.execute(
-        select(Payment.status, Payment.amount_mismatch, Payment.amount).where(
-            Payment.provider == PaymentProviderType.REQUISITES_QR,
-            Payment.created_at >= day_start,
-            Payment.created_at < day_end,
-        )
-    ).all()
-
+def _cohort_counts(rows: list[Any]) -> dict[str, int]:
     succeeded = [r for r in rows if r.status == PaymentStatus.SUCCEEDED]
     disputed = [r for r in rows if r.status == PaymentStatus.PENDING and r.amount_mismatch]
     pending = [r for r in rows if r.status == PaymentStatus.PENDING and not r.amount_mismatch]
 
-    return PaymentsCohortBrief(
-        total_count=len(rows),
-        total_amount=sum(r.amount for r in rows),
-        succeeded_count=len(succeeded),
-        succeeded_amount=sum(r.amount for r in succeeded),
-        pending_count=len(pending),
-        pending_amount=sum(r.amount for r in pending),
-        disputed_count=len(disputed),
-        disputed_amount=sum(r.amount for r in disputed),
-    )
+    return {
+        "total_count": len(rows),
+        "total_amount": sum(r.amount for r in rows),
+        "succeeded_count": len(succeeded),
+        "succeeded_amount": sum(r.amount for r in succeeded),
+        "pending_count": len(pending),
+        "pending_amount": sum(r.amount for r in pending),
+        "disputed_count": len(disputed),
+        "disputed_amount": sum(r.amount for r in disputed),
+    }
 
 
 def get_payments_brief(db: Database, *, now: dt.datetime | None = None) -> PaymentsBrief:
-    """Краткая сводка по счетам `requisites_qr` за сегодня/вчера (UTC-сутки) для
-    верхней строки статуса на «Продажи» — см. DECISIONS_LOG.md."""
+    """Сводка по счетам `requisites_qr` по московским суткам для блока статуса на
+    «Продажи»: сегодня/вчера + по дням с открытия тиража — см. DECISIONS_LOG.md №85."""
     now = now or utcnow()
-    today_start = dt.datetime.combine(now.date(), dt.time.min)
-    yesterday_start = today_start - dt.timedelta(days=1)
+    today = moscow_date(now)
+    yesterday = today - dt.timedelta(days=1)
 
     with db.session() as session:
-        today = _cohort_brief(
-            session, day_start=today_start, day_end=today_start + dt.timedelta(days=1)
-        )
-        yesterday = _cohort_brief(session, day_start=yesterday_start, day_end=today_start)
+        opened_at = session.execute(
+            select(func.min(Giveaway.opened_at)).where(
+                Giveaway.opened_at.is_not(None), Giveaway.is_archived.is_(False)
+            )
+        ).scalar_one_or_none()
+        # Если тираж открыт "в будущем" относительно now (часы/тестовый now) —
+        # всё равно показываем хотя бы сегодняшний день, а не пустую таблицу.
+        period_start = min(moscow_date(opened_at), today) if opened_at is not None else None
 
-    return PaymentsBrief(today=today, yesterday=yesterday)
+        range_start = min(period_start, yesterday) if period_start is not None else yesterday
+        rows = session.execute(
+            select(
+                Payment.status, Payment.amount_mismatch, Payment.amount, Payment.created_at
+            ).where(
+                Payment.provider == PaymentProviderType.REQUISITES_QR,
+                Payment.created_at >= _moscow_day_start_utc(range_start),
+                Payment.created_at < _moscow_day_start_utc(today + dt.timedelta(days=1)),
+            )
+        ).all()
+
+    by_day: dict[dt.date, list[Any]] = {}
+    for row in rows:
+        by_day.setdefault(moscow_date(row.created_at), []).append(row)
+
+    days: list[PaymentsDayBrief] = []
+    if period_start is not None:
+        day = today
+        while day >= period_start:
+            days.append(PaymentsDayBrief(date=day, **_cohort_counts(by_day.get(day, []))))
+            day -= dt.timedelta(days=1)
+
+    return PaymentsBrief(
+        today=PaymentsCohortBrief(**_cohort_counts(by_day.get(today, []))),
+        yesterday=PaymentsCohortBrief(**_cohort_counts(by_day.get(yesterday, []))),
+        days=days,
+    )

@@ -7,6 +7,7 @@ import type {
   BankReconciliationRun,
   BankReconciliationStatus,
   PaymentsCohortBrief,
+  PaymentsDayBrief,
 } from "../api/types";
 
 // Собственный интервал обновления (не паттерн "только по монтированию/фильтрам",
@@ -38,6 +39,92 @@ function CohortBrief({ label, brief }: { label: string; brief: PaymentsCohortBri
           </>
         )}
       </span>
+    </div>
+  );
+}
+
+const WEEKDAY_SHORT = ["вс", "пн", "вт", "ср", "чт", "пт", "сб"];
+
+// "YYYY-MM-DD" (московская дата с бэкенда) -> "27.09.2026, вс". Разбираем строку
+// вручную, а не через new Date(iso): та трактует её как полночь UTC и в западных
+// часовых поясах браузера показала бы предыдущий день.
+function formatBriefDate(isoDate: string): string {
+  const [year, month, day] = isoDate.split("-").map(Number);
+  const weekday = WEEKDAY_SHORT[new Date(Date.UTC(year, month - 1, day)).getUTCDay()];
+  return `${String(day).padStart(2, "0")}.${String(month).padStart(2, "0")}.${year}, ${weekday}`;
+}
+
+function sumBriefs(days: PaymentsDayBrief[]): PaymentsCohortBrief {
+  const total: PaymentsCohortBrief = {
+    total_count: 0,
+    total_amount: 0,
+    succeeded_count: 0,
+    succeeded_amount: 0,
+    pending_count: 0,
+    pending_amount: 0,
+    disputed_count: 0,
+    disputed_amount: 0,
+  };
+  for (const day of days) {
+    for (const key of Object.keys(total) as (keyof PaymentsCohortBrief)[]) {
+      total[key] += day[key];
+    }
+  }
+  return total;
+}
+
+function BriefCells({ brief }: { brief: PaymentsCohortBrief }) {
+  return (
+    <>
+      <td>{`${brief.total_count} · ${formatMoney(brief.total_amount)}`}</td>
+      <td>{`${brief.succeeded_count} · ${formatMoney(brief.succeeded_amount)}`}</td>
+      <td>{`${brief.pending_count} · ${formatMoney(brief.pending_amount)}`}</td>
+      <td>
+        {brief.disputed_count > 0 ? (
+          <Badge tone="danger">
+            {`${brief.disputed_count} · ${formatMoney(brief.disputed_amount)}`}
+          </Badge>
+        ) : (
+          "—"
+        )}
+      </td>
+    </>
+  );
+}
+
+function PaymentsByDayTable({ days }: { days: PaymentsDayBrief[] }) {
+  if (days.length === 0) {
+    return <p className="reconciliation-days-empty">Нет открытых тиражей.</p>;
+  }
+  return (
+    <div className="table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th>Дата (МСК)</th>
+            <th>Счетов</th>
+            <th>Успешно</th>
+            <th>Ожидают</th>
+            <th>Спорные</th>
+          </tr>
+        </thead>
+        <tbody>
+          {days.map((day, index) => (
+            <tr key={day.date}>
+              <td>
+                {index === 0 ? `${formatBriefDate(day.date)} (сегодня)` : formatBriefDate(day.date)}
+              </td>
+              <BriefCells brief={day} />
+            </tr>
+          ))}
+        </tbody>
+        <tfoot>
+          <tr className="reconciliation-days-total">
+            <td>Итого с {formatBriefDate(days[days.length - 1].date)}</td>
+            <BriefCells brief={sumBriefs(days)} />
+          </tr>
+        </tfoot>
+      </table>
     </div>
   );
 }
@@ -157,6 +244,7 @@ export function BankReconciliationStatusPanel() {
   const [status, setStatus] = useState<BankReconciliationStatus | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [daysOpen, setDaysOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -219,10 +307,19 @@ export function BankReconciliationStatusPanel() {
           <CohortBrief label="Сегодня:" brief={status.payments_brief.today} />
           <CohortBrief label="Вчера:" brief={status.payments_brief.yesterday} />
         </div>
+        <button className="button-secondary" onClick={() => setDaysOpen((open) => !open)}>
+          {daysOpen ? "Скрыть по дням" : "По дням с открытия тиража"}
+        </button>
         <button className="button-secondary" onClick={() => setDetailsOpen(true)}>
           Подробности сверки выписок
         </button>
       </div>
+
+      {daysOpen && (
+        <div className="reconciliation-days">
+          <PaymentsByDayTable days={status.payments_brief.days} />
+        </div>
+      )}
 
       {detailsOpen && (
         <ReconciliationDetailsModal status={status} onClose={() => setDetailsOpen(false)} />
