@@ -8,6 +8,7 @@ import datetime as dt
 
 from app.core.config import get_settings
 from app.core.db import Database
+from app.models.base import utcnow
 from app.models.channel_binding import ChannelBinding
 from app.models.enums import ChannelType, PaymentProviderType, PaymentStatus
 from app.models.payment import Payment
@@ -258,7 +259,7 @@ def test_payments_filter_by_provider_and_order_id(api_client: TestClient) -> Non
     assert body["total"] == 1
     assert body["items"][0]["provider"] == "mock"
 
-    future = (dt.date.today() + dt.timedelta(days=1)).isoformat()
+    future = (utcnow().date() + dt.timedelta(days=1)).isoformat()
     resp = api_client.get("/api/payments", params={"created_from": future}, headers=headers)
     assert resp.json()["total"] == 0
 
@@ -416,7 +417,10 @@ def test_audit_log_filters_and_pagination(api_client: TestClient) -> None:
         resp = api_client.get("/api/audit", params={"ip_address": ip_value}, headers=headers)
         assert resp.json()["total"] >= 1
 
-    today = dt.date.today()
+    # Дата самой записи (наивный UTC, как и фильтр /api/audit), а не
+    # dt.date.today(): локальная дата машины с 00:00 до 03:00 МСК на день
+    # впереди UTC, и тест падал по ночам.
+    today = dt.datetime.fromisoformat(create_row["created_at"]).date()
     resp = api_client.get(
         "/api/audit",
         params={"created_from": today.isoformat(), "created_to": today.isoformat()},
