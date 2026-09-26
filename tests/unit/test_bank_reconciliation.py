@@ -206,7 +206,6 @@ def _entry(purpose: str, external_id: str = "op-1") -> BankStatementEntry:
         # Другие разделители / без разделителя / без ведущих нулей
         "Оплата по счету NivaG 00004",
         "Оплата по счету NivaG–00004",
-        "Оплата по счету NivaG00004",
         "Оплата по счету NivaG-4",
         "Оплата по счету №NivaG-00004от20.09.2026",
     ],
@@ -222,6 +221,10 @@ def test_find_matching_entries_tolerates_real_world_purpose_variants(purpose: st
         ("Оплата по счету № NivaG-00014", "NivaG-00004"),
         ("Оплата по счету № ANivaG-00004", "NivaG-00004"),
         ("Оплата по счету № R200001", "R2-00001"),
+        ("Оплата по счету № R2-00001", "R-200001"),
+        # Префиксы `t` и `T1` одновременно существуют на проде
+        ("Оплата по счету № T1-00001 от 25.09.2026", "t-00001"),
+        ("Оплата по счету № T2-00001", "t-00002"),
     ],
 )
 def test_find_matching_entries_does_not_match_neighbouring_invoices(
