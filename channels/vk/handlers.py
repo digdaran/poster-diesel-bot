@@ -21,6 +21,7 @@ from app.models.giveaway import Giveaway
 from app.services import (
     channel_delivery_queue,
     participant_service,
+    promo_texts,
     settings_service,
     ticket_pool_service,
 )
@@ -357,6 +358,24 @@ def _open_giveaways(session: Session) -> list[Giveaway]:
     return [g for g in giveaways if g.free_tickets_count > 0]
 
 
+_VK_BUTTON_LABEL_LIMIT = 40
+
+
+def _vk_label_len(text: str) -> int:
+    return len(text.encode("utf-16-le")) // 2
+
+
+def _fit_vk_label(name: str, suffix: str) -> str:
+    """VK жёстко ограничивает подпись инлайн-кнопки 40 символами (`VKAPIError_911`,
+    DECISIONS_LOG.md №58; эмодзи считаются за два) — обрезаем название, сохраняя хвост
+    (пометку акции и остаток)."""
+    if _vk_label_len(name + suffix) <= _VK_BUTTON_LABEL_LIMIT:
+        return name + suffix
+    while name and _vk_label_len(name.rstrip() + "…" + suffix) > _VK_BUTTON_LABEL_LIMIT:
+        name = name[:-1]
+    return name.rstrip() + "…" + suffix
+
+
 async def _prompt_giveaway_choice(
     peer_id: int, giveaways: list[Giveaway], *, answer_target: Message | None = None
 ) -> None:
@@ -366,7 +385,9 @@ async def _prompt_giveaway_choice(
             keyboard.row()
         keyboard.add(
             Callback(
-                f"{g.name} ({g.free_tickets_count} своб.)",
+                _fit_vk_label(
+                    g.name, f"{promo_texts.giveaway_badge(g)} ({g.free_tickets_count} своб.)"
+                ),
                 payload={"a": "giveaway", "id": g.id},
             )
         )
@@ -413,13 +434,19 @@ async def _prompt_quantity(
     for index, q in enumerate(options):
         if index:
             pass  # варианты количества — в одной строке
-        keyboard.add(Callback(str(q), payload={"a": "qty", "id": giveaway.id, "q": q}))
+        keyboard.add(
+            Callback(
+                promo_texts.quantity_label(giveaway, q),
+                payload={"a": "qty", "id": giveaway.id, "q": q},
+            )
+        )
     keyboard.row()
     keyboard.add(Callback("◀️ Назад", payload={"a": "nav", "to": back_to}))
 
     text = (
         f"«{giveaway.name}»: цена экземпляра {giveaway.ticket_price / 100:.2f} ₽. "
-        f"Сколько экземпляров хотите приобрести? (доступно {giveaway.free_tickets_count})\n"
+        f"Сколько экземпляров хотите приобрести? (доступно {giveaway.free_tickets_count})"
+        f"{promo_texts.promo_line(giveaway)}\n"
         "Выберите вариант или введите число."
     )
     if answer_target is not None:
@@ -544,7 +571,8 @@ async def _prompt_confirm_order(
     keyboard.add(Callback("◀️ Назад", payload={"a": "confirm_order", "v": "back"}))
     text = (
         f"«{giveaway.name}»: {quantity} экз. × {giveaway.ticket_price / 100:.2f} ₽ "
-        f"= {total:.2f} ₽. Подтвердить покупку?"
+        f"= {total:.2f} ₽.{promo_texts.order_gift_line(giveaway, quantity)}\n"
+        "Подтвердить покупку?"
     )
     if answer_target is not None:
         await answer_target.answer(text, keyboard=keyboard.get_json())
@@ -658,7 +686,8 @@ async def _create_and_offer_payment(
         )
     await channel.send_message(
         _uid(peer_id),
-        f"Счёт создан на {quantity} экз. на сумму {outcome.amount / 100:.2f} ₽."
+        f"Счёт создан на {quantity} экз.{promo_texts.invoice_gift_suffix(outcome.gift_quantity)} "
+        f"на сумму {outcome.amount / 100:.2f} ₽."
         f"{invoice_line} {instruction}",
         keyboard=keyboard,
     )
@@ -674,12 +703,18 @@ async def _deliver_tickets(peer_id: int, outcome: payment_svc.FinalizeOutcome) -
             if giveaway is not None and giveaway.posters
             else None
         )
-    codes = [t.full_code for t in (outcome.tickets or [])]
+    gift_codes = [t.full_code for t in (outcome.gift_tickets or [])]
     await channel.deliver_purchase(
         _uid(peer_id),
         poster_path=poster_path,
-        codes=codes,
-        intro="✅ Оплата прошла успешно! Ваши постеры куплены, номера:",
+        codes=promo_texts.delivery_codes(
+            [t.full_code for t in (outcome.tickets or [])], gift_codes
+        ),
+        intro=promo_texts.delivery_intro(
+            "✅ Оплата прошла успешно! Ваши постеры куплены, номера:",
+            gifts_issued=len(gift_codes),
+            gifts_not_issued=outcome.gifts_not_issued,
+        ),
     )
 
 

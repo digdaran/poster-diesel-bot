@@ -20,7 +20,7 @@ from app.models.ticket import Ticket
 from app.payments import qr_requisites as qr
 from app.payments.requisites_qr import RequisitesQrProvider
 from app.repositories import ticket_pool_repo as repo
-from app.services import participant_service
+from app.services import participant_service, promo_service
 
 
 class GiveawayNotSellableError(Exception):
@@ -103,6 +103,7 @@ def create_manual_registration(
             participant_id=participant_id,
             giveaway_id=giveaway_id,
             quantity=quantity,
+            gift_quantity=giveaway.gift_quantity_for(quantity),
             status=ManualRegistrationStatus.PENDING,
             operator_id=operator_id,
             comment=comment,
@@ -333,6 +334,9 @@ def switch_manual_registration_to_cash(
 class ConfirmOutcome:
     manual_registration_id: int
     tickets: list[Ticket]
+    """Только платные номера; подарочные — в `gift_tickets` (DECISIONS_LOG.md №87)."""
+    gift_tickets: list[Ticket] = field(default_factory=list)
+    gifts_not_issued: int = 0
 
 
 def confirm_manual_registration(
@@ -386,8 +390,14 @@ def confirm_manual_registration(
             session.add(ticket)
             tickets.append(ticket)
         session.flush()
+        gifts = promo_service.issue_gifts(session, giveaway=giveaway, owner=registration, now=now)
 
-        return ConfirmOutcome(manual_registration_id=manual_registration_id, tickets=tickets)
+        return ConfirmOutcome(
+            manual_registration_id=manual_registration_id,
+            tickets=tickets,
+            gift_tickets=gifts.tickets,
+            gifts_not_issued=gifts.not_issued,
+        )
 
 
 def cancel_manual_registration(

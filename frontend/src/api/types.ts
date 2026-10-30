@@ -32,6 +32,9 @@ export interface Giveaway {
   opened_at: string | null;
   digital_poster_caption: string | null;
   created_at: string;
+  // Акция «за каждые N — M в подарок»; оба null — акции нет.
+  promo_buy_n: number | null;
+  promo_gift_m: number | null;
 }
 
 export interface GiveawayPoster {
@@ -52,6 +55,8 @@ export interface ManualRegistration {
   giveaway_name: string;
   quantity: number;
   revenue: number;
+  gift_quantity: number;
+  gifts_not_issued: number;
   status: "PENDING" | "CONFIRMED" | "CANCELLED" | "REFUNDED";
   operator_id: number;
   operator_login: string;
@@ -83,6 +88,8 @@ export interface Payment {
   confirmed_at: string | null;
   invoice_no: string | null;
   oversold: boolean;
+  gift_quantity: number;
+  gifts_not_issued: number;
   amount_mismatch: boolean;
   amount_mismatch_bank_amount: number | null;
   receipt_count: number;
@@ -157,6 +164,7 @@ export interface Ticket {
   source: "online" | "manual";
   channel: string | null;
   created_at: string;
+  is_gift: boolean;
 }
 
 export interface PanelUser {
@@ -230,6 +238,7 @@ export interface DashboardGiveawayCard {
   // Для "% оплаченных счетов" — raw-числа, процент считает фронт.
   online_payments_total: number;
   online_payments_succeeded: number;
+  gift_tickets_issued: number;
 }
 
 export interface DashboardSalesPoint {
@@ -316,6 +325,7 @@ export interface RevenueByGiveawayRow {
   revenue_offline_cashless: number;
   revenue_total: number;
   tickets_issued: number;
+  gift_tickets_issued: number;
 }
 
 export interface ChannelSalesRow {

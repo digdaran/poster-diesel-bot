@@ -119,6 +119,34 @@ def reserve_tickets(
     return ReservationResult(reserved=reserved_rows, free_count_at_attempt=len(reserved_rows))
 
 
+def reserve_up_to(
+    session: Session,
+    *,
+    giveaway_id: int,
+    quantity: int,
+    participant_id: int,
+    reserved_until: dt.datetime,
+    payment_id: int | None = None,
+    manual_registration_id: int | None = None,
+) -> ReservationResult:
+    """Резервирует столько из `quantity` номеров, сколько сейчас свободно (0..quantity) —
+    в отличие от `reserve_tickets` НЕ "всё-или-ничего". Нужна только для подарков по акции
+    «N + M в подарок»: недостающие подарки выдаются вручную, частичная выдача допустима
+    (DECISIONS_LOG.md №87). Как и `reserve_tickets`, вызывается внутри `BEGIN IMMEDIATE`."""
+    available = min(quantity, count_free(session, giveaway_id))
+    if available <= 0:
+        return ReservationResult(reserved=[], free_count_at_attempt=0)
+    return reserve_tickets(
+        session,
+        giveaway_id=giveaway_id,
+        quantity=available,
+        participant_id=participant_id,
+        reserved_until=reserved_until,
+        payment_id=payment_id,
+        manual_registration_id=manual_registration_id,
+    )
+
+
 def release_reservation(
     session: Session,
     *,

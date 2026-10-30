@@ -86,6 +86,8 @@ def create_giveaway(
         ticket_price=payload.ticket_price,
         max_tickets=payload.max_tickets,
         digital_poster_caption=payload.digital_poster_caption,
+        promo_buy_n=payload.promo_buy_n,
+        promo_gift_m=payload.promo_gift_m,
     )
     session.add(giveaway)
     session.flush()
@@ -98,6 +100,7 @@ def create_giveaway(
         entity_type="giveaway",
         entity_id=giveaway.id,
         ip_address=request.client.host if request.client else None,
+        details={"promo_buy_n": payload.promo_buy_n, "promo_gift_m": payload.promo_gift_m},
     )
     return giveaway
 

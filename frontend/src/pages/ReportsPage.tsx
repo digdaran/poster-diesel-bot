@@ -360,10 +360,11 @@ export function ReportsPage() {
                   <th>Офлайн, безнал (QR оператора)</th>
                   <th>Итого</th>
                   <th>Экземпляров выдано</th>
+                  <th>Из них подарочных 🎁</th>
                 </tr>
               </thead>
               <tbody>
-                {byGiveaway.length === 0 && <EmptyStateRow colSpan={6} />}
+                {byGiveaway.length === 0 && <EmptyStateRow colSpan={7} />}
                 {byGiveaway.map((row) => (
                   <tr key={row.giveaway_id}>
                     <td>{row.giveaway_name}</td>
@@ -372,6 +373,7 @@ export function ReportsPage() {
                     <td>{formatMoney(row.revenue_offline_cashless)}</td>
                     <td>{formatMoney(row.revenue_total)}</td>
                     <td>{row.tickets_issued}</td>
+                    <td>{row.gift_tickets_issued}</td>
                   </tr>
                 ))}
               </tbody>

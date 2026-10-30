@@ -3,6 +3,7 @@ import { ManualRegistrationsApi, SalesApi, TicketsApi } from "../api/resources";
 import { useAuth } from "../auth/AuthContext";
 import { formatMoney, formatDateTime } from "../utils/format";
 import { Badge } from "./Badge";
+import { GiftsNotIssuedBadge, QuantityWithGift } from "./GiftBadges";
 import { ChannelBadges } from "./ChannelBadges";
 import { EmptyStateRow, LoadingState } from "./EmptyState";
 import type { ManualRegistration, Participant, Payment, Ticket } from "../api/types";
@@ -117,7 +118,9 @@ export function ParticipantOrdersModal({
                             <ChannelBadges channel={p.channel} />
                           </td>
                           <td>{formatMoney(p.amount)}</td>
-                          <td>{p.quantity}</td>
+                          <td>
+                            <QuantityWithGift quantity={p.quantity} gift={p.gift_quantity} />
+                          </td>
                           <td>
                             <Badge tone={PAYMENT_STATUS_TONE[p.status] ?? "muted"}>
                               {p.status}
@@ -128,6 +131,7 @@ export function ParticipantOrdersModal({
                                 <Badge tone="danger">нет номерков</Badge>
                               </>
                             )}
+                            <GiftsNotIssuedBadge count={p.gifts_not_issued} />
                           </td>
                           <td>{formatDateTime(p.created_at)}</td>
                           <td>{p.confirmed_at ? formatDateTime(p.confirmed_at) : "—"}</td>

@@ -16,9 +16,11 @@ import { useToast } from "../components/Toast";
 import { useConfirm } from "../components/ConfirmDialog";
 import { RefundDialog } from "../components/RefundDialog";
 import { Badge } from "../components/Badge";
+import { GiftsNotIssuedBadge, QuantityWithGift } from "../components/GiftBadges";
 import { ChannelBadges } from "../components/ChannelBadges";
 import { EmptyStateRow } from "../components/EmptyState";
 import { formatMoney, formatDateTime } from "../utils/format";
+import { formatPromo } from "../utils/giveaway";
 import { PAGE_SIZES } from "../api/types";
 import type { Giveaway, ManualRegistration, Ticket } from "../api/types";
 
@@ -268,7 +270,7 @@ export function ManualRegistrationsPage() {
   const showAssignedTickets = async (registration: ManualRegistration) => {
     const { items } = await TicketsApi.list({
       manual_registration_id: registration.id,
-      page_size: ticketsPageSize(registration.quantity),
+      page_size: ticketsPageSize(registration.quantity + registration.gift_quantity),
     });
     setTicketsModal({
       registration,
@@ -303,6 +305,7 @@ export function ManualRegistrationsPage() {
           {giveaways.map((g) => (
             <option key={g.id} value={g.id}>
               {g.name} ({g.max_tickets - g.tickets_issued - g.tickets_reserved} своб.)
+              {formatPromo(g) ? ` · 🎁 ${formatPromo(g)}` : ""}
             </option>
           ))}
         </select>
@@ -464,7 +467,10 @@ export function ManualRegistrationsPage() {
                 <td>
                   <ChannelBadges channels={r.participant_channels} />
                 </td>
-                <td>{r.quantity}</td>
+                <td>
+                  <QuantityWithGift quantity={r.quantity} gift={r.gift_quantity} />
+                  <GiftsNotIssuedBadge count={r.gifts_not_issued} />
+                </td>
                 <td>{formatMoney(r.revenue)}</td>
                 <td>
                   {PAYMENT_METHOD_LABEL[r.payment_method] ?? r.payment_method}
@@ -566,9 +572,19 @@ export function ManualRegistrationsPage() {
                 ticketsModal.registration.participant_phone}
               ) — присвоенные номерки:
             </p>
+            {ticketsModal.registration.gifts_not_issued > 0 && (
+              <p className="error">
+                Подарков по акции не хватило в этом тираже:{" "}
+                {ticketsModal.registration.gifts_not_issued} шт. — выдать вручную в следующем
+                тираже.
+              </p>
+            )}
             <ul className="ticket-codes-list">
               {ticketsModal.tickets.map((t) => (
-                <li key={t.id}>{t.full_code}</li>
+                <li key={t.id}>
+                  {t.full_code}
+                  {t.is_gift ? " 🎁 подарок" : ""}
+                </li>
               ))}
             </ul>
             <div className="modal-actions">

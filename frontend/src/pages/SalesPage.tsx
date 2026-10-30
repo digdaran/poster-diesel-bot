@@ -6,6 +6,7 @@ import { usePagination } from "../hooks/usePagination";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { PaginationControls } from "../components/PaginationControls";
 import { Badge } from "../components/Badge";
+import { GiftsNotIssuedBadge, QuantityWithGift } from "../components/GiftBadges";
 import { BankReconciliationStatusPanel } from "../components/BankReconciliationStatusPanel";
 import { ChannelBadges } from "../components/ChannelBadges";
 import { EmptyStateRow } from "../components/EmptyState";
@@ -41,6 +42,7 @@ export function SalesPage() {
   const [participantQuery, setParticipantQuery] = useState("");
   const [amountMismatchOnly, setAmountMismatchOnly] = useState(false);
   const [oversoldOnly, setOversoldOnly] = useState(false);
+  const [giftsNotIssuedOnly, setGiftsNotIssuedOnly] = useState(false);
   const [createdFrom, setCreatedFrom] = useState("");
   const [createdTo, setCreatedTo] = useState("");
   const [receiptPaymentId, setReceiptPaymentId] = useState<number | null>(null);
@@ -66,6 +68,7 @@ export function SalesPage() {
       participant_query: debouncedParticipantQuery || undefined,
       amount_mismatch: amountMismatchOnly || undefined,
       oversold: oversoldOnly || undefined,
+      gifts_not_issued: giftsNotIssuedOnly || undefined,
       created_from: createdFrom || undefined,
       created_to: createdTo || undefined,
     }).then((result) => {
@@ -84,6 +87,7 @@ export function SalesPage() {
     debouncedParticipantQuery,
     amountMismatchOnly,
     oversoldOnly,
+    giftsNotIssuedOnly,
     createdFrom,
     createdTo,
   ]);
@@ -100,6 +104,7 @@ export function SalesPage() {
       participant_query: debouncedParticipantQuery || undefined,
       amount_mismatch: amountMismatchOnly || undefined,
       oversold: oversoldOnly || undefined,
+      gifts_not_issued: giftsNotIssuedOnly || undefined,
       created_from: createdFrom || undefined,
       created_to: createdTo || undefined,
     });
@@ -252,6 +257,17 @@ export function SalesPage() {
           />{" "}
           Только oversold
         </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={giftsNotIssuedOnly}
+            onChange={(e) => {
+              setGiftsNotIssuedOnly(e.target.checked);
+              setPage(1);
+            }}
+          />{" "}
+          Только с невыданными подарками
+        </label>
       </div>
 
       {hasPermission("sales_export") && (
@@ -310,7 +326,9 @@ export function SalesPage() {
                     </>
                   )}
                 </td>
-                <td>{p.quantity}</td>
+                <td>
+                  <QuantityWithGift quantity={p.quantity} gift={p.gift_quantity} />
+                </td>
                 <td>
                   <Badge tone={STATUS_TONE[p.status] ?? "muted"}>{p.status}</Badge>
                   {p.oversold && (
@@ -319,6 +337,7 @@ export function SalesPage() {
                       <Badge tone="danger">нет номерков</Badge>
                     </>
                   )}
+                  <GiftsNotIssuedBadge count={p.gifts_not_issued} />
                   {p.status === "REFUNDED" && p.refunded_at && (
                     <div className="muted-text" title={p.refund_reason ?? undefined}>
                       {formatDateTime(p.refunded_at)}

@@ -11,6 +11,16 @@ import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { Badge } from "../components/Badge";
 import { EmptyStateRow } from "../components/EmptyState";
 import { formatMoney } from "../utils/format";
+import { formatPromo } from "../utils/giveaway";
+
+const EMPTY_FORM = {
+  name: "",
+  prefix: "",
+  ticket_price: "",
+  max_tickets: "",
+  promo_buy_n: "",
+  promo_gift_m: "",
+};
 
 export function GiveawaysPage() {
   const { hasPermission } = useAuth();
@@ -21,7 +31,7 @@ export function GiveawaysPage() {
   const confirm = useConfirm();
   const [giveaways, setGiveaways] = useState<Giveaway[]>([]);
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ name: "", prefix: "", ticket_price: "", max_tickets: "" });
+  const [form, setForm] = useState(EMPTY_FORM);
   const [error, setError] = useState<string | null>(null);
   const [pendingId, setPendingId] = useState<number | null>(null);
 
@@ -43,14 +53,23 @@ export function GiveawaysPage() {
   const { run: onCreate, pending: creating } = useAsyncAction(async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
+    // Акция задаётся только при создании и потом не меняется — оба поля или ни одного.
+    if (Boolean(form.promo_buy_n) !== Boolean(form.promo_gift_m)) {
+      setError(
+        "Акция: заполните оба поля («каждые N шт.» и «+M в подарок») или оставьте оба пустыми",
+      );
+      return;
+    }
     try {
       await GiveawaysApi.create({
         name: form.name,
         prefix: form.prefix,
         ticket_price: Math.round(Number(form.ticket_price) * 100),
         max_tickets: Number(form.max_tickets),
+        promo_buy_n: form.promo_buy_n ? Number(form.promo_buy_n) : undefined,
+        promo_gift_m: form.promo_gift_m ? Number(form.promo_gift_m) : undefined,
       });
-      setForm({ name: "", prefix: "", ticket_price: "", max_tickets: "" });
+      setForm(EMPTY_FORM);
       setShowForm(false);
       showToast("Коллекция создана");
       load();
@@ -109,7 +128,7 @@ export function GiveawaysPage() {
     void runRowAction(g.id, () => GiveawaysApi.archive(g.id), "Коллекция перемещена в архив");
   };
 
-  const columnCount = canEdit || canLock || canArchive ? 9 : 8;
+  const columnCount = canEdit || canLock || canArchive ? 10 : 9;
 
   return (
     <div>
@@ -151,6 +170,22 @@ export function GiveawaysPage() {
             onChange={(e) => setForm({ ...form, max_tickets: e.target.value })}
             required
           />
+          <input
+            placeholder="Акция: каждые N шт. (необяз.)"
+            title="Акция «N + M в подарок»: за каждые N экземпляров в одной покупке — M в подарок. Задаётся только при создании, изменить потом нельзя."
+            type="number"
+            min={1}
+            value={form.promo_buy_n}
+            onChange={(e) => setForm({ ...form, promo_buy_n: e.target.value })}
+          />
+          <input
+            placeholder="+ M в подарок"
+            title="Сколько экземпляров дарить за каждые N купленных"
+            type="number"
+            min={1}
+            value={form.promo_gift_m}
+            onChange={(e) => setForm({ ...form, promo_gift_m: e.target.value })}
+          />
           <button type="submit" disabled={creating}>
             {creating ? "Создаём…" : "Создать"}
           </button>
@@ -182,6 +217,7 @@ export function GiveawaysPage() {
               <th>Префикс</th>
               <th>Цена</th>
               <th>Лимит</th>
+              <th>Акция</th>
               <th>Выдано</th>
               <th>Резерв</th>
               <th>Регистрация</th>
@@ -199,6 +235,7 @@ export function GiveawaysPage() {
                 <td>{g.prefix}</td>
                 <td>{formatMoney(g.ticket_price)}</td>
                 <td>{g.max_tickets}</td>
+                <td>{formatPromo(g) ? <Badge tone="info">🎁 {formatPromo(g)}</Badge> : "—"}</td>
                 <td>{g.tickets_issued}</td>
                 <td>{g.tickets_reserved}</td>
                 <td>

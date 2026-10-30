@@ -48,6 +48,10 @@ class Giveaway(Base):
     archived_at: Mapped[dt.datetime | None] = mapped_column(nullable=True)
     opened_at: Mapped[dt.datetime | None] = mapped_column(nullable=True)
     digital_poster_caption: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    # Акция «за каждые N купленных за раз — M в подарок» (DECISIONS_LOG.md №87). Задаётся только
+    # при создании коллекции, оба поля либо заданы, либо пусты (акции нет).
+    promo_buy_n: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    promo_gift_m: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[dt.datetime] = created_at_column()
 
     ticket_pool_rows: Mapped[list[TicketPool]] = relationship(back_populates="giveaway")
@@ -88,6 +92,18 @@ class Giveaway(Base):
             Giveaway.is_archived.is_(True),
             and_(Giveaway.opened_at.is_not(None), Giveaway.is_registration_open.is_(False)),
         )
+
+    @property
+    def has_promo(self) -> bool:
+        return bool(self.promo_buy_n) and bool(self.promo_gift_m)
+
+    def gift_quantity_for(self, quantity: int) -> int:
+        """Сколько подарочных экземпляров положено за покупку `quantity` платных за раз.
+        Остаток от деления подарков не даёт: N=5, M=1 → 12 шт. = 2, 15 шт. = 3."""
+        if not self.has_promo or quantity <= 0:
+            return 0
+        assert self.promo_buy_n is not None and self.promo_gift_m is not None
+        return (quantity // self.promo_buy_n) * self.promo_gift_m
 
     def format_code(self, number: int) -> str:
         return f"{self.prefix}-{number:0{TICKET_NUMBER_WIDTH}d}"

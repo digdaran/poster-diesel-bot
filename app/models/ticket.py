@@ -5,8 +5,9 @@ from __future__ import annotations
 import datetime as dt
 from typing import TYPE_CHECKING
 
+from sqlalchemy import Boolean, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy import ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import false as sa_false
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, created_at_column
@@ -34,6 +35,10 @@ class Ticket(Base):
     )
     source: Mapped[TicketSource] = mapped_column(
         SAEnum(TicketSource, native_enum=False), nullable=False
+    )
+    # Подарочный номер по акции «N + M в подарок» (DECISIONS_LOG.md №87).
+    is_gift: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=sa_false(), nullable=False
     )
     payment_id: Mapped[int | None] = mapped_column(ForeignKey("payments.id"), nullable=True)
     manual_registration_id: Mapped[int | None] = mapped_column(

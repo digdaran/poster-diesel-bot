@@ -26,6 +26,7 @@ from app.models.giveaway import Giveaway
 from app.models.manual_registration import ManualRegistration
 from app.models.participant import Participant
 from app.models.payment import Payment
+from app.models.ticket import Ticket
 
 # "Тираж почти распродан" — доля свободных номерков от общего лимита, начиная с
 # которой коллекция попадает в алерт (0 тоже подпадает — полностью распродано).
@@ -90,6 +91,8 @@ class GiveawayCard:
     # фронт сам решает, как округлять/подписывать).
     online_payments_total: int
     online_payments_succeeded: int
+    # Из `tickets_issued` — подарочные по акции «N + M в подарок» (DECISIONS_LOG.md №87).
+    gift_tickets_issued: int = 0
 
 
 def _daily_revenue_by_giveaway(session: Session, giveaway_ids: list[int]) -> dict[int, list[int]]:
@@ -278,6 +281,15 @@ def giveaway_cards(session: Session) -> list[GiveawayCard]:
     )
     offline_qty_by_giveaway = dict(session.execute(offline_stmt).tuples().all())
     sparkline_by_giveaway = _daily_revenue_by_giveaway(session, giveaway_ids)
+    gifts_by_giveaway = dict(
+        session.execute(
+            select(Ticket.giveaway_id, func.count(Ticket.id))
+            .where(Ticket.is_gift.is_(True), Ticket.giveaway_id.in_(giveaway_ids))
+            .group_by(Ticket.giveaway_id)
+        )
+        .tuples()
+        .all()
+    )
 
     revenue_total_by_giveaway = {
         g.id: online_by_giveaway.get(g.id, 0)
@@ -317,6 +329,7 @@ def giveaway_cards(session: Session) -> list[GiveawayCard]:
                 average_check_offline=checks.average_check_offline,
                 online_payments_total=checks.online_payments_total,
                 online_payments_succeeded=checks.online_payments_succeeded,
+                gift_tickets_issued=gifts_by_giveaway.get(g.id, 0),
             )
         )
     return cards

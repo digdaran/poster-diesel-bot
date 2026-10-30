@@ -39,7 +39,7 @@ from app.models.channel_binding import ChannelBinding
 from app.models.enums import ChannelType, PaymentStatus, PendingDeliveryKind
 from app.models.giveaway import Giveaway
 from app.models.ticket import Ticket
-from app.services import channel_delivery_queue, settings_service
+from app.services import channel_delivery_queue, promo_texts, settings_service
 from app.services.channel_delivery_queue import DeliverableChannel
 from app.services.payment_service import FinalizeOutcome
 
@@ -179,7 +179,13 @@ async def notify_payment_outcome(
             giveaway = session.get(Giveaway, outcome.giveaway_id)
             if giveaway is not None and giveaway.posters:
                 poster_path = random.choice([p.file_path for p in giveaway.posters])
-    codes = [t.full_code for t in (outcome.tickets or [])]
+    gift_codes = [t.full_code for t in (outcome.gift_tickets or [])]
+    codes = promo_texts.delivery_codes([t.full_code for t in (outcome.tickets or [])], gift_codes)
+    intro = promo_texts.delivery_intro(
+        "✅ Оплата прошла успешно! Ваши постеры куплены, номера:",
+        gifts_issued=len(gift_codes),
+        gifts_not_issued=outcome.gifts_not_issued,
+    )
 
     for channel_type, external_user_id in targets:
         channel = _channel_for(
@@ -202,7 +208,7 @@ async def notify_payment_outcome(
                 payload={
                     "poster_path": poster_path,
                     "codes": codes,
-                    "intro": "✅ Оплата прошла успешно! Ваши постеры куплены, номера:",
+                    "intro": intro,
                 },
                 participant_id=outcome.participant_id,
             )
@@ -343,6 +349,8 @@ async def notify_manual_registration_confirmed(
     tickets: list[Ticket],
     telegram_channel: DeliverableChannel | None,
     vk_channel: DeliverableChannel | None,
+    gift_tickets: list[Ticket] | None = None,
+    gifts_not_issued: int = 0,
 ) -> None:
     """Уведомляет участника о выдаче номерков по ручной (офлайн) регистрации,
     подтверждённой оператором в панели (п.7.7 ТЗ). Уходит во ВСЕ каналы с
@@ -362,7 +370,13 @@ async def notify_manual_registration_confirmed(
             if giveaway is not None and giveaway.posters
             else None
         )
-    codes = [t.full_code for t in tickets]
+    gift_codes = [t.full_code for t in (gift_tickets or [])]
+    codes = promo_texts.delivery_codes([t.full_code for t in tickets], gift_codes)
+    intro = promo_texts.delivery_intro(
+        "✅ Ваша регистрация подтверждена! Ваши постеры куплены, номера:",
+        gifts_issued=len(gift_codes),
+        gifts_not_issued=gifts_not_issued,
+    )
 
     for channel_type, external_user_id in targets:
         channel = _channel_for(
@@ -379,7 +393,7 @@ async def notify_manual_registration_confirmed(
             payload={
                 "poster_path": poster_path,
                 "codes": codes,
-                "intro": "✅ Ваша регистрация подтверждена! Ваши постеры куплены, номера:",
+                "intro": intro,
             },
             participant_id=participant_id,
         )

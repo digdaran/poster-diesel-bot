@@ -37,6 +37,7 @@ def _to_dict(t: Ticket) -> dict[str, Any]:
         source=t.source.value,
         channel=t.payment.channel.value if t.payment and t.payment.channel else None,
         created_at=t.created_at,
+        is_gift=t.is_gift,
     ).model_dump(mode="json")
 
 

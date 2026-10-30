@@ -36,6 +36,15 @@ class ManualRegistration(Base):
     )
     giveaway_id: Mapped[int] = mapped_column(ForeignKey("giveaways.id"), nullable=False, index=True)
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Акция «N + M в подарок» (DECISIONS_LOG.md №87): сколько подарков положено (фиксируется при
+    # создании) и сколько не влезло в тираж при подтверждении — их выдают вручную в следующем
+    # тираже (аналог `oversold`, но только для подарков).
+    gift_quantity: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    gifts_not_issued: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
     status: Mapped[ManualRegistrationStatus] = mapped_column(
         SAEnum(ManualRegistrationStatus, native_enum=False),
         default=ManualRegistrationStatus.PENDING,

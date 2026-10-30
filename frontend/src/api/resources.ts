@@ -82,6 +82,8 @@ export const GiveawaysApi = {
     ticket_price: number;
     max_tickets: number;
     digital_poster_caption?: string;
+    promo_buy_n?: number;
+    promo_gift_m?: number;
   }) => apiRequest<Giveaway>("/api/giveaways", { method: "POST", body: payload }),
   update: (id: number, payload: { name?: string; digital_poster_caption?: string }) =>
     apiRequest<Giveaway>(`/api/giveaways/${id}`, { method: "PATCH", body: payload }),
@@ -155,6 +157,7 @@ export interface SalesFilter extends PageParams {
   participant_query?: string;
   amount_mismatch?: boolean;
   oversold?: boolean;
+  gifts_not_issued?: boolean;
   created_from?: string;
   created_to?: string;
 }

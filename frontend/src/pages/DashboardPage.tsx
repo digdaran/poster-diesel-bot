@@ -144,8 +144,11 @@ function GiveawayRow({ giveaway }: { giveaway: DashboardGiveawayCard }) {
             <span className="giveaway-card-progress-label">{soldPercent}%</span>
           </div>
           <div className="giveaway-row-tile-label">
-            Выдано {giveaway.tickets_issued} из {giveaway.max_tickets} · осталось{" "}
-            {giveaway.free_tickets_count}
+            Выдано {giveaway.tickets_issued} из {giveaway.max_tickets}
+            {giveaway.gift_tickets_issued > 0
+              ? ` (🎁 ${giveaway.gift_tickets_issued} подарочных)`
+              : ""}{" "}
+            · осталось {giveaway.free_tickets_count}
           </div>
         </div>
 

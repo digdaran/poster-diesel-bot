@@ -12,7 +12,7 @@ from datetime import date
 from typing import Any
 
 from openpyxl import Workbook
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app.models.enums import (
@@ -200,17 +200,44 @@ def sales_by_channel(session: Session, *, giveaway_id: int | None = None) -> lis
 
 
 def tickets_by_giveaway_and_source(session: Session) -> list[dict[str, Any]]:
-    """Выданные номерки по розыгрышам и источнику (online/manual, п.16 ТЗ)."""
+    """Выданные номерки по розыгрышам и источнику (online/manual, п.16 ТЗ); `gift_count` —
+    сколько из них подарочных по акции «N + M в подарок» (DECISIONS_LOG.md №87)."""
     stmt = (
-        select(Giveaway.id, Giveaway.name, Ticket.source, func.count(Ticket.id))
+        select(
+            Giveaway.id,
+            Giveaway.name,
+            Ticket.source,
+            func.count(Ticket.id),
+            _gift_count_expr(),
+        )
         .join(Ticket, Ticket.giveaway_id == Giveaway.id)
         .group_by(Giveaway.id, Giveaway.name, Ticket.source)
     )
     rows = session.execute(stmt).all()
     return [
-        {"giveaway_id": gid, "giveaway_name": name, "source": source.value, "count": count}
-        for gid, name, source, count in rows
+        {
+            "giveaway_id": gid,
+            "giveaway_name": name,
+            "source": source.value,
+            "count": count,
+            "gift_count": gift_count,
+        }
+        for gid, name, source, count, gift_count in rows
     ]
+
+
+def _gift_count_expr() -> Any:
+    return func.coalesce(func.sum(case((Ticket.is_gift.is_(True), 1), else_=0)), 0)
+
+
+def gift_tickets_by_giveaway(session: Session) -> dict[int, int]:
+    """Сколько подарочных номеров выдано по каждой коллекции (DECISIONS_LOG.md №87)."""
+    stmt = (
+        select(Ticket.giveaway_id, func.count(Ticket.id))
+        .where(Ticket.is_gift.is_(True))
+        .group_by(Ticket.giveaway_id)
+    )
+    return dict(session.execute(stmt).tuples().all())
 
 
 def participants_report(session: Session) -> list[dict[str, Any]]:
@@ -299,6 +326,7 @@ def revenue_by_giveaway(session: Session) -> list[dict[str, Any]]:
     giveaways = session.execute(
         select(Giveaway.id, Giveaway.name, Giveaway.ticket_price, Giveaway.tickets_issued)
     ).all()
+    gifts_by_giveaway = gift_tickets_by_giveaway(session)
 
     result = []
     for gid, name, ticket_price, tickets_issued in giveaways:
@@ -316,6 +344,7 @@ def revenue_by_giveaway(session: Session) -> list[dict[str, Any]]:
                 "revenue_offline_cashless": revenue_offline_cashless,
                 "revenue_total": revenue_online + revenue_offline,
                 "tickets_issued": tickets_issued,
+                "gift_tickets_issued": gifts_by_giveaway.get(gid, 0),
             }
         )
     return result

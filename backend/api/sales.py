@@ -58,6 +58,8 @@ def _to_dict(p: Payment) -> dict[str, Any]:
         confirmed_at=p.confirmed_at,
         invoice_no=invoice_no,
         oversold=p.oversold,
+        gift_quantity=p.gift_quantity,
+        gifts_not_issued=p.gifts_not_issued,
         amount_mismatch=p.amount_mismatch,
         amount_mismatch_bank_amount=p.amount_mismatch_bank_amount,
         receipt_count=len(p.receipts),
@@ -79,6 +81,7 @@ def list_payments(
     participant_query: str | None = None,
     amount_mismatch: bool | None = None,
     oversold: bool | None = None,
+    gifts_not_issued: bool | None = None,
     created_from: dt.date | None = None,
     created_to: dt.date | None = None,
     page: int = 1,
@@ -105,6 +108,10 @@ def list_payments(
         stmt = stmt.where(Payment.amount_mismatch == amount_mismatch)
     if oversold is not None:
         stmt = stmt.where(Payment.oversold == oversold)
+    if gifts_not_issued is not None:
+        stmt = stmt.where(
+            Payment.gifts_not_issued > 0 if gifts_not_issued else Payment.gifts_not_issued == 0
+        )
     if created_from is not None:
         stmt = stmt.where(Payment.created_at >= created_from)
     if created_to is not None:

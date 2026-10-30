@@ -22,6 +22,7 @@ from app.models.giveaway import Giveaway
 from app.services import (
     channel_delivery_queue,
     participant_service,
+    promo_texts,
     settings_service,
     ticket_pool_service,
 )
@@ -367,7 +368,8 @@ async def _prompt_giveaway_choice(
     rows = [
         [
             InlineKeyboardButton(
-                text=f"{g.name} ({g.free_tickets_count} своб.)", callback_data=f"giveaway:{g.id}"
+                text=f"{g.name}{promo_texts.giveaway_badge(g)} ({g.free_tickets_count} своб.)",
+                callback_data=f"giveaway:{g.id}",
             )
         ]
         for g in giveaways
@@ -409,12 +411,19 @@ async def _prompt_quantity(message: Message, state: FSMContext, giveaway: Giveaw
 
     options = [q for q in QUANTITY_OPTIONS if q <= giveaway.free_tickets_count]
     rows = [
-        [InlineKeyboardButton(text=str(q), callback_data=f"qty:{giveaway.id}:{q}") for q in options]
+        [
+            InlineKeyboardButton(
+                text=promo_texts.quantity_label(giveaway, q),
+                callback_data=f"qty:{giveaway.id}:{q}",
+            )
+            for q in options
+        ]
     ]
     rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data=back_target)])
     await message.answer(
         f"«{giveaway.name}»: цена экземпляра {giveaway.ticket_price / 100:.2f} ₽. "
-        f"Сколько экземпляров хотите приобрести? (доступно {giveaway.free_tickets_count})\n"
+        f"Сколько экземпляров хотите приобрести? (доступно {giveaway.free_tickets_count})"
+        f"{promo_texts.promo_line(giveaway)}\n"
         "Выберите вариант или введите число.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
@@ -583,7 +592,8 @@ async def _prompt_confirm_order(
     await state.set_state(PurchaseStates.confirming_order)
     await reply_target.answer(
         f"«{giveaway.name}»: {quantity} экз. × {giveaway.ticket_price / 100:.2f} ₽ "
-        f"= {total:.2f} ₽. Подтвердить покупку?",
+        f"= {total:.2f} ₽.{promo_texts.order_gift_line(giveaway, quantity)}\n"
+        "Подтвердить покупку?",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
                 [InlineKeyboardButton(text="✅ Подтвердить", callback_data="confirm_order:yes")],
@@ -719,7 +729,8 @@ async def _create_and_offer_payment(
             "получить реквизиты для оплаты вручную."
         )
     await message.answer(
-        f"Счёт создан на {quantity} экз. на сумму {outcome.amount / 100:.2f} ₽.{invoice_line} "
+        f"Счёт создан на {quantity} экз.{promo_texts.invoice_gift_suffix(outcome.gift_quantity)} "
+        f"на сумму {outcome.amount / 100:.2f} ₽.{invoice_line} "
         f"{instruction}",
         reply_markup=keyboard,
     )
@@ -735,12 +746,18 @@ async def _deliver_tickets(message: Message, outcome: payment_svc.FinalizeOutcom
             if giveaway is not None and giveaway.posters
             else None
         )
-    codes = [t.full_code for t in (outcome.tickets or [])]
+    gift_codes = [t.full_code for t in (outcome.gift_tickets or [])]
     await channel.deliver_purchase(
         str(message.chat.id),
         poster_path=poster_path,
-        codes=codes,
-        intro="✅ Оплата прошла успешно! Ваши постеры куплены, номера:",
+        codes=promo_texts.delivery_codes(
+            [t.full_code for t in (outcome.tickets or [])], gift_codes
+        ),
+        intro=promo_texts.delivery_intro(
+            "✅ Оплата прошла успешно! Ваши постеры куплены, номера:",
+            gifts_issued=len(gift_codes),
+            gifts_not_issued=outcome.gifts_not_issued,
+        ),
     )
 
 

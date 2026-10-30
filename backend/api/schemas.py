@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class LoginRequest(BaseModel):
@@ -72,6 +72,9 @@ class GiveawayOut(BaseModel):
     opened_at: dt.datetime | None
     digital_poster_caption: str | None
     created_at: dt.datetime
+    promo_buy_n: int | None = None
+    promo_gift_m: int | None = None
+    """Акция «за каждые N — M в подарок» (DECISIONS_LOG.md №87); оба None — акции нет."""
 
     model_config = {"from_attributes": True}
 
@@ -82,6 +85,16 @@ class GiveawayCreateRequest(BaseModel):
     ticket_price: int = Field(gt=0)
     max_tickets: int = Field(gt=0, le=100_000)
     digital_poster_caption: str | None = None
+    promo_buy_n: int | None = Field(default=None, ge=1, le=100_000)
+    promo_gift_m: int | None = Field(default=None, ge=1, le=100_000)
+    """Условия акции задаются только при создании (как цена и тираж) — в
+    `GiveawayUpdateRequest` их нет, см. DECISIONS_LOG.md №87."""
+
+    @model_validator(mode="after")
+    def _promo_both_or_none(self) -> GiveawayCreateRequest:
+        if (self.promo_buy_n is None) != (self.promo_gift_m is None):
+            raise ValueError("Условия акции: задайте оба значения (N и M) или ни одного")
+        return self
 
 
 class GiveawayUpdateRequest(BaseModel):
@@ -112,6 +125,8 @@ class ManualRegistrationOut(BaseModel):
     giveaway_name: str
     quantity: int
     revenue: int
+    gift_quantity: int = 0
+    gifts_not_issued: int = 0
     status: str
     operator_id: int
     operator_login: str
@@ -164,6 +179,9 @@ class PaymentOut(BaseModel):
     confirmed_at: dt.datetime | None
     invoice_no: str | None
     oversold: bool
+    gift_quantity: int = 0
+    gifts_not_issued: int = 0
+    """Подарки по акции: положено / не влезло в тираж (выдать вручную), LOG №87."""
     amount_mismatch: bool
     amount_mismatch_bank_amount: int | None
     receipt_count: int
@@ -263,6 +281,7 @@ class TicketOut(BaseModel):
     source: str
     channel: str | None
     created_at: dt.datetime
+    is_gift: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -349,6 +368,7 @@ class DashboardGiveawayCardOut(BaseModel):
     average_check_offline: int
     online_payments_total: int
     online_payments_succeeded: int
+    gift_tickets_issued: int = 0
 
     model_config = {"from_attributes": True}
 

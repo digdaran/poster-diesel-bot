@@ -12,3 +12,11 @@ import type { Giveaway } from "../api/types";
 export function isClosedForever(giveaway: Giveaway): boolean {
   return giveaway.is_archived || (giveaway.opened_at !== null && !giveaway.is_registration_open);
 }
+
+/** Условия акции «N + M в подарок» в виде «5+1», или null, если акции нет. */
+export function formatPromo(
+  giveaway: Pick<Giveaway, "promo_buy_n" | "promo_gift_m">,
+): string | null {
+  if (!giveaway.promo_buy_n || !giveaway.promo_gift_m) return null;
+  return `${giveaway.promo_buy_n}+${giveaway.promo_gift_m}`;
+}

@@ -126,6 +126,12 @@ export function GiveawayDetailPage() {
 
       <section>
         <h2>Основное</h2>
+        <p>
+          Акция:{" "}
+          {giveaway.promo_buy_n && giveaway.promo_gift_m
+            ? `🎁 за каждые ${giveaway.promo_buy_n} шт. в одной покупке — ${giveaway.promo_gift_m} в подарок (задаётся только при создании, изменить нельзя)`
+            : "нет"}
+        </p>
         {canEdit ? (
           <form onSubmit={onSave} className="inline-form-column">
             <label>

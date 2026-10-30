@@ -95,6 +95,16 @@ class Payment(Base):
     # в поддержку вручную. Только для видимости в админ-панели (см. DECISIONS.md).
     oversold: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    # Акция «N + M в подарок» (DECISIONS_LOG.md №87): сколько подарков положено (фиксируется при
+    # создании) и сколько не влезло в тираж при подтверждении — их выдают вручную в следующем
+    # тираже (аналог `oversold`, но только для подарков).
+    gift_quantity: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    gifts_not_issued: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+
     # Банковская сверка (requisites_qr) нашла операцию(и) с совпавшим номером счёта в
     # назначении платежа, но суммарно не равные `amount` (см.
     # app/services/bank_reconciliation_service.py, суммирует ВСЕ операции с таким

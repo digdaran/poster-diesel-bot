@@ -162,6 +162,8 @@ def _to_out(session: Session, registration: ManualRegistration) -> ManualRegistr
         giveaway_name=registration.giveaway.name,
         quantity=registration.quantity,
         revenue=registration.quantity * registration.giveaway.ticket_price,
+        gift_quantity=registration.gift_quantity,
+        gifts_not_issued=registration.gifts_not_issued,
         status=registration.status.value,
         operator_id=registration.operator_id,
         operator_login=registration.operator.login,
@@ -376,6 +378,8 @@ async def confirm_manual_registration(
             tickets=confirm_outcome.tickets,
             telegram_channel=telegram_channel,
             vk_channel=vk_channel,
+            gift_tickets=confirm_outcome.gift_tickets,
+            gifts_not_issued=confirm_outcome.gifts_not_issued,
         )
     return out
 

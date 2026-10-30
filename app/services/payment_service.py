@@ -23,7 +23,7 @@ from app.models.payment import Payment
 from app.models.ticket import Ticket
 from app.payments.base import BasePaymentProvider, CreatedPayment, PaymentOrder
 from app.repositories import ticket_pool_repo as repo
-from app.services import audit_service, participant_service
+from app.services import audit_service, participant_service, promo_service
 
 logger = structlog.get_logger(__name__)
 
@@ -58,6 +58,9 @@ class CreatePaymentOutcome:
     invoice_no: str | None = None
     """Номер счёта на оплату (PREFIX-NNNNN) — заполняется только у провайдеров
     без резервирования "на лету" (см. BasePaymentProvider.reserves_tickets_on_create)."""
+    gift_quantity: int = 0
+    """Сколько подарочных экземпляров положено по акции «N + M в подарок» (выдаются при
+    подтверждении оплаты, если влезут в тираж), DECISIONS_LOG.md №87."""
 
 
 def create_payment(
@@ -97,6 +100,7 @@ def create_payment(
             raise _PendingLimitExceeded(pending_quantity=pending, limit=limit)
 
         amount = quantity * giveaway.ticket_price
+        gift_quantity = giveaway.gift_quantity_for(quantity)
         payment = Payment(
             order_id=order_id,
             participant_id=participant_id,
@@ -106,6 +110,7 @@ def create_payment(
             initiating_external_user_id=initiating_external_user_id,
             amount=amount,
             quantity=quantity,
+            gift_quantity=gift_quantity,
             status=PaymentStatus.PENDING,
         )
         session.add(payment)
@@ -173,6 +178,7 @@ def create_payment(
         free_count=0,
         amount=amount,
         invoice_no=invoice_no,
+        gift_quantity=gift_quantity,
     )
 
 
@@ -282,6 +288,11 @@ class FinalizeOutcome:
     лету" — Т-Банк/ВТБ/mock, см. `Payment.payment_number`)."""
     giveaway_name: str | None = None
     """`Giveaway.name` — тот же контекст, что и `invoice_no`."""
+    gift_tickets: list[Ticket] | None = None
+    """Подарочные номера по акции «N + M в подарок» (`tickets` — только платные),
+    DECISIONS_LOG.md №87."""
+    gifts_not_issued: int = 0
+    """Сколько положенных подарков не влезло в тираж — выдаются вручную в следующем тираже."""
 
 
 def _reserve_and_issue_now(
@@ -318,6 +329,8 @@ def _reserve_and_issue_now(
     )
     if not result.ok:
         session.execute(update(Payment).where(Payment.id == payment.id).values(oversold=True))
+        if payment.gift_quantity:
+            promo_service.mark_gifts_not_issued(session, owner=payment, count=payment.gift_quantity)
         audit_service.log(
             session,
             action=no_tickets_action,
@@ -342,6 +355,7 @@ def _reserve_and_issue_now(
             late_success_no_tickets=True,
             initiating_channel=payment.channel,
             initiating_external_user_id=payment.initiating_external_user_id,
+            gifts_not_issued=payment.gift_quantity,
         )
 
     session.execute(
@@ -367,6 +381,7 @@ def _reserve_and_issue_now(
     ]
     session.add_all(tickets)
     session.flush()
+    gifts = promo_service.issue_gifts(session, giveaway=giveaway, owner=payment, now=now)
     audit_service.log(
         session,
         action=success_action,
@@ -385,6 +400,8 @@ def _reserve_and_issue_now(
         tickets=tickets,
         initiating_channel=payment.channel,
         initiating_external_user_id=payment.initiating_external_user_id,
+        gift_tickets=gifts.tickets,
+        gifts_not_issued=gifts.not_issued,
     )
 
 
@@ -445,6 +462,7 @@ def finalize_payment(
         ).scalar_one()
 
         tickets: list[Ticket] = []
+        gifts = promo_service.GiftOutcome()
         if new_status == PaymentStatus.SUCCEEDED:
             issued_rows = repo.issue_reserved(session, payment_id=payment.id, issued_at=now)
             if not issued_rows:
@@ -472,6 +490,7 @@ def finalize_payment(
                 session.add(ticket)
                 tickets.append(ticket)
             session.flush()
+            gifts = promo_service.issue_gifts(session, giveaway=giveaway, owner=payment, now=now)
         else:
             repo.release_reservation(session, payment_id=payment.id)
 
@@ -492,6 +511,8 @@ def finalize_payment(
             amount=payment.amount,
             invoice_no=invoice_no,
             giveaway_name=giveaway.name,
+            gift_tickets=gifts.tickets,
+            gifts_not_issued=gifts.not_issued,
         )
 
 
