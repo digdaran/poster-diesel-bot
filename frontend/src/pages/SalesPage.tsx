@@ -350,6 +350,10 @@ export function SalesPage() {
                     <button onClick={() => setReceiptPaymentId(p.id)}>
                       Посмотреть{p.receipt_count > 1 ? ` (${p.receipt_count})` : ""}
                     </button>
+                  ) : p.receipt_deleted_count > 0 ? (
+                    <span className="muted-text" title="Файл удалён из архива коллекции">
+                      чек удалён
+                    </span>
                   ) : (
                     "—"
                   )}

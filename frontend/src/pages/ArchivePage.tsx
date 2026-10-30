@@ -11,10 +11,14 @@ import { formatDateTime, formatMoney } from "../utils/format";
 
 /** Заархивированные коллекции (см. GiveawaysPage.tsx) — данные (билеты, платежи,
  * история) не удаляются, коллекция просто скрыта из основного раздела «Коллекции».
- * Восстановление доступно тем же правом, что и архивация (Super Admin). */
+ * Восстановление доступно тем же правом, что и архивация (Super Admin). Отдельным правом
+ * `giveaway_purge` (тоже Super Admin) — удаление чеков с диска и полное удаление коллекции
+ * (DECISIONS_LOG.md №89). */
 export function ArchivePage() {
   const { hasPermission } = useAuth();
   const canArchive = hasPermission("giveaway_archive");
+  const canPurge = hasPermission("giveaway_purge");
+  const showActions = canArchive || canPurge;
   const { showToast } = useToast();
   const confirm = useConfirm();
   const [giveaways, setGiveaways] = useState<Giveaway[]>([]);
@@ -35,6 +39,47 @@ export function ArchivePage() {
     try {
       await GiveawaysApi.unarchive(g.id);
       showToast("Коллекция возвращена из архива");
+      load();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Не удалось выполнить действие", "error");
+    } finally {
+      setPendingId(null);
+    }
+  };
+
+  // Перед необратимым действием показываем, что именно будет удалено.
+  const runPurge = async (g: Giveaway, kind: "receipts" | "all"): Promise<void> => {
+    setPendingId(g.id);
+    try {
+      const s = await GiveawaysApi.purgeSummary(g.id);
+      const message =
+        kind === "receipts"
+          ? `Удалить с диска все чеки коллекции «${g.name}» (${s.receipts} шт.)? ` +
+            "Файлы будут удалены безвозвратно; в «Продажах» у счетов останется пометка «чек удалён». " +
+            "Покупки, номера и коллекция останутся."
+          : `Удалить коллекцию «${g.name}» (${g.prefix}) полностью и безвозвратно? ` +
+            `Будут удалены: онлайн-счета — ${s.payments}, ручные регистрации — ` +
+            `${s.manual_registrations}, номера — ${s.tickets}, чеки — ${s.receipts}, ` +
+            `постеры — ${s.posters}. Участники и журнал аудита останутся.`;
+      if (kind === "receipts" && s.receipts === 0) {
+        showToast("У этой коллекции нет чеков для удаления");
+        return;
+      }
+      if (!(await confirm(message))) return;
+      const result =
+        kind === "receipts"
+          ? await GiveawaysApi.deleteReceipts(g.id)
+          : await GiveawaysApi.purge(g.id);
+      const done =
+        kind === "receipts"
+          ? `Удалено чеков: ${result.summary.receipts}`
+          : `Коллекция «${g.name}» удалена`;
+      showToast(
+        result.file_errors > 0
+          ? `${done}. Не удалось удалить файлов: ${result.file_errors} (см. лог backend)`
+          : done,
+        result.file_errors > 0 ? "error" : undefined,
+      );
       load();
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Не удалось выполнить действие", "error");
@@ -67,11 +112,11 @@ export function ArchivePage() {
               <th>Цена</th>
               <th>Выдано</th>
               <th>Заархивирована</th>
-              {canArchive && <th>Действия</th>}
+              {showActions && <th>Действия</th>}
             </tr>
           </thead>
           <tbody>
-            {giveaways.length === 0 && <EmptyStateRow colSpan={canArchive ? 6 : 5} />}
+            {giveaways.length === 0 && <EmptyStateRow colSpan={showActions ? 6 : 5} />}
             {giveaways.map((g) => (
               <tr key={g.id}>
                 <td>
@@ -81,11 +126,31 @@ export function ArchivePage() {
                 <td>{formatMoney(g.ticket_price)}</td>
                 <td>{g.tickets_issued}</td>
                 <td>{g.archived_at ? formatDateTime(g.archived_at) : "—"}</td>
-                {canArchive && (
+                {showActions && (
                   <td className="actions">
-                    <button disabled={pendingId === g.id} onClick={() => void onUnarchive(g)}>
-                      Восстановить
-                    </button>
+                    {canArchive && (
+                      <button disabled={pendingId === g.id} onClick={() => void onUnarchive(g)}>
+                        Восстановить
+                      </button>
+                    )}
+                    {canPurge && (
+                      <>
+                        <button
+                          className="button-secondary"
+                          disabled={pendingId === g.id}
+                          onClick={() => void runPurge(g, "receipts")}
+                        >
+                          Удалить чеки
+                        </button>
+                        <button
+                          className="button-danger"
+                          disabled={pendingId === g.id}
+                          onClick={() => void runPurge(g, "all")}
+                        >
+                          Удалить коллекцию
+                        </button>
+                      </>
+                    )}
                   </td>
                 )}
               </tr>

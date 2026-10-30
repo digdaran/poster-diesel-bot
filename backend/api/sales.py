@@ -62,7 +62,8 @@ def _to_dict(p: Payment) -> dict[str, Any]:
         gifts_not_issued=p.gifts_not_issued,
         amount_mismatch=p.amount_mismatch,
         amount_mismatch_bank_amount=p.amount_mismatch_bank_amount,
-        receipt_count=len(p.receipts),
+        receipt_count=sum(1 for r in p.receipts if r.deleted_at is None),
+        receipt_deleted_count=sum(1 for r in p.receipts if r.deleted_at is not None),
         refunded_at=p.refunded_at,
         refund_reason=p.refund_reason,
         refunded_by_login=p.refunded_by.login if p.refunded_by else None,
@@ -247,7 +248,7 @@ def list_payment_receipts(
     receipts = list(
         session.execute(
             select(PaymentReceipt)
-            .where(PaymentReceipt.payment_id == payment_id)
+            .where(PaymentReceipt.payment_id == payment_id, PaymentReceipt.deleted_at.is_(None))
             .order_by(PaymentReceipt.id.desc())
         ).scalars()
     )
@@ -268,6 +269,8 @@ def download_payment_receipt(
     ).scalar_one_or_none()
     if receipt is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Квитанция не найдена")
+    if receipt.deleted_at is not None:
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Файл квитанции удалён")
     # content_type в БД может отсутствовать для квитанций, сохранённых до фикса
     # определения mime-типа (см. receipt_service.save_receipt) — угадываем по
     # расширению файла на диске, иначе браузер получает application/octet-stream

@@ -105,6 +105,25 @@ class GiveawayUpdateRequest(BaseModel):
     digital_poster_caption: str | None = None
 
 
+class GiveawayPurgeSummaryOut(BaseModel):
+    """Что будет удалено у архивной коллекции (DECISIONS_LOG.md №89)."""
+
+    giveaway_name: str
+    prefix: str
+    receipts: int
+    payments: int
+    manual_registrations: int
+    tickets: int
+    posters: int
+
+
+class GiveawayPurgeResultOut(BaseModel):
+    summary: GiveawayPurgeSummaryOut
+    file_errors: int
+    """Сколько файлов не удалось удалить с диска (остались лишние файлы, записи в БД уже
+    обработаны) — подробности в логе backend."""
+
+
 class GiveawayPosterOut(BaseModel):
     id: int
     giveaway_id: int
@@ -185,6 +204,9 @@ class PaymentOut(BaseModel):
     amount_mismatch: bool
     amount_mismatch_bank_amount: int | None
     receipt_count: int
+    """Чеки, файлы которых доступны (не удалены)."""
+    receipt_deleted_count: int = 0
+    """Чеки, файлы которых удалены Super Admin'ом из архива (DECISIONS_LOG.md №89)."""
     refunded_at: dt.datetime | None
     refund_reason: str | None
     refunded_by_login: str | None
@@ -214,6 +236,7 @@ class PaymentReceiptOut(BaseModel):
     original_filename: str | None
     content_type: str | None
     uploaded_at: dt.datetime
+    deleted_at: dt.datetime | None = None
 
     model_config = {"from_attributes": True}
 

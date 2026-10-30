@@ -59,6 +59,9 @@ class Permission(str, Enum):
     # «Архив», без удаления данных) — по прямому запросу заказчика ограничено
     # Super Admin, см. DECISIONS_LOG.md.
     GIVEAWAY_ARCHIVE = "giveaway_archive"
+    # Удаление чеков архивной коллекции с диска и полное удаление архивной коллекции со
+    # всеми её записями (участники и аудит остаются) — DECISIONS_LOG.md №89.
+    GIVEAWAY_PURGE = "giveaway_purge"
 
 
 _VIEW_ALL = {
@@ -94,6 +97,7 @@ _SUPER_ADMIN_EXTRA = {
     Permission.IGNORE_PHONE_VERIFICATION_TOGGLE,
     Permission.PURCHASE_REFUND,
     Permission.GIVEAWAY_ARCHIVE,
+    Permission.GIVEAWAY_PURGE,
 }
 
 ROLE_PERMISSIONS: dict[PanelRole, frozenset[Permission]] = {

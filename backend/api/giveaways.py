@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.core.config import Settings
+from app.core.db import Database
 from app.core.permissions import Permission
 from app.models.base import utcnow
 from app.models.enums import AuditActorType, ManualRegistrationStatus, PaymentStatus
@@ -12,17 +13,20 @@ from app.models.manual_registration import ManualRegistration
 from app.models.panel_user import PanelUser
 from app.models.payment import Payment
 from app.services import audit_service, poster_service
+from app.services import giveaway_purge_service as purge_svc
 from app.services import ticket_pool_service as pool_svc
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from backend.api.deps import get_session, get_settings_dep, require_permission
+from backend.api.deps import get_database, get_session, get_settings_dep, require_permission
 from backend.api.schemas import (
     GiveawayCreateRequest,
     GiveawayOut,
     GiveawayPosterOut,
+    GiveawayPurgeResultOut,
+    GiveawayPurgeSummaryOut,
     GiveawayUpdateRequest,
 )
 
@@ -431,3 +435,61 @@ def download_giveaway_poster(
         media_type=poster.content_type or "application/octet-stream",
         filename=poster.original_filename or f"poster_{poster.id}",
     )
+
+
+# --- Удаление чеков / полное удаление архивной коллекции (DECISIONS_LOG.md №89) ---
+
+
+def _purge_http_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, purge_svc.GiveawayNotFoundError):
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
+
+def _actor(user: PanelUser, request: Request) -> purge_svc.Actor:
+    return purge_svc.Actor(
+        panel_user_id=user.id,
+        login=user.login,
+        ip_address=request.client.host if request.client else None,
+    )
+
+
+@router.get("/{giveaway_id}/purge-summary", response_model=GiveawayPurgeSummaryOut)
+def get_purge_summary(
+    giveaway_id: int,
+    session: Session = Depends(get_session),
+    _user: PanelUser = Depends(require_permission(Permission.GIVEAWAY_PURGE)),
+) -> GiveawayPurgeSummaryOut:
+    try:
+        summary = purge_svc.get_summary(session, giveaway_id)
+    except (purge_svc.GiveawayNotFoundError, purge_svc.GiveawayNotArchivedError) as exc:
+        raise _purge_http_error(exc) from exc
+    return GiveawayPurgeSummaryOut.model_validate(summary, from_attributes=True)
+
+
+@router.post("/{giveaway_id}/delete-receipts", response_model=GiveawayPurgeResultOut)
+def delete_giveaway_receipts(
+    giveaway_id: int,
+    request: Request,
+    db: Database = Depends(get_database),
+    user: PanelUser = Depends(require_permission(Permission.GIVEAWAY_PURGE)),
+) -> GiveawayPurgeResultOut:
+    try:
+        result = purge_svc.delete_receipts(db, giveaway_id=giveaway_id, actor=_actor(user, request))
+    except (purge_svc.GiveawayNotFoundError, purge_svc.GiveawayNotArchivedError) as exc:
+        raise _purge_http_error(exc) from exc
+    return GiveawayPurgeResultOut.model_validate(result, from_attributes=True)
+
+
+@router.delete("/{giveaway_id}", response_model=GiveawayPurgeResultOut)
+def purge_giveaway(
+    giveaway_id: int,
+    request: Request,
+    db: Database = Depends(get_database),
+    user: PanelUser = Depends(require_permission(Permission.GIVEAWAY_PURGE)),
+) -> GiveawayPurgeResultOut:
+    try:
+        result = purge_svc.purge_giveaway(db, giveaway_id=giveaway_id, actor=_actor(user, request))
+    except (purge_svc.GiveawayNotFoundError, purge_svc.GiveawayNotArchivedError) as exc:
+        raise _purge_http_error(exc) from exc
+    return GiveawayPurgeResultOut.model_validate(result, from_attributes=True)

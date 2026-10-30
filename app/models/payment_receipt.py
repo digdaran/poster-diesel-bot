@@ -29,5 +29,8 @@ class PaymentReceipt(Base):
     telegram_file_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     vk_attachment: Mapped[str | None] = mapped_column(String(255), nullable=True)
     uploaded_at: Mapped[dt.datetime] = created_at_column(index=True)
+    # Файл удалён с диска Super Admin'ом («Архив» → «Удалить чеки», DECISIONS_LOG.md №89):
+    # запись остаётся как след того, что чек был получен, сам файл больше не доступен.
+    deleted_at: Mapped[dt.datetime | None] = mapped_column(nullable=True)
 
     payment: Mapped[Payment] = relationship(back_populates="receipts")

@@ -93,6 +93,7 @@ export interface Payment {
   amount_mismatch: boolean;
   amount_mismatch_bank_amount: number | null;
   receipt_count: number;
+  receipt_deleted_count: number;
   refunded_at: string | null;
   refund_reason: string | null;
   refunded_by_login: string | null;
@@ -104,6 +105,23 @@ export interface PaymentReceipt {
   original_filename: string | null;
   content_type: string | null;
   uploaded_at: string;
+  deleted_at: string | null;
+}
+
+/** Что будет удалено у архивной коллекции (удаление чеков / полное удаление). */
+export interface GiveawayPurgeSummary {
+  giveaway_name: string;
+  prefix: string;
+  receipts: number;
+  payments: number;
+  manual_registrations: number;
+  tickets: number;
+  posters: number;
+}
+
+export interface GiveawayPurgeResult {
+  summary: GiveawayPurgeSummary;
+  file_errors: number;
 }
 
 export interface BankReconciliationRun {

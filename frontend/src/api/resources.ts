@@ -7,6 +7,8 @@ import type {
   Dashboard,
   Giveaway,
   GiveawayPoster,
+  GiveawayPurgeResult,
+  GiveawayPurgeSummary,
   ManualRegistration,
   Page,
   PageSize,
@@ -95,6 +97,12 @@ export const GiveawaysApi = {
   archive: (id: number) => apiRequest<Giveaway>(`/api/giveaways/${id}/archive`, { method: "POST" }),
   unarchive: (id: number) =>
     apiRequest<Giveaway>(`/api/giveaways/${id}/unarchive`, { method: "POST" }),
+  purgeSummary: (id: number) =>
+    apiRequest<GiveawayPurgeSummary>(`/api/giveaways/${id}/purge-summary`),
+  deleteReceipts: (id: number) =>
+    apiRequest<GiveawayPurgeResult>(`/api/giveaways/${id}/delete-receipts`, { method: "POST" }),
+  purge: (id: number) =>
+    apiRequest<GiveawayPurgeResult>(`/api/giveaways/${id}`, { method: "DELETE" }),
   listPosters: (id: number) => apiRequest<GiveawayPoster[]>(`/api/giveaways/${id}/posters`),
   uploadPoster: (id: number, file: File) =>
     apiUpload<GiveawayPoster>(`/api/giveaways/${id}/posters`, file),
