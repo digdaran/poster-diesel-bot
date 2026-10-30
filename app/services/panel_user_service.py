@@ -52,7 +52,14 @@ def bootstrap_superadmin(session: Session, *, login: str, password: str) -> Pane
 
 def authenticate(session: Session, *, login: str, password: str) -> PanelUser:
     user = session.execute(select(PanelUser).where(PanelUser.login == login)).scalar_one_or_none()
-    if user is None or not verify_password(password, user.password_hash):
+    password_ok = user is not None and verify_password(password, user.password_hash)
+    # Закрываем читающую транзакцию до записи (last_login_at здесь, аудит — у вызывающего).
+    # Иначе запись в БД от другого процесса за время проверки argon2 (фоновая сверка пишет
+    # на каждом тике) не даёт SQLite повысить транзакцию до пишущей: мгновенный
+    # "database is locked" без ожидания busy_timeout. Новая транзакция начнётся с записи и
+    # честно подождёт блокировку. См. DECISIONS_LOG.md №86.
+    session.commit()
+    if user is None or not password_ok:
         raise AuthError("Неверный логин или пароль")
     if user.is_blocked:
         raise AuthError("Учётная запись заблокирована")

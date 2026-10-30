@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import pytest
+from app.core.db import Database
+from app.models.audit_log import AuditLog
+from app.models.enums import AuditActorType
 from app.services import panel_user_service as svc
 from sqlalchemy.orm import Session
 
@@ -49,3 +52,32 @@ def test_issue_and_refresh_tokens(session: Session) -> None:
         session, refresh_token=tokens.refresh_token, secret="s3cr3t-test-key", access_ttl_min=15
     )
     assert new_access
+
+
+def test_authenticate_survives_concurrent_write_during_password_check(
+    db: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Пока идёт медленная проверка argon2, другой процесс (фоновая сверка) коммитит
+    запись в БД. Вход не должен падать с мгновенным "database is locked" при записи
+    last_login_at (DECISIONS_LOG.md №86)."""
+    with db.session() as s:
+        svc.bootstrap_superadmin(s, login="admin", password="strongpass123")
+
+    real_verify = svc.verify_password
+
+    def verify_with_concurrent_write(password: str, password_hash: str) -> bool:
+        with db.session() as other:
+            other.add(
+                AuditLog(
+                    action="concurrent_write",
+                    actor_type=AuditActorType.SYSTEM,
+                    actor_label="test",
+                )
+            )
+        return real_verify(password, password_hash)
+
+    monkeypatch.setattr(svc, "verify_password", verify_with_concurrent_write)
+
+    with db.session() as s:
+        user = svc.authenticate(s, login="admin", password="strongpass123")
+        assert user.last_login_at is not None

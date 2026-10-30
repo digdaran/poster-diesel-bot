@@ -25,7 +25,7 @@ docker compose up --build
 
 ```bash
 python3.11 -m venv .venv && source .venv/bin/activate
-pip install -e ".[backend,telegram,dev]"
+pip install -e ".[backend,telegram,vk,dev]"
 alembic upgrade head
 uvicorn backend.main:app --reload
 ```

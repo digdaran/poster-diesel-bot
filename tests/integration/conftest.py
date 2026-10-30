@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
 import tempfile
@@ -27,8 +28,17 @@ def _remove_with_retry(path: str, attempts: int = 5, delay_s: float = 0.1) -> No
             time.sleep(delay_s)
 
 
+async def _idle_background_loop(*_args: object, **_kwargs: object) -> None:
+    await asyncio.Event().wait()
+
+
 @pytest.fixture
-def api_client() -> Iterator[TestClient]:
+def api_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    # Фоновый цикл (сверка выписки и пр.) покрыт unit-тестами; здесь он только пишет в ту же
+    # БД параллельно запросам теста и делает результаты зависимыми от тайминга.
+    from backend import background
+
+    monkeypatch.setattr(background, "run_background_loop", _idle_background_loop)
     fd, db_path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
     os.remove(db_path)
