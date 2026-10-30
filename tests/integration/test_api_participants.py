@@ -121,3 +121,48 @@ def test_update_participant_rejects_phone_taken_by_another_participant(
     resp = api_client.get(f"/api/participants/{other_id}", headers=admin_headers)
     resp.raise_for_status()
     assert resp.json()["phone"] == "79990005007"  # не изменился
+
+
+def test_active_tickets_exclude_closed_forever_and_archived_but_not_paused(
+    api_client: TestClient,
+) -> None:
+    """«Билетов в активных акциях» (DECISIONS_LOG.md №88): номера коллекции, закрытой навсегда
+    или заархивированной, неактивны; пауза продаж номера не деактивирует."""
+    headers = auth_headers(login(api_client, "admin", "admin-strong-pass-123"))
+    phone = "79990007001"
+    giveaways = {
+        name: _create_open_giveaway(api_client, headers, name=name, prefix=prefix)
+        for name, prefix in (("Открыта", "AO"), ("Пауза", "AP"), ("Закрыта", "AC"), ("Архив", "AA"))
+    }
+    participant_id = 0
+    for giveaway_id in giveaways.values():
+        participant_id = _register_participant(
+            api_client, headers, giveaway_id=giveaway_id, phone=phone, full_name="Пётр"
+        )
+        reg = api_client.get(
+            "/api/manual-registrations", params={"giveaway_id": giveaway_id}, headers=headers
+        ).json()["items"][0]
+        api_client.post(
+            f"/api/manual-registrations/{reg['id']}/confirm", headers=headers
+        ).raise_for_status()
+
+    api_client.post(f"/api/giveaways/{giveaways['Пауза']}/lock", headers=headers).raise_for_status()
+    for name in ("Закрыта", "Архив"):
+        api_client.post(
+            f"/api/giveaways/{giveaways[name]}/close-registration", headers=headers
+        ).raise_for_status()
+    api_client.post(
+        f"/api/giveaways/{giveaways['Архив']}/archive", headers=headers
+    ).raise_for_status()
+
+    items = api_client.get("/api/participants", params={"q": phone}, headers=headers).json()[
+        "items"
+    ]
+    row = next(p for p in items if p["id"] == participant_id)
+    assert row["total_tickets"] == 4
+    assert row["active_tickets"] == 2  # «Открыта» + «Пауза»
+
+    resp = api_client.get(
+        "/api/participants", params={"q": phone, "active_tickets_min": 3}, headers=headers
+    )
+    assert resp.json()["items"] == []

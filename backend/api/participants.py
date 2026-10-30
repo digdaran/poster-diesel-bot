@@ -89,7 +89,9 @@ def list_participants(
     active_tickets_subq = (
         select(func.count(Ticket.id))
         .join(Giveaway, Ticket.giveaway_id == Giveaway.id)
-        .where(Ticket.participant_id == Participant.id, Giveaway.is_locked.is_(False))
+        # «Активная акция» = коллекция не закрыта навсегда и не в архиве; пауза продаж
+        # (is_locked) временная и номера не деактивирует — DECISIONS_LOG.md №88.
+        .where(Ticket.participant_id == Participant.id, ~Giveaway.closed_forever_clause())
         .correlate(Participant)
         .scalar_subquery()
     )
