@@ -192,8 +192,8 @@ function ReconciliationDetailsModal({
         )}
         {lastRun && lastRun.finalize_error_count > 0 && (
           <p className="reconciliation-error-message">
-            В последнем тике не удалось обработать {lastRun.finalize_error_count}{" "}
-            платеж(ей) — подробности в логах backend.
+            В последнем тике не удалось обработать {lastRun.finalize_error_count} платеж(ей) —
+            подробности в логах backend.
           </p>
         )}
 

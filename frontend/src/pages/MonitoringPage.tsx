@@ -116,13 +116,7 @@ async function fetchTicketCodes(row: MonitorRow): Promise<string[]> {
   }
 }
 
-function FlyingGhost({
-  item,
-  onDone,
-}: {
-  item: FlyingItem;
-  onDone: (item: FlyingItem) => void;
-}) {
+function FlyingGhost({ item, onDone }: { item: FlyingItem; onDone: (item: FlyingItem) => void }) {
   const elRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {

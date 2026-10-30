@@ -134,11 +134,7 @@ export function GiveawayDetailPage() {
             </label>
             <label>
               Подпись к постеру (общая для всех загруженных изображений)
-              <textarea
-                value={caption}
-                onChange={(e) => setCaption(e.target.value)}
-                rows={3}
-              />
+              <textarea value={caption} onChange={(e) => setCaption(e.target.value)} rows={3} />
             </label>
             <button type="submit" disabled={saving}>
               {saving ? "Сохраняем…" : "Сохранить"}
@@ -152,8 +148,8 @@ export function GiveawayDetailPage() {
       <section>
         <h2>Цифровые постеры</h2>
         <p>
-          Участнику после подтверждения оплаты отправляется один случайно выбранный постер
-          из загруженных ниже.
+          Участнику после подтверждения оплаты отправляется один случайно выбранный постер из
+          загруженных ниже.
         </p>
         {loading ? (
           <LoadingState />
@@ -183,11 +179,7 @@ export function GiveawayDetailPage() {
         )}
         {canEdit && (
           <div className="inline-form">
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-            />
+            <input ref={fileInputRef} type="file" accept="image/png,image/jpeg,image/webp" />
             <button onClick={() => onUpload()} disabled={uploading}>
               {uploading ? "Загружаем…" : "Загрузить постер"}
             </button>
