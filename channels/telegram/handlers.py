@@ -159,6 +159,12 @@ async def on_contact(message: Message, state: FSMContext) -> None:
                 "⚠️ Этот телеграм-аккаунт уже привязан к другому номеру. Обратитесь к оператору."
             )
             return
+        if result.rebound_from is not None:
+            logger.info(
+                "channel_binding_rebound",
+                old_external_user_id=result.rebound_from,
+                new_external_user_id=_uid(message),
+            )
         has_name = bool(result.participant.full_name)
 
     if has_name:
@@ -294,6 +300,18 @@ async def on_phone_typed_for_registration(message: Message, state: FSMContext) -
             )
         except InvalidPhoneError:
             await message.answer("Не удалось распознать номер телефона. Попробуйте ещё раз.")
+            return
+        except participant_service.PhoneBoundToOtherAccountError:
+            # Шаг ввода номера не сбрасываем — можно ввести другой номер (LOG №90).
+            logger.warning(
+                "phone_bound_to_other_account",
+                external_user_id=_uid(message),
+                phone=message.text,
+            )
+            await message.answer(
+                "⚠️ Этот номер уже привязан к другому телеграм-аккаунту. "
+                "Напишите боту с того аккаунта или обратитесь к оператору."
+            )
             return
         if result.conflict:
             logger.warning(

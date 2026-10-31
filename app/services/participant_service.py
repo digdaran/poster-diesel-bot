@@ -17,10 +17,11 @@ from sqlalchemy.orm import Session
 from app.core.phone import normalize_phone
 from app.models.base import utcnow
 from app.models.channel_binding import ChannelBinding
-from app.models.enums import ChannelType, ManualRegistrationStatus, PaymentStatus
+from app.models.enums import AuditActorType, ChannelType, ManualRegistrationStatus, PaymentStatus
 from app.models.manual_registration import ManualRegistration
 from app.models.participant import Participant
 from app.models.payment import Payment
+from app.services import audit_service
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,10 @@ class IdentifyResult:
     запрещена и фиксируется в аудите"). В этом случае привязка НЕ меняется —
     возвращается существующий участник; вызывающая сторона обязана залогировать
     конфликт в аудит (см. app.services.audit_service)."""
+    rebound_from: str | None = None
+    """`external_user_id` аккаунта канала, у которого `confirm_channel_binding`
+    забрал привязку этого участника (подтверждённый номер переехал на новый
+    аккаунт того же мессенджера, DECISIONS_LOG.md №90); иначе None."""
 
 
 def get_participant_by_channel(
@@ -166,6 +171,27 @@ class PhoneAlreadyTakenError(Exception):
         super().__init__(f"Номер {phone} уже используется другим участником")
 
 
+class PhoneBoundToOtherAccountError(Exception):
+    """Номер введён вручную (без подтверждения), а у участника с этим номером
+    уже есть привязка в этом канале к ДРУГОМУ аккаунту (`uq_participant_channel`).
+    Не перепривязываем: номер не проверен, иначе любой, кто знает номер, уведёт
+    чужую учётку — DECISIONS_LOG.md №90."""
+
+    def __init__(self, phone: str):
+        self.phone = phone
+        super().__init__(f"Номер {phone} уже привязан к другому аккаунту этого канала")
+
+
+def _get_participant_binding(
+    session: Session, *, participant_id: int, channel: ChannelType
+) -> ChannelBinding | None:
+    return session.execute(
+        select(ChannelBinding).where(
+            ChannelBinding.participant_id == participant_id, ChannelBinding.channel == channel
+        )
+    ).scalar_one_or_none()
+
+
 def change_phone(session: Session, *, participant_id: int, new_phone_raw: str) -> Participant:
     """Правка номера телефона участника оператором панели (опечатка при ручной
     регистрации/самостоятельном вводе, п.11.4 ТЗ — см. DECISIONS_LOG.md №72).
@@ -207,6 +233,10 @@ def confirm_channel_binding(
 
     Если аккаунт канала уже привязан к ДРУГОМУ участнику — привязка не меняется,
     возвращается `conflict=True` (см. IdentifyResult).
+
+    Если у участника с этим номером уже есть привязка в этом канале к ДРУГОМУ
+    аккаунту — она переезжает на текущий аккаунт (владение номером подтверждено,
+    а номер — единый ключ), с записью в аудит; см. `rebound_from`, LOG №90.
     """
     phone = normalize_phone(phone_raw)
     existing_binding = get_binding(session, channel=channel, external_user_id=external_user_id)
@@ -228,6 +258,16 @@ def confirm_channel_binding(
         session.add(participant)
         session.flush()
         created_participant = True
+    else:
+        previous = _get_participant_binding(session, participant_id=participant.id, channel=channel)
+        if previous is not None:
+            return _rebind_to_new_account(
+                session,
+                binding=previous,
+                participant=participant,
+                external_user_id=external_user_id,
+                username=username,
+            )
 
     binding = ChannelBinding(
         participant_id=participant.id,
@@ -251,6 +291,46 @@ def confirm_channel_binding(
     )
 
 
+def _rebind_to_new_account(
+    session: Session,
+    *,
+    binding: ChannelBinding,
+    participant: Participant,
+    external_user_id: str,
+    username: str | None,
+) -> IdentifyResult:
+    """UPDATE существующей строки, а не DELETE+INSERT: на `channel_bindings.id`
+    нет внешних ключей, а уникальные индексы не мешают на промежуточном шаге."""
+    old_external_user_id = binding.external_user_id
+    binding.external_user_id = external_user_id
+    binding.username = username
+    binding.phone_verified = True
+    binding.linked_at = utcnow()
+    participant.phone_verified = True
+    session.flush()
+    audit_service.log(
+        session,
+        action="channel_binding_rebind",
+        actor_type=AuditActorType.PARTICIPANT,
+        actor_id=participant.id,
+        actor_label=participant.phone,
+        entity_type="channel_binding",
+        entity_id=binding.id,
+        details={
+            "channel": binding.channel.value,
+            "old_external_user_id": old_external_user_id,
+            "new_external_user_id": external_user_id,
+        },
+    )
+    return IdentifyResult(
+        participant=participant,
+        binding=binding,
+        created_participant=False,
+        created_binding=False,
+        rebound_from=old_external_user_id,
+    )
+
+
 def bind_channel_ignoring_verification(
     session: Session,
     *,
@@ -266,6 +346,11 @@ def bind_channel_ignoring_verification(
     `can_access_own_account()` учитывает глобальный флаг отдельно от этого поля,
     что делает переключатель обратимым (п.7.1 ТЗ: после выключения флага доступ
     остаётся только у подлинно подтверждённых привязок).
+
+    Raises:
+        InvalidPhoneError: номер не распознан.
+        PhoneBoundToOtherAccountError: у участника с этим номером уже есть
+            привязка в этом канале к другому аккаунту (LOG №90).
     """
     existing_binding = get_binding(session, channel=channel, external_user_id=external_user_id)
     if existing_binding is not None:
@@ -282,6 +367,11 @@ def bind_channel_ignoring_verification(
     phone = normalize_phone(phone_raw)
     participant = _find_participant_by_phone(session, phone)
     created_participant = False
+    if participant is not None and (
+        _get_participant_binding(session, participant_id=participant.id, channel=channel)
+        is not None
+    ):
+        raise PhoneBoundToOtherAccountError(phone)
     if participant is None:
         participant = Participant(phone=phone, phone_verified=False)
         session.add(participant)

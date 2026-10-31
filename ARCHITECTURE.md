@@ -75,6 +75,7 @@ WHERE id = :id AND status = 'PENDING';
 - `ChannelBinding(channel, external_user_id)` — уникальная пара, привязка только по подтверждённому номеру (`phone_verified=true`) либо при включённом `PlatformSettings.ignore_phone_verification`.
 - `app/services/participant_service.py` инкапсулирует всю логику идентификации (find-or-create, приоритет подтверждённого номера, подарочные покупки на неподтверждённый номер).
 - `ignore_phone_verification` (тумблер Super Admin) должен оставаться обратимым: `can_access_own_account()` вычисляет `phone_verified OR ignore_phone_verification` каждый раз в момент обращения, а не снимает снимок в момент привязки — выключение флага должно немедленно отозвать доступ у привязок, у которых он держался только флагом (п.7.1/10.3 ТЗ).
+- Номер уже привязан к другому аккаунту того же канала: ручной ввод → `PhoneBoundToOtherAccountError` (отказ), подтверждённый контакт → привязка переезжает на новый аккаунт с аудитом `channel_binding_rebind` (DECISIONS_LOG.md №90).
 - `ChannelBinding.messages_allowed` (`bool | None`) — отзываемое разрешение канала писать участнику первым, там где это применимо (VK: `message_allow`/`message_deny`, см. §7.1); `NULL` для каналов, где право неявно и не отзывается (Telegram).
 
 ## 7. Каналы и провайдеры — расширяемость (п.5.4 ТЗ)

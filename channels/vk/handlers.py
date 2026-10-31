@@ -296,6 +296,18 @@ async def on_phone_typed_for_registration(message: Message) -> None:
         except InvalidPhoneError:
             await message.answer("Не удалось распознать номер телефона. Попробуйте ещё раз.")
             return
+        except participant_service.PhoneBoundToOtherAccountError:
+            # Шаг ввода номера не сбрасываем — можно ввести другой номер (LOG №90).
+            logger.warning(
+                "phone_bound_to_other_account",
+                external_user_id=_uid(message.peer_id),
+                phone=message.text,
+            )
+            await message.answer(
+                "⚠️ Этот номер уже привязан к другому аккаунту ВКонтакте. "
+                "Напишите боту с того аккаунта или обратитесь к оператору."
+            )
+            return
         if result.conflict:
             logger.warning(
                 "channel_rebind_conflict",

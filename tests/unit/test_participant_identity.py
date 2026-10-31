@@ -251,3 +251,94 @@ def test_get_participant_by_channel_returns_participant_when_bound(session: Sess
     )
     assert found is not None
     assert found.id == result.participant.id
+
+
+def test_manual_input_refuses_phone_bound_to_other_account_in_same_channel(
+    session: Session,
+) -> None:
+    """Ручной ввод номера, уже привязанного к ДРУГОМУ аккаунту этого канала, —
+    отказ, без перепривязки (номер не проверен) и без падения на
+    uq_participant_channel (инцидент на проде, LOG №90)."""
+    first = svc.bind_channel_ignoring_verification(
+        session, channel=ChannelType.VK, external_user_id="vk-a", phone_raw="79990009001"
+    )
+    with pytest.raises(svc.PhoneBoundToOtherAccountError):
+        svc.bind_channel_ignoring_verification(
+            session, channel=ChannelType.VK, external_user_id="vk-b", phone_raw="8 999 000-90-01"
+        )
+    assert svc.get_binding(session, channel=ChannelType.VK, external_user_id="vk-b") is None
+    kept = svc.get_binding(session, channel=ChannelType.VK, external_user_id="vk-a")
+    assert kept is not None
+    assert kept.participant.id == first.participant.id
+
+
+def test_manual_input_allows_same_phone_in_other_channel(session: Session) -> None:
+    svc.bind_channel_ignoring_verification(
+        session, channel=ChannelType.VK, external_user_id="vk-a", phone_raw="79990009002"
+    )
+    result = svc.bind_channel_ignoring_verification(
+        session, channel=ChannelType.TELEGRAM, external_user_id="tg-a", phone_raw="79990009002"
+    )
+    assert result.created_binding is True
+
+
+def test_verified_contact_rebinds_phone_to_new_account(session: Session) -> None:
+    """Подтверждённый контакт: привязка участника в этом канале переезжает на
+    новый аккаунт, старый теряет доступ, запись в аудите (LOG №90). Привязка
+    того же участника в другом канале не трогается."""
+    from app.models.audit_log import AuditLog
+    from sqlalchemy import select
+
+    first = svc.confirm_channel_binding(
+        session, channel=ChannelType.TELEGRAM, external_user_id="tg-old", phone_raw="79990009003"
+    )
+    svc.bind_channel_ignoring_verification(
+        session, channel=ChannelType.VK, external_user_id="vk-1", phone_raw="79990009003"
+    )
+
+    result = svc.confirm_channel_binding(
+        session,
+        channel=ChannelType.TELEGRAM,
+        external_user_id="tg-new",
+        phone_raw="79990009003",
+        username="newname",
+    )
+    assert result.rebound_from == "tg-old"
+    assert result.conflict is False
+    assert result.created_binding is False
+    assert result.participant.id == first.participant.id
+    assert result.binding is not None
+    assert result.binding.phone_verified is True
+    assert result.binding.username == "newname"
+    assert svc.get_binding(session, channel=ChannelType.TELEGRAM, external_user_id="tg-old") is None
+    assert (
+        svc.get_participant_by_channel(
+            session, channel=ChannelType.TELEGRAM, external_user_id="tg-new"
+        )
+        == first.participant
+    )
+    assert svc.get_binding(session, channel=ChannelType.VK, external_user_id="vk-1") is not None
+
+    entries = (
+        session.execute(select(AuditLog).where(AuditLog.action == "channel_binding_rebind"))
+        .scalars()
+        .all()
+    )
+    assert len(entries) == 1
+    assert entries[0].details == {
+        "channel": "telegram",
+        "old_external_user_id": "tg-old",
+        "new_external_user_id": "tg-new",
+    }
+
+
+def test_verified_contact_takes_over_unverified_manual_binding(session: Session) -> None:
+    """Аккаунт, привязанный вручную без проверки, уступает подтверждённому владельцу."""
+    svc.bind_channel_ignoring_verification(
+        session, channel=ChannelType.TELEGRAM, external_user_id="tg-guess", phone_raw="79990009004"
+    )
+    result = svc.confirm_channel_binding(
+        session, channel=ChannelType.TELEGRAM, external_user_id="tg-owner", phone_raw="79990009004"
+    )
+    assert result.rebound_from == "tg-guess"
+    assert result.participant.phone_verified is True
