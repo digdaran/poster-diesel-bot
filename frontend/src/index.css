@@ -1128,6 +1128,31 @@ section {
   border-left-color: var(--color-danger);
 }
 
+/* Плашка «панель обновилась» (UpdateBanner) */
+
+.update-banner {
+  position: fixed;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: calc(100vw - 32px);
+  padding: 10px 12px 10px 16px;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-modal);
+  background: var(--color-surface);
+  color: var(--color-text);
+  border-left: 3px solid var(--color-warning);
+  font-size: 13px;
+  z-index: 1050;
+}
+
+.update-banner button {
+  flex-shrink: 0;
+}
+
 /* Confirm dialog */
 
 .modal-overlay {

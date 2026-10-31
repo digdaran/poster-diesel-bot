@@ -3,6 +3,7 @@ import { AuthProvider } from "./auth/AuthContext";
 import { ThemeProvider } from "./theme/ThemeContext";
 import { ToastProvider } from "./components/Toast";
 import { ConfirmProvider } from "./components/ConfirmDialog";
+import { UpdateBanner } from "./components/UpdateBanner";
 import { ProtectedRoute } from "./routes/ProtectedRoute";
 import { Layout } from "./components/Layout";
 import { LoginPage } from "./pages/LoginPage";
@@ -27,6 +28,7 @@ export default function App() {
       <ToastProvider>
         <ConfirmProvider>
           <AuthProvider>
+            <UpdateBanner />
             <Routes>
               <Route path="/login" element={<LoginPage />} />
               {/* Отдельный top-level маршрут (не внутри Layout) — открывается
