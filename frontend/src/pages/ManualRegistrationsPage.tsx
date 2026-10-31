@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { FormEvent } from "react";
+import type { CSSProperties, FormEvent } from "react";
 import {
   GiveawaysApi,
   ManualRegistrationsApi,
@@ -266,6 +266,11 @@ export function ManualRegistrationsPage() {
   // максимального page_size, показываем первую страницу номерков).
   const ticketsPageSize = (quantity: number) =>
     PAGE_SIZES.find((size) => size >= quantity) ?? PAGE_SIZES[PAGE_SIZES.length - 1];
+
+  // Чем больше номерков, тем шире окно и больше колонок — прокрутка остаётся
+  // только для очень длинных списков или маленького экрана.
+  const ticketsModalWidth = (count: number) =>
+    count <= 20 ? "360px" : count <= 60 ? "600px" : "960px";
 
   const showAssignedTickets = async (registration: ManualRegistration) => {
     const { items } = await TicketsApi.list({
@@ -565,7 +570,15 @@ export function ManualRegistrationsPage() {
       )}
       {ticketsModal && (
         <div className="modal-overlay" onClick={() => setTicketsModal(null)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="modal modal-tickets"
+            style={
+              {
+                "--tickets-modal-width": ticketsModalWidth(ticketsModal.tickets.length),
+              } as CSSProperties
+            }
+            onClick={(e) => e.stopPropagation()}
+          >
             <p className="modal-message">
               Регистрация №{ticketsModal.registration.id} (
               {ticketsModal.registration.participant_full_name ??

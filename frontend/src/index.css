@@ -1252,11 +1252,29 @@ section {
   font-size: 12px;
 }
 
+/* Окно «Показать номерки»: растёт под список (ширина — по количеству номерков,
+   задаётся из ManualRegistrationsPage), прокручивается только список и только
+   когда окно упёрлось в высоту экрана. */
+.modal-tickets {
+  display: flex;
+  flex-direction: column;
+  width: min(var(--tickets-modal-width, 360px), calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+}
+
+.modal-tickets > * {
+  flex-shrink: 0;
+}
+
+.modal-tickets > .ticket-codes-list {
+  flex: 1 1 auto;
+}
+
 .ticket-codes-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
   gap: 4px 12px;
-  max-height: 240px;
+  min-height: 0;
   overflow-y: auto;
   margin: 0 0 16px;
   padding: 0;
