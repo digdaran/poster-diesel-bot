@@ -5,7 +5,6 @@ import { useAuth } from "../auth/AuthContext";
 import { usePagination } from "../hooks/usePagination";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { PaginationControls } from "../components/PaginationControls";
-import { Badge } from "../components/Badge";
 import { ChannelBadges } from "../components/ChannelBadges";
 import { EmptyStateRow } from "../components/EmptyState";
 import { formatDateTime } from "../utils/format";
@@ -194,7 +193,9 @@ export function TicketsPage() {
                   {t.is_gift && (
                     <>
                       {" "}
-                      <Badge tone="info">🎁 подарок</Badge>
+                      <span title="Подарок по акции" aria-label="Подарок по акции">
+                        🎁
+                      </span>
                     </>
                   )}
                 </td>

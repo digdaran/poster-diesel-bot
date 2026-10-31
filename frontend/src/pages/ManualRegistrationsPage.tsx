@@ -596,7 +596,12 @@ export function ManualRegistrationsPage() {
               {ticketsModal.tickets.map((t) => (
                 <li key={t.id}>
                   {t.full_code}
-                  {t.is_gift ? " 🎁 подарок" : ""}
+                  {t.is_gift && (
+                    <span title="Подарок по акции" aria-label="Подарок по акции">
+                      {" "}
+                      🎁
+                    </span>
+                  )}
                 </li>
               ))}
             </ul>
