@@ -914,6 +914,10 @@ async def on_unhandled_message(message: Message) -> None:
         await message.answer("Не понял команду. Напишите «Начать», чтобы продолжить.")
 
 
+_ORDER_KEYS = ("giveaway_id", "quantity", "participant_id")
+_STALE_ORDER_TEXT = "Этот заказ уже оформлен или устарел. Напишите «Начать»."
+
+
 async def _answer_event(event: GroupTypes.MessageEvent, *, snackbar: str | None = None) -> None:
     """Закрывает "крутилку" загрузки на нажатой inline-кнопке (аналог
     `CallbackQuery.answer()` в Telegram). `snackbar`, если задан, показывает
@@ -994,16 +998,22 @@ async def _dispatch_message_event(event: GroupTypes.MessageEvent) -> None:
         return
 
     if action == "confirm_order":
+        data = await _get_state_payload(peer_id)
+        if not all(key in data for key in _ORDER_KEYS):
+            # Повторное нажатие или старая кнопка — заказа в состоянии уже нет (LOG №91).
+            await _answer_event(event, snackbar=_STALE_ORDER_TEXT)
+            return
         if payload.get("v") == "yes":
-            data = await _get_state_payload(peer_id)
+            # Сбрасываем состояние ДО создания счёта: BuiltinStateDispenser не
+            # уступает управление между get и delete, поэтому параллельное второе
+            # нажатие увидит пустое состояние и не создаст второй счёт (LOG №91).
+            await _clear_state(peer_id)
             await _create_and_offer_payment(
                 peer_id, data["giveaway_id"], data["quantity"], data["participant_id"]
             )
-            await _clear_state(peer_id)
             await _answer_event(event)
             return
         # "back"
-        data = await _get_state_payload(peer_id)
         with db.session() as session:
             giveaway = session.get(Giveaway, data["giveaway_id"])
         if giveaway is None:

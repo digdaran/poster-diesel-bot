@@ -621,19 +621,33 @@ async def _prompt_confirm_order(
     )
 
 
+_ORDER_KEYS = ("giveaway_id", "quantity", "participant_id")
+_STALE_ORDER_TEXT = "Этот заказ уже оформлен или устарел. Напишите /start, чтобы начать заново."
+
+
 @router.callback_query(F.data == "confirm_order:yes")
 async def on_confirm_order_yes(callback: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
+    if not all(key in data for key in _ORDER_KEYS):
+        # Повторное нажатие или старая кнопка — заказа в состоянии уже нет (LOG №91).
+        await callback.answer(_STALE_ORDER_TEXT, show_alert=True)
+        return
+    # Сбрасываем состояние ДО создания счёта: MemoryStorage не уступает управление
+    # между get_data и clear, поэтому параллельное второе нажатие увидит пустое
+    # состояние и не создаст второй счёт (LOG №91).
+    await state.clear()
     await _create_and_offer_payment(
         _msg(callback), data["giveaway_id"], data["quantity"], data["participant_id"]
     )
-    await state.clear()
     await callback.answer()
 
 
 @router.callback_query(F.data == "confirm_order:back")
 async def on_confirm_order_back(callback: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
+    if "giveaway_id" not in data:
+        await callback.answer(_STALE_ORDER_TEXT, show_alert=True)
+        return
     db = get_channel_db()
     with db.session() as session:
         giveaway = session.get(Giveaway, data["giveaway_id"])
