@@ -108,6 +108,10 @@ class TBankStatementProvider(BaseBankStatementProvider):
             data = response.json()
 
             for raw_operation in _extract_operations(data):
+                if _is_outgoing(raw_operation):
+                    # Списания со счёта — не платежи участников; пропускаем молча,
+                    # иначе одни и те же операции попадают в warning каждый тик (LOG №92).
+                    continue
                 entry = _parse_entry(raw_operation)
                 if entry is not None:
                     entries.append(entry)
@@ -163,9 +167,14 @@ def _parse_amount(raw_amount: Any) -> int | None:
     return round(value * 100)
 
 
-def _parse_entry(operation: dict[str, Any]) -> BankStatementEntry | None:
+def _is_outgoing(operation: dict[str, Any]) -> bool:
+    """Направление указано и не похоже на поступление (`typeOfOperation: "Debit"`)."""
     direction = str(_first_present(operation, _DIRECTION_KEYS) or "").lower()
-    if direction and not any(marker in direction for marker in _CREDIT_MARKERS):
+    return bool(direction) and not any(marker in direction for marker in _CREDIT_MARKERS)
+
+
+def _parse_entry(operation: dict[str, Any]) -> BankStatementEntry | None:
+    if _is_outgoing(operation):
         return None  # похоже на исходящую операцию — не входящий платёж участника
 
     external_id = _first_present(operation, _ID_KEYS)

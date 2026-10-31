@@ -57,3 +57,47 @@ def test_fetch_operations_uses_tbank_ssl_context(monkeypatch: pytest.MonkeyPatch
 
     assert provider.fetch_operations(since=dt.datetime(2026, 9, 1)) == []
     assert captured["verify"] is _tbank_ssl_context()
+
+
+def test_fetch_operations_skips_outgoing_without_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Списания (`Debit`) пропускаются молча; warning — только для поступлений,
+    которые не удалось разобрать. На проде одни и те же 2 списания попадали в
+    warning каждый тик сверки (DECISIONS_LOG.md №92)."""
+    from structlog.testing import capture_logs
+
+    operations = [
+        {
+            "operationId": "debit-1",
+            "typeOfOperation": "Debit",
+            "operationDate": "2026-10-29T10:17:58Z",
+            "rubleAmount": 3000.0,
+            "payPurpose": "Перевод собственных средств",
+        },
+        {"operationId": "credit-broken", "typeOfOperation": "Credit"},  # нет суммы/даты
+        {
+            "operationId": "credit-ok",
+            "typeOfOperation": "Credit",
+            "operationDate": "2026-10-31T10:00:00Z",
+            "rubleAmount": 500,
+            "payPurpose": "Оплата TST-00001",
+        },
+    ]
+
+    def fake_get(url: str, **kwargs: Any) -> httpx.Response:
+        return httpx.Response(
+            200, json={"operations": operations}, request=httpx.Request("GET", url)
+        )
+
+    monkeypatch.setattr(tbank_statement.httpx, "get", fake_get)
+    provider = TBankStatementProvider(
+        api_base="https://business.tbank.ru/openapi/api/v1",
+        api_token="token",
+        account_number="40702810000000000000",
+    )
+
+    with capture_logs() as logs:
+        entries = provider.fetch_operations(since=dt.datetime(2026, 10, 1))
+
+    assert [e.external_id for e in entries] == ["credit-ok"]
+    warnings = [log for log in logs if log["event"] == "tbank_statement_entry_unparseable"]
+    assert [w["raw"]["operationId"] for w in warnings] == ["credit-broken"]

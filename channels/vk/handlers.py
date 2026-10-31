@@ -285,7 +285,11 @@ async def on_phone_typed_for_registration(message: Message) -> None:
     (`supports_verified_phone=False`), доступен только при включённом
     `ignore_phone_verification` (п.7.1 ТЗ, ARCHITECTURE.md §7.1)."""
     db = get_channel_db()
-    with db.session() as session:
+    # BEGIN IMMEDIATE и никаких сетевых await внутри — ответ отправляем после
+    # коммита, чтобы не держать блокировку на запись (LOG №92).
+    error_reply: str | None = None
+    has_name = False
+    with db.immediate_session() as session:
         try:
             result = participant_service.bind_channel_ignoring_verification(
                 session,
@@ -294,8 +298,7 @@ async def on_phone_typed_for_registration(message: Message) -> None:
                 phone_raw=message.text or "",
             )
         except InvalidPhoneError:
-            await message.answer("Не удалось распознать номер телефона. Попробуйте ещё раз.")
-            return
+            error_reply = _INVALID_PHONE_TEXT
         except participant_service.PhoneBoundToOtherAccountError:
             # Шаг ввода номера не сбрасываем — можно ввести другой номер (LOG №90).
             logger.warning(
@@ -303,22 +306,23 @@ async def on_phone_typed_for_registration(message: Message) -> None:
                 external_user_id=_uid(message.peer_id),
                 phone=message.text,
             )
-            await message.answer(
-                "⚠️ Этот номер уже привязан к другому аккаунту ВКонтакте. "
-                "Напишите боту с того аккаунта или обратитесь к оператору."
-            )
-            return
-        if result.conflict:
-            logger.warning(
-                "channel_rebind_conflict",
-                external_user_id=_uid(message.peer_id),
-                phone=message.text,
-            )
-            await message.answer(
-                "⚠️ Этот аккаунт ВКонтакте уже привязан к другому номеру. Обратитесь к оператору."
-            )
-            return
-        has_name = bool(result.participant.full_name)
+            error_reply = _PHONE_BOUND_TEXT
+        else:
+            if result.conflict:
+                logger.warning(
+                    "channel_rebind_conflict",
+                    external_user_id=_uid(message.peer_id),
+                    phone=message.text,
+                )
+                error_reply = (
+                    "⚠️ Этот аккаунт ВКонтакте уже привязан к другому номеру. "
+                    "Обратитесь к оператору."
+                )
+            else:
+                has_name = bool(result.participant.full_name)
+    if error_reply is not None:
+        await message.answer(error_reply)
+        return
 
     if has_name:
         channel = _get_channel()
@@ -341,7 +345,7 @@ async def on_name_entered(message: Message) -> None:
         return
 
     db = get_channel_db()
-    with db.session() as session:
+    with db.immediate_session() as session:
         participant = participant_service.get_participant_by_channel(
             session, channel=ChannelType.VK, external_user_id=_uid(message.peer_id)
         )
@@ -519,7 +523,9 @@ async def on_phone_entered(message: Message) -> None:
     giveaway_id, quantity = data["giveaway_id"], data["quantity"]
 
     db = get_channel_db()
-    with db.session() as session:
+    error_reply: str | None = None
+    participant_id = 0
+    with db.immediate_session() as session:  # без сетевых await внутри (LOG №92)
         platform_settings = settings_service.get_or_create_settings(session)
         try:
             if platform_settings.ignore_phone_verification:
@@ -536,8 +542,18 @@ async def on_phone_entered(message: Message) -> None:
                 )
                 participant_id = participant.id
         except InvalidPhoneError:
-            await message.answer("Не удалось распознать номер телефона. Попробуйте ещё раз.")
-            return
+            error_reply = _INVALID_PHONE_TEXT
+        except participant_service.PhoneBoundToOtherAccountError:
+            # Шаг покупки не сбрасываем — можно ввести другой номер (LOG №90, №92).
+            logger.warning(
+                "phone_bound_to_other_account",
+                external_user_id=_uid(message.peer_id),
+                phone=message.text,
+            )
+            error_reply = _PHONE_BOUND_TEXT
+    if error_reply is not None:
+        await message.answer(error_reply)
+        return
 
     await _prompt_confirm_order(
         message.peer_id, giveaway_id, quantity, participant_id, answer_target=message
@@ -914,6 +930,12 @@ async def on_unhandled_message(message: Message) -> None:
         await message.answer("Не понял команду. Напишите «Начать», чтобы продолжить.")
 
 
+_INVALID_PHONE_TEXT = "Не удалось распознать номер телефона. Попробуйте ещё раз."
+_PHONE_BOUND_TEXT = (
+    "⚠️ Этот номер уже привязан к другому аккаунту ВКонтакте. "
+    "Напишите боту с того аккаунта или обратитесь к оператору."
+)
+
 _ORDER_KEYS = ("giveaway_id", "quantity", "participant_id")
 _STALE_ORDER_TEXT = "Этот заказ уже оформлен или устарел. Напишите «Начать»."
 
@@ -1077,7 +1099,7 @@ async def on_message_deny(event: GroupTypes.MessageDeny) -> None:
 
 async def _set_messages_allowed(vk_user_id: int, *, allowed: bool) -> None:
     db = get_channel_db()
-    with db.session() as session:
+    with db.immediate_session() as session:
         binding = participant_service.get_binding(
             session, channel=ChannelType.VK, external_user_id=str(vk_user_id)
         )

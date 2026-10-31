@@ -141,7 +141,7 @@ async def on_contact(message: Message, state: FSMContext) -> None:
         return
 
     db = get_channel_db()
-    with db.session() as session:
+    with db.immediate_session() as session:  # без сетевых await внутри (LOG №92)
         result = participant_service.confirm_channel_binding(
             session,
             channel=ChannelType.TELEGRAM,
@@ -149,23 +149,23 @@ async def on_contact(message: Message, state: FSMContext) -> None:
             phone_raw=contact.phone_number,
             username=message.from_user.username if message.from_user else None,
         )
-        if result.conflict:
-            logger.warning(
-                "channel_rebind_conflict",
-                external_user_id=_uid(message),
-                phone=contact.phone_number,
-            )
-            await message.answer(
-                "⚠️ Этот телеграм-аккаунт уже привязан к другому номеру. Обратитесь к оператору."
-            )
-            return
-        if result.rebound_from is not None:
-            logger.info(
-                "channel_binding_rebound",
-                old_external_user_id=result.rebound_from,
-                new_external_user_id=_uid(message),
-            )
         has_name = bool(result.participant.full_name)
+    if result.conflict:
+        logger.warning(
+            "channel_rebind_conflict",
+            external_user_id=_uid(message),
+            phone=contact.phone_number,
+        )
+        await message.answer(
+            "⚠️ Этот телеграм-аккаунт уже привязан к другому номеру. Обратитесь к оператору."
+        )
+        return
+    if result.rebound_from is not None:
+        logger.info(
+            "channel_binding_rebound",
+            old_external_user_id=result.rebound_from,
+            new_external_user_id=_uid(message),
+        )
 
     if has_name:
         channel = _get_channel()
@@ -289,7 +289,11 @@ async def on_phone_typed_for_registration(message: Message, state: FSMContext) -
     доступен, только если открыт из on_start (флаг ignore_phone_verification
     включён, п.7.1 ТЗ)."""
     db = get_channel_db()
-    with db.session() as session:
+    # BEGIN IMMEDIATE и никаких сетевых await внутри — ответ отправляем после
+    # коммита, чтобы не держать блокировку на запись (LOG №92).
+    error_reply: str | None = None
+    has_name = False
+    with db.immediate_session() as session:
         try:
             result = participant_service.bind_channel_ignoring_verification(
                 session,
@@ -299,8 +303,7 @@ async def on_phone_typed_for_registration(message: Message, state: FSMContext) -
                 username=message.from_user.username if message.from_user else None,
             )
         except InvalidPhoneError:
-            await message.answer("Не удалось распознать номер телефона. Попробуйте ещё раз.")
-            return
+            error_reply = _INVALID_PHONE_TEXT
         except participant_service.PhoneBoundToOtherAccountError:
             # Шаг ввода номера не сбрасываем — можно ввести другой номер (LOG №90).
             logger.warning(
@@ -308,22 +311,22 @@ async def on_phone_typed_for_registration(message: Message, state: FSMContext) -
                 external_user_id=_uid(message),
                 phone=message.text,
             )
-            await message.answer(
-                "⚠️ Этот номер уже привязан к другому телеграм-аккаунту. "
-                "Напишите боту с того аккаунта или обратитесь к оператору."
-            )
-            return
-        if result.conflict:
-            logger.warning(
-                "channel_rebind_conflict",
-                external_user_id=_uid(message),
-                phone=message.text,
-            )
-            await message.answer(
-                "⚠️ Этот телеграм-аккаунт уже привязан к другому номеру. Обратитесь к оператору."
-            )
-            return
-        has_name = bool(result.participant.full_name)
+            error_reply = _PHONE_BOUND_TEXT
+        else:
+            if result.conflict:
+                logger.warning(
+                    "channel_rebind_conflict",
+                    external_user_id=_uid(message),
+                    phone=message.text,
+                )
+                error_reply = (
+                    "⚠️ Этот телеграм-аккаунт уже привязан к другому номеру. Обратитесь к оператору."
+                )
+            else:
+                has_name = bool(result.participant.full_name)
+    if error_reply is not None:
+        await message.answer(error_reply)
+        return
 
     if has_name:
         channel = _get_channel()
@@ -347,7 +350,7 @@ async def on_name_entered(message: Message, state: FSMContext) -> None:
         return
 
     db = get_channel_db()
-    with db.session() as session:
+    with db.immediate_session() as session:
         participant = participant_service.get_participant_by_channel(
             session, channel=ChannelType.TELEGRAM, external_user_id=_uid(message)
         )
@@ -561,7 +564,9 @@ async def on_phone_entered(message: Message, state: FSMContext) -> None:
     giveaway_id, quantity = data["giveaway_id"], data["quantity"]
 
     db = get_channel_db()
-    with db.session() as session:
+    error_reply: str | None = None
+    participant_id = 0
+    with db.immediate_session() as session:  # без сетевых await внутри (LOG №92)
         platform_settings = settings_service.get_or_create_settings(session)
         try:
             if platform_settings.ignore_phone_verification:
@@ -578,8 +583,18 @@ async def on_phone_entered(message: Message, state: FSMContext) -> None:
                 )
                 participant_id = participant.id
         except InvalidPhoneError:
-            await message.answer("Не удалось распознать номер телефона. Попробуйте ещё раз.")
-            return
+            error_reply = _INVALID_PHONE_TEXT
+        except participant_service.PhoneBoundToOtherAccountError:
+            # Шаг покупки не сбрасываем — можно ввести другой номер (LOG №90, №92).
+            logger.warning(
+                "phone_bound_to_other_account",
+                external_user_id=_uid(message),
+                phone=message.text,
+            )
+            error_reply = _PHONE_BOUND_TEXT
+    if error_reply is not None:
+        await message.answer(error_reply)
+        return
 
     await _prompt_confirm_order(message, state, giveaway_id, quantity, participant_id)
 
@@ -620,6 +635,12 @@ async def _prompt_confirm_order(
         ),
     )
 
+
+_INVALID_PHONE_TEXT = "Не удалось распознать номер телефона. Попробуйте ещё раз."
+_PHONE_BOUND_TEXT = (
+    "⚠️ Этот номер уже привязан к другому телеграм-аккаунту. "
+    "Напишите боту с того аккаунта или обратитесь к оператору."
+)
 
 _ORDER_KEYS = ("giveaway_id", "quantity", "participant_id")
 _STALE_ORDER_TEXT = "Этот заказ уже оформлен или устарел. Напишите /start, чтобы начать заново."
