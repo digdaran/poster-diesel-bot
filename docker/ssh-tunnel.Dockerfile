@@ -7,7 +7,8 @@
 # TLS/SNI к api.telegram.org при этом не трогается, только транспорт.
 FROM alpine:3.20
 
-RUN apk add --no-cache openssh-client autossh netcat-openbsd
+# curl — для сквозного healthcheck через SOCKS (docker-compose.yml).
+RUN apk add --no-cache openssh-client autossh netcat-openbsd curl
 
 COPY docker/ssh-tunnel-entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

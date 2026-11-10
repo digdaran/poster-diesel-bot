@@ -4,6 +4,7 @@ import { useAuth } from "../auth/AuthContext";
 import { useTheme } from "../theme/ThemeContext";
 import { Icon } from "./icons";
 import type { IconName } from "./icons";
+import { ChannelHealthBanner } from "./ChannelHealthBanner";
 import { CommandPalette } from "./CommandPalette";
 import type { CommandPaletteItem } from "./CommandPalette";
 
@@ -183,6 +184,7 @@ export function Layout() {
       <main className="content">
         <Outlet />
       </main>
+      <ChannelHealthBanner />
       <CommandPalette
         items={paletteItems}
         open={paletteOpen}

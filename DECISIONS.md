@@ -127,6 +127,12 @@
   `RESTIC_*`); `channel-telegram` подключается к `socks5://ssh-tunnel:$SSH_TUNNEL_LOCAL_PORT`
   — `TELEGRAM_PROXY_URL` в `.env` больше не задаётся вручную, собирается в
   `docker-compose.yml` (LOG №71).
+- **Telegram ходит через `tg-proxy` (xray, несколько EU-узлов remnanode с автовыбором живого),
+  `ssh-tunnel` остался последним резервом.** `TELEGRAM_PROXY_URL=socks5://tg-proxy:1080`, конфиг с
+  ключами только на сервере (`data/xray/config.json`, шаблон `docs/xray-config.example.json`).
+  Healthcheck обоих прокси сквозной (curl до api.telegram.org). Если Telegram недоступен ≥ 3 мин, в
+  панели висит красная плашка (`GET /api/system/channel-health`, проверка `getMe` раз в минуту)
+  (LOG №94).
 - **Раздел «Номера» всегда показывает телефон участника отдельной колонкой; Administrator/Super Admin
   могут менять номер телефона участника в разделе «Участники»** (`PATCH /api/participants/{id}`,
   то же право `PARTICIPANT_EDIT`, что и у смены имени). Смена номера нормализует его и проверяет

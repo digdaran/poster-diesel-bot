@@ -367,3 +367,13 @@ export interface Page<T> {
 
 export const PAGE_SIZES = [10, 50, 100, 500] as const;
 export type PageSize = (typeof PAGE_SIZES)[number];
+
+// GET /api/system/channel-health — плашка «Telegram недоступен» (DECISIONS_LOG.md №94).
+export interface SystemChannelHealth {
+  telegram: {
+    ok: boolean | null;
+    failing_since: string | null;
+    last_checked_at: string | null;
+  } | null;
+  pending_telegram_deliveries: number;
+}

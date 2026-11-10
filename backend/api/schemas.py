@@ -490,3 +490,18 @@ class DashboardOut(BaseModel):
     top_participants: list[TopParticipantOut]
     funnel_online: OnlineFunnelOut
     funnel_manual: ManualFunnelOut
+
+
+class ChannelHealthOut(BaseModel):
+    """Доступность канала с точки зрения backend (DECISIONS_LOG.md №94).
+    `ok is None` — после старта backend ещё не было ни одной проверки."""
+
+    ok: bool | None
+    failing_since: dt.datetime | None
+    last_checked_at: dt.datetime | None
+
+
+class SystemChannelHealthOut(BaseModel):
+    # None — Telegram не настроен (нет TELEGRAM_BOT_TOKEN), плашка не нужна.
+    telegram: ChannelHealthOut | None
+    pending_telegram_deliveries: int

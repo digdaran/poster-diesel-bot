@@ -14,15 +14,17 @@ services:
       # ему, как и channel-telegram, нужен SOCKS5 через SSH-туннель (№71), иначе
       # он ходит в Bot API напрямую и периодически ловит TimeoutError, из-за чего
       # часть участников не получает уведомление об успешной оплате.
-      TELEGRAM_PROXY_URL: socks5://ssh-tunnel:${SSH_TUNNEL_LOCAL_PORT:-1080}
+      TELEGRAM_PROXY_URL: socks5://tg-proxy:1080
     volumes:
       - ./data/db:/data
       - ./data/receipts:/data/receipts
       - ./data/posters:/data/posters
       - ./data/backups:/backups
     depends_on:
-      ssh-tunnel:
-        condition: service_healthy
+      # service_started, а не healthy: healthcheck tg-proxy сквозной (доходит ли
+      # Telegram), и при блокировке панель и VK всё равно должны подниматься.
+      tg-proxy:
+        condition: service_started
     networks: [internal]
     healthcheck:
       test: ["CMD", "curl", "-fs", "http://localhost:8000/health"]
@@ -41,10 +43,10 @@ services:
       DATABASE_PATH: /data/raffle.db
       RECEIPTS_DIR: /data/receipts
       POSTER_DIR: /data/posters
-      # SOCKS5 через SSH-туннель (сервис ssh-tunnel ниже) вместо стороннего
-      # прокси — см. DECISIONS_LOG.md №71. Собирается здесь, руками в .env
-      # задавать не нужно.
-      TELEGRAM_PROXY_URL: socks5://ssh-tunnel:${SSH_TUNNEL_LOCAL_PORT:-1080}
+      # SOCKS5 через xray (сервис tg-proxy ниже): несколько EU-узлов с
+      # автовыбором живого, ssh-tunnel — последний резерв. См. DECISIONS_LOG.md
+      # №71, №94. Собирается здесь, руками в .env задавать не нужно.
+      TELEGRAM_PROXY_URL: socks5://tg-proxy:1080
     volumes:
       - ./data/db:/data
       - ./data/receipts:/data/receipts
@@ -52,8 +54,10 @@ services:
     depends_on:
       backend:
         condition: service_healthy
-      ssh-tunnel:
-        condition: service_healthy
+      # service_started, а не healthy: healthcheck tg-proxy сквозной (доходит ли
+      # Telegram), и при блокировке панель и VK всё равно должны подниматься.
+      tg-proxy:
+        condition: service_started
     networks: [internal]
     restart: unless-stopped
 
@@ -72,12 +76,32 @@ services:
       - ${SSH_TUNNEL_KNOWN_HOSTS_PATH:-./data/ssh/known_hosts}:/run/secrets/known_hosts:ro
     networks: [internal]
     healthcheck:
-      # CMD-SHELL, а не exec-форма — нужна подстановка $SSH_TUNNEL_LOCAL_PORT
-      test: ["CMD-SHELL", "nc -z 127.0.0.1 ${SSH_TUNNEL_LOCAL_PORT:-1080}"]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 10s
+      # Сквозная проверка: доходит ли через туннель api.telegram.org (любой
+      # HTTP-ответ). Раньше проверялся только локальный порт, и контейнер был
+      # healthy, пока Telegram был недоступен (DECISIONS_LOG.md №94).
+      # CMD-SHELL, а не exec-форма — нужна подстановка $SSH_TUNNEL_LOCAL_PORT.
+      test: ["CMD-SHELL", "curl -s -o /dev/null -m 10 --socks5-hostname 127.0.0.1:${SSH_TUNNEL_LOCAL_PORT:-1080} https://api.telegram.org/"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  tg-proxy:
+    build:
+      context: .
+      dockerfile: docker/tg-proxy.Dockerfile
+    volumes:
+      # Настоящий конфиг с ключами узлов — только на сервере, шаблон в
+      # docs/xray-config.example.json (DECISIONS_LOG.md №94).
+      - ${TG_PROXY_CONFIG_PATH:-./data/xray/config.json}:/etc/xray/config.json:ro
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "curl", "-s", "-o", "/dev/null", "-m", "10", "--socks5-hostname", "127.0.0.1:1080", "https://api.telegram.org/"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 15s
     restart: unless-stopped
 
   channel-vk:

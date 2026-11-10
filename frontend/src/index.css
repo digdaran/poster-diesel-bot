@@ -1153,6 +1153,29 @@ section {
   flex-shrink: 0;
 }
 
+.health-banner {
+  position: fixed;
+  left: 50%;
+  top: 16px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: calc(100vw - 32px);
+  padding: 10px 16px;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-modal);
+  background: var(--color-surface);
+  color: var(--color-text);
+  border-left: 3px solid var(--color-danger);
+  font-size: 13px;
+  z-index: 1050;
+}
+
+.health-banner strong {
+  color: var(--color-danger);
+}
+
 /* Confirm dialog */
 
 .modal-overlay {

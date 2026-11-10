@@ -1,0 +1,71 @@
+// Шаблон для data/xray/config.json на проде (DECISIONS_LOG.md №94). xray понимает
+// комментарии в JSON. Секреты (id, publicKey, shortId, serverName) — из подписки
+// пользователя poster-prod в Remnawave. Узлов сколько угодно: каждому свой outbound
+// с тегом node-*, observatory и balancer подхватят их по префиксу.
+{
+  "log": { "loglevel": "warning" },
+  "inbounds": [
+    {
+      "tag": "socks-in",
+      "listen": "0.0.0.0",
+      "port": 1080,
+      "protocol": "socks",
+      "settings": { "auth": "noauth", "udp": false }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "node-de1",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "NODE_IP_OR_HOST",
+            "port": 443,
+            "users": [{ "id": "USER_UUID", "encryption": "none", "flow": "xtls-rprx-vision" }]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "serverName": "SNI_FROM_SUBSCRIPTION",
+          "fingerprint": "chrome",
+          "publicKey": "REALITY_PUBLIC_KEY",
+          "shortId": "REALITY_SHORT_ID"
+        }
+      }
+    },
+    // Последний резерв: старый SSH-туннель (сервис ssh-tunnel), если все узлы недоступны.
+    {
+      "tag": "ssh-fallback",
+      "protocol": "socks",
+      "settings": { "servers": [{ "address": "ssh-tunnel", "port": 1080 }] }
+    },
+    { "tag": "block", "protocol": "blackhole" }
+  ],
+  "burstObservatory": {
+    "subjectSelector": ["node-"],
+    "pingConfig": {
+      "destination": "https://api.telegram.org/",
+      "interval": "30s",
+      "sampling": 3,
+      "timeout": "10s"
+    }
+  },
+  "routing": {
+    "domainStrategy": "AsIs",
+    "balancers": [
+      {
+        "tag": "eu",
+        "selector": ["node-"],
+        "strategy": { "type": "leastPing" },
+        "fallbackTag": "ssh-fallback"
+      }
+    ],
+    "rules": [
+      { "type": "field", "inboundTag": ["socks-in"], "balancerTag": "eu" }
+    ]
+  }
+}

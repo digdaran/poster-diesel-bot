@@ -12,7 +12,7 @@ import structlog
 from app.core.config import get_settings
 from app.core.db import Database
 from app.models import Base
-from app.services import panel_user_service
+from app.services import channel_health_service, panel_user_service
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
@@ -31,6 +31,7 @@ from backend.api import (
     participants,
     reports,
     sales,
+    system,
     tickets,
 )
 from backend.api import (
@@ -88,10 +89,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     task = asyncio.create_task(
         background.run_background_loop(db, settings, telegram_channel, vk_channel)
     )
+    # Отдельная задача, а не шаг фонового цикла: getMe через прокси может висеть
+    # до таймаута и не должен задерживать сверку платежей (DECISIONS_LOG.md №94).
+    telegram_health: channel_health_service.ChannelHealth | None = None
+    monitor_task: asyncio.Task[None] | None = None
+    if telegram_channel is not None:
+        telegram_health = channel_health_service.ChannelHealth()
+        monitor_task = asyncio.create_task(
+            channel_health_service.run_monitor(telegram_health, telegram_channel.bot.get_me)
+        )
+    app.state.telegram_health = telegram_health
     yield
-    task.cancel()
-    with suppress(asyncio.CancelledError):
-        await task
+    for t in (task, monitor_task):
+        if t is None:
+            continue
+        t.cancel()
+        with suppress(asyncio.CancelledError):
+            await t
     if telegram_channel is not None:
         await telegram_channel.bot.session.close()
     if vk_channel is not None:
@@ -142,6 +156,7 @@ def create_app() -> FastAPI:
     app.include_router(audit.router, prefix=api_prefix)
     app.include_router(broadcasts.router, prefix=api_prefix)
     app.include_router(reports.router, prefix=api_prefix)
+    app.include_router(system.router, prefix=api_prefix)
 
     return app
 

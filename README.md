@@ -108,7 +108,30 @@ data/
 другом хосте: остановить стек (`docker compose down`), скопировать весь каталог проекта
 (включая `data/` и `.env`) на новый хост, запустить `docker compose up -d --build`.
 
-### SSH-туннель для Telegram-канала (вместо стороннего прокси)
+### Прокси Telegram-канала: tg-proxy (xray) + резервный SSH-туннель
+
+С 2026-11 основной транспорт — контейнер `tg-proxy`: xray-клиент, который ходит в Telegram через
+несколько EU-узлов remnanode (VLESS+Reality) и сам выбирает живой. `ssh-tunnel` (ниже) остался
+последним резервом (`DECISIONS_LOG.md` №94). `TELEGRAM_PROXY_URL=socks5://tg-proxy:1080`
+собирается в `docker-compose.yml`.
+
+Настройка:
+
+1. В панели Remnawave завести отдельного пользователя (например, `poster-prod`) с доступом ко
+   всем нужным узлам и взять его ссылку подписки.
+2. По шаблону `docs/xray-config.example.json` собрать `data/xray/config.json`: по одному outbound
+   `node-*` на узел (адрес, порт, UUID, `serverName`, `publicKey`, `shortId` — из подписки).
+   Проверить конфиг:
+   ```
+   docker compose run --rm --entrypoint /usr/local/bin/xray tg-proxy run -test -c /etc/xray/config.json
+   ```
+3. `docker compose up -d --build`, затем `docker compose ps tg-proxy` должен показать `healthy`:
+   healthcheck сквозной, через прокси до `api.telegram.org`.
+
+Если Telegram недоступен дольше 3 минут, в панели появляется красная плашка
+«Telegram-бот недоступен».
+
+#### Резерв: SSH-туннель
 
 `channel-telegram` подключается к Bot API через `socks5://ssh-tunnel:$SSH_TUNNEL_LOCAL_PORT`
 — локальный SOCKS5, который поднимает sidecar-контейнер `ssh-tunnel` (`autossh -D`,

@@ -10,6 +10,7 @@ import type {
   GiveawayPurgeResult,
   GiveawayPurgeSummary,
   ManualRegistration,
+  SystemChannelHealth,
   Page,
   PageSize,
   PanelUser,
@@ -250,6 +251,10 @@ export const BroadcastsApi = {
 
 export const BankReconciliationApi = {
   getStatus: () => apiRequest<BankReconciliationStatus>("/api/bank-reconciliation/status"),
+};
+
+export const SystemApi = {
+  channelHealth: () => apiRequest<SystemChannelHealth>("/api/system/channel-health"),
 };
 
 export const ReportsApi = {
