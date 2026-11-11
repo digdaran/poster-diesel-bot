@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from aiogram.exceptions import TelegramForbiddenError, TelegramNotFound
+from app.channels.base import RecipientGoneError
 from app.core.db import Database
 from app.models.enums import ChannelType, PendingDeliveryKind, PendingDeliveryStatus
 from app.models.participant import Participant
@@ -390,3 +391,27 @@ async def test_process_pending_deliveries_respects_batch_limit(db: Database) -> 
     statuses = [row.status for row in _all_deliveries(db)]
     assert statuses.count(PendingDeliveryStatus.SENT) == 2
     assert statuses.count(PendingDeliveryStatus.PENDING) == 1
+
+
+async def test_process_pending_marks_undeliverable_when_recipient_gone(db: Database) -> None:
+    """Удалённый аккаунт VK (канал бросает RecipientGoneError) — повторы прекращаются,
+    а не идут бесконечно, как было с доставкой №1609 на проде (DECISIONS_LOG.md №95)."""
+    with db.session() as session:
+        session.add(
+            PendingChannelDelivery(
+                channel=ChannelType.VK,
+                external_user_id="876540389",
+                kind=PendingDeliveryKind.TEXT_MESSAGE,
+                payload={"text": "привет"},
+                status=PendingDeliveryStatus.PENDING,
+            )
+        )
+    channel = FakeChannel(fail_exception=lambda: RecipientGoneError("VK: аккаунт deleted"))
+
+    await queue_svc.process_pending_deliveries(db, telegram_channel=None, vk_channel=channel)
+    await queue_svc.process_pending_deliveries(db, telegram_channel=None, vk_channel=channel)
+
+    rows = _all_deliveries(db)
+    assert rows[0].status == PendingDeliveryStatus.UNDELIVERABLE
+    assert rows[0].attempts == 1
+    assert len(channel.calls) == 1

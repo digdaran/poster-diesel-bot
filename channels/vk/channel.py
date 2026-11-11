@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import asyncio
 import io
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 import qrcode
-from app.channels.base import BaseMessengerChannel, ChannelCapabilities
+from app.channels.base import BaseMessengerChannel, ChannelCapabilities, RecipientGoneError
 from app.models.enums import ChannelType
 from vkbottle import (
     API,
@@ -23,6 +25,7 @@ from vkbottle import (
     OpenLink,
     PhotoMessageUploader,
     Text,
+    VKAPIError,
 )
 from vkbottle.bot import Bot
 from vkbottle.polling import BotPolling
@@ -30,6 +33,11 @@ from vkbottle.polling import BotPolling
 # Тот же консервативный запас под лимит длины сообщения, что и у TelegramChannel
 # (channels/telegram/channel.py) — единый порог для обоих каналов.
 _TICKET_CODES_CHUNK_LIMIT = 3500
+
+# Эти коды очередь доставки и так считает постоянными
+# (`channel_delivery_queue._VK_PERMANENT_ERROR_CODES`) — для них лишний
+# `users.get` не нужен.
+_VK_KNOWN_PERMANENT_CODES = frozenset({900, 901, 902})
 _TICKET_CODES_COLUMN_THRESHOLD = 10
 
 
@@ -98,8 +106,31 @@ class VkChannel(BaseMessengerChannel):
         # DECISIONS_LOG.md).
         self._send_semaphore = asyncio.Semaphore(send_concurrency_limit)
 
+    @asynccontextmanager
+    async def _recipient_guard(self, external_user_id: str) -> AsyncIterator[None]:
+        """Если отправка упала с ошибкой VK API, проверяет, жив ли получатель.
+        Удалённому аккаунту VK отвечает общим `Access denied`, по которому
+        нельзя отличить вечный сбой от временного: доставка участнику с
+        удалённым аккаунтом крутилась в очереди сотни раз (DECISIONS_LOG.md
+        №95). Если `users.get` говорит `deactivated` (deleted/banned) —
+        бросаем `RecipientGoneError`, иначе исходную ошибку как есть."""
+        try:
+            yield
+        except VKAPIError as exc:
+            if getattr(exc, "code", None) in _VK_KNOWN_PERMANENT_CODES:
+                raise
+            try:
+                users = await self.bot.api.users.get(user_ids=[int(external_user_id)])
+                deactivated = users[0].deactivated if users else "deleted"
+            except Exception:
+                raise exc from None  # проверить не удалось — считаем сбой временным
+            if deactivated:
+                state = getattr(deactivated, "value", deactivated)
+                raise RecipientGoneError(f"VK: аккаунт получателя {state} ({exc})") from exc
+            raise
+
     async def send_message(self, external_user_id: str, text: str, **kwargs: Any) -> None:
-        async with self._send_semaphore:
+        async with self._recipient_guard(external_user_id), self._send_semaphore:
             await self.bot.api.messages.send(
                 peer_id=int(external_user_id), message=text, random_id=0, **kwargs
             )
@@ -118,7 +149,7 @@ class VkChannel(BaseMessengerChannel):
         path = Path(file_path)
         if not path.exists():
             raise FileNotFoundError(f"Файл постера не найден: {file_path}")
-        async with self._send_semaphore:
+        async with self._recipient_guard(external_user_id), self._send_semaphore:
             uploader = PhotoMessageUploader(self.bot.api)
             attachment = await uploader.upload(str(path), peer_id=int(external_user_id))
             await self.bot.api.messages.send(
@@ -172,7 +203,7 @@ class VkChannel(BaseMessengerChannel):
         buffer = io.BytesIO()
         img.save(buffer, format="PNG")  # type: ignore[call-arg]
         buffer.name = "sbp_qr.png"
-        async with self._send_semaphore:
+        async with self._recipient_guard(external_user_id), self._send_semaphore:
             uploader = PhotoMessageUploader(self.bot.api)
             attachment = await uploader.upload(buffer, peer_id=int(external_user_id))
             await self.bot.api.messages.send(

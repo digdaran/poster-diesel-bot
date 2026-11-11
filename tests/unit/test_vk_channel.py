@@ -8,8 +8,10 @@ import json
 from unittest.mock import AsyncMock
 
 import pytest
+from app.channels.base import RecipientGoneError
 from app.channels.factory import ACTIVE_CHANNELS, get_channel_class, is_channel_active
 from app.models.enums import ChannelType
+from vkbottle import VKAPIError
 
 from channels.vk.channel import VkChannel
 
@@ -114,3 +116,66 @@ def test_render_support_prompt_has_open_link_button() -> None:
     keyboard = json.loads(channel.render_support_prompt(url="https://vk.com/support_group"))
     actions = [btn["action"] for row in keyboard["buttons"] for btn in row]
     assert any(a.get("link") == "https://vk.com/support_group" for a in actions)
+
+
+def _api_failing_send(send_error: Exception, users_response: object) -> tuple[AsyncMock, list[str]]:
+    called: list[str] = []
+
+    async def fake_request(method: str, params: dict | None = None) -> object:
+        called.append(method)
+        if method == "messages.send":
+            raise send_error
+        if method == "users.get":
+            if isinstance(users_response, Exception):
+                raise users_response
+            return users_response
+        raise AssertionError(f"unexpected VK API method: {method}")
+
+    return AsyncMock(side_effect=fake_request), called
+
+
+def _user(**extra: object) -> dict:
+    return {"response": [{"id": 876540389, "first_name": "DELETED", "last_name": "", **extra}]}
+
+
+async def test_send_to_deleted_account_raises_recipient_gone(channel: VkChannel) -> None:
+    """Удалённому аккаунту VK отвечает общим `Access denied` — канал сам уточняет
+    через users.get и сообщает очереди, что повторять бессмысленно (LOG №95)."""
+    request, called = _api_failing_send(
+        VKAPIError[15](error_msg="Access denied"), _user(deactivated="deleted")
+    )
+    channel.bot.api.request = request  # type: ignore[method-assign]
+
+    with pytest.raises(RecipientGoneError, match="deleted"):
+        await channel.send_message("876540389", "привет")
+    assert called == ["messages.send", "users.get"]
+
+
+async def test_access_denied_for_live_account_stays_transient(channel: VkChannel) -> None:
+    request, _ = _api_failing_send(VKAPIError[15](error_msg="Access denied"), _user())
+    channel.bot.api.request = request  # type: ignore[method-assign]
+
+    with pytest.raises(VKAPIError):
+        await channel.send_message("876540389", "привет")
+
+
+async def test_users_get_failure_keeps_original_error(channel: VkChannel) -> None:
+    request, _ = _api_failing_send(
+        VKAPIError[15](error_msg="Access denied"), VKAPIError[10](error_msg="Internal")
+    )
+    channel.bot.api.request = request  # type: ignore[method-assign]
+
+    with pytest.raises(VKAPIError) as info:
+        await channel.send_message("876540389", "привет")
+    assert getattr(info.value, "code", None) == 15
+
+
+async def test_known_permanent_code_skips_users_get(channel: VkChannel) -> None:
+    request, called = _api_failing_send(
+        VKAPIError[901](error_msg="Can't send messages"), _user(deactivated="deleted")
+    )
+    channel.bot.api.request = request  # type: ignore[method-assign]
+
+    with pytest.raises(VKAPIError):
+        await channel.send_message("876540389", "привет")
+    assert called == ["messages.send"]

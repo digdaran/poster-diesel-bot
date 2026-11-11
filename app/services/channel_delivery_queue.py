@@ -29,6 +29,7 @@ from typing import Any, Protocol
 import structlog
 from sqlalchemy import select
 
+from app.channels.base import RecipientGoneError
 from app.channels.retry import send_with_retry
 from app.core.db import Database
 from app.models.base import utcnow
@@ -73,6 +74,8 @@ def _is_permanent_failure(exc: Exception) -> bool:
     Найдено на первой боевой рассылке (DECISIONS_LOG.md): без этой проверки
     такие получатели уходили бы в бесконечный цикл повторов фоновым циклом
     раз в тик — навсегда, т.к. блокировка сама собой не снимается."""
+    if isinstance(exc, RecipientGoneError):
+        return True
     if TelegramForbiddenError is not None and isinstance(
         exc, TelegramForbiddenError | TelegramNotFound
     ):

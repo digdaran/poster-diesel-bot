@@ -19,6 +19,14 @@ from app.models.enums import ChannelType
 MediaSendMode = Literal["file_id", "upload"]
 
 
+class RecipientGoneError(Exception):
+    """Получателя в мессенджере больше нет (аккаунт удалён или заблокирован
+    платформой) — доставка ему невозможна в принципе, повторять бессмысленно.
+    Канал бросает её вместо исходной ошибки API, если сам убедился в этом
+    (VK: `users.get` → `deactivated`, см. `VkChannel._recipient_guard`).
+    Очередь доставки считает её постоянным сбоем (DECISIONS_LOG.md №95)."""
+
+
 @dataclass(frozen=True)
 class ChannelCapabilities:
     """Флаги возможностей канала (п.5.4.1, 10.6 ТЗ) — логика ветвится по флагам,
